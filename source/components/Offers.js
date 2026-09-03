@@ -156,7 +156,7 @@ const getImageUrl = (imagePath) => {
                   ? require("../resources/assets/heart.png")
                   : require("../resources/assets/wishlist.png")
               }
-              style={[styles.icon2, { tintColor: isInWishlist ? "red" : "white" }]}
+              style={[styles.icon2, { tintColor: isInWishlist ? "#f5c242" : "white" }]}
             />
           </TouchableOpacity>
 

@@ -8,7 +8,6 @@ import Colors from "../resources/colors/Colors";
 import AppHeader from '../widgets/AppHeader';
 import tmh_styles from "../styles/tmh_styles";
 import { BLOCK_HEIGHT_THRESHOLD, HEADER_HEIGHT_THRESHOLD } from "../resources/data/Constants";
-import Home from "./Home";
 
 const Search = ({ navigation }) => {
    const windowDimensions = Dimensions.get('window');
@@ -91,7 +90,7 @@ const Search = ({ navigation }) => {
           <Text style={styles.popupMessage}>
             Sorry, the data you're seeking is currently unavailable.
           </Text>
-          <TouchableOpacity onPress={() => navigation.navigate(Home)} style={styles.popupButton}>
+          <TouchableOpacity onPress={() => navigation.navigate("Home")} style={styles.popupButton}>
             <Text style={styles.popupButtonText}>Go to Homepage</Text>
           </TouchableOpacity>
         </View>

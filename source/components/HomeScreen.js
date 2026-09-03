@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 /* eslint-disable quotes */
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
   Modal,
   Animated,
   Easing,
+  DeviceEventEmitter,
 } from "react-native";
 import { APP_FONT } from "../resources/data/Fonts";
 import axios from "axios";
@@ -23,11 +24,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import VideoSlider from "./VideoSlider";
 import SearchBar from "./SearchBar";
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import LinearGradient from 'react-native-linear-gradient';
+import { API_BASE } from "../resources/data/Constants";
+import { getCategoryIcon } from "../helpers/categoryIcons";
 
 // === Constants ===
 // === API Constants ===
 const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
-const API_BASE = `${API_BASE}`;
 const API_WISHLIST_TOGGLE = `${API_BASE}/customer/wishlist/add`;
 const API_GET_WISHLIST = `${API_BASE}/customer/wishlist`;
 const API_CART_ADD = `${API_BASE}/cart/addToCart`; // ✅ updated here
@@ -42,21 +45,33 @@ const showMessage = (message) => {
   }
 };
 
+const DEFAULT_CATEGORIES = [
+  { id: 13, name: "Whisky", slug: "whisky" },
+  { id: 14, name: "Wine", slug: "wine" },
+  { id: 3, name: "Champagne", slug: "champagne" },
+  { id: 11, name: "Tequila", slug: "tequila" },
+  { id: 5, name: "Cognac", slug: "cognac" },
+  { id: 2, name: "Brandy", slug: "brandy" },
+  { id: 1, name: "Beer", slug: "beer" },
+  { id: 4, name: "Ciders", slug: "ciders" },
+  { id: 10, name: "Spirits", slug: "spirits" },
+  { id: 6, name: "Gin", slug: "gin" },
+  { id: 12, name: "Vodka", slug: "vodka" },
+  { id: 8, name: "Rum", slug: "rum" },
+  { id: 7, name: "Liqueur", slug: "liqueur" },
+  { id: 9, name: "Scotch", slug: "scotch" },
+];
+
 const HomeScreen = ({ navigation }) => {
   const [wishlistItemIds, setWishlistItemIds] = useState(new Set());
   const [cartItems, setCartItems] = useState(new Set());
-  const [categories, setCategories] = useState([]);
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isCheckoutConfirmModalVisible, setIsCheckoutConfirmModalVisible] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [sections, setSections] = useState({
     newArrivals: [],
-    trending: [],
-    specialOffers: [],
-    featured: [],
-    bestSeller: [],
-    wineBrands: [],
-    whiskyBrands: [],
-    vodkaBrands: [],
+    categorySections: [],
   });
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState(null);
@@ -65,16 +80,24 @@ const HomeScreen = ({ navigation }) => {
 
   const allProducts = useMemo(() => {
     const productsMap = new Map();
-    Object.values(sections).forEach(sectionArray => {
-      if (Array.isArray(sectionArray)) {
-        sectionArray.forEach(p => {
-          const id = p.id || p.productid;
-          if (p && p.name && id && !productsMap.has(id)) {
-            productsMap.set(id, p);
-          }
-        });
-      }
-    });
+    if (Array.isArray(sections?.newArrivals)) {
+      sections.newArrivals.forEach((p) => {
+        if (!p) return;
+        const id = p.id || p.productid;
+        if (id && !productsMap.has(id)) productsMap.set(id, p);
+      });
+    }
+    if (Array.isArray(sections?.categorySections)) {
+      sections.categorySections.forEach((sec) => {
+        if (Array.isArray(sec?.products)) {
+          sec.products.forEach((p) => {
+            if (!p) return;
+            const id = p.id || p.productid;
+            if (id && !productsMap.has(id)) productsMap.set(id, p);
+          });
+        }
+      });
+    }
     return Array.from(productsMap.values());
   }, [sections]);
 
@@ -131,108 +154,42 @@ const HomeScreen = ({ navigation }) => {
 
 const fetchWishlist = async () => {
   try {
-    const token = await AsyncStorage.getItem("userToken");
-    const userInfo = await AsyncStorage.getItem("userInfo");
-
-    if (!token || !userInfo) {
-      console.warn("User not logged in or user info missing");
-      return;
-    }
-
-    const user = JSON.parse(userInfo);
-    const uid = user.id;
-
-    // ✅ POST with uid
-    const res = await axios.post(
-      API_GET_WISHLIST,
-      { uid },
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
-        },
-      }
-    );
-
-    const wishlist = res.data.wishlist || res.data.data || [];
-    setWishlistItemIds(new Set(wishlist.map((item) => item.productid)));
+    const stored = await AsyncStorage.getItem("grand-store-wishlist");
+    const list = stored ? JSON.parse(stored) : [];
+    setWishlistItemIds(new Set(list));
   } catch (err) {
-    console.error("Error fetching wishlist:", err?.response?.data || err.message);
+    // ignore
   }
 };
 
-
-
-  const fetchCartItems = async () => {
-    try {
-      const token = await AsyncStorage.getItem("userToken");
-      if (!token) return;
-
-      const res = await axios.get(API_CART_SHOW, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (res.data.status === 1 && res.data.cart) {
-        const ids = new Set(res.data.cart.map((item) => item.productid));
-        setCartItems(ids);
-      }
-    } catch (err) {
-      console.error("Error fetching cart items:", err);
-    }
-  };
-const toggleWishlist = async (item) => {
+const fetchCartItems = async () => {
   try {
-    const token = await AsyncStorage.getItem("userToken");
-    const userInfo = await AsyncStorage.getItem("userInfo");
-
-    if (!token || !userInfo) {
-      showMessage("You must be logged in to use wishlist.");
-      return;
-    }
-
-    const user = JSON.parse(userInfo);
-    const uid = user.id;
-    const productid = item.productid || item.id;
-
-    // 🔧 FIX: send FormData instead of JSON
-    const formData = new FormData();
-    formData.append("uid", uid);
-    formData.append("productid", productid);
-
-    const res = await axios.post(API_WISHLIST_TOGGLE, formData, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-        "Content-Type": "multipart/form-data",
-      },
-    });
-
-    console.log("Wishlist Response:", res.data);
-
-    // ✅ Update local wishlist state only if successful
-    if (res.data.status === "success" || res.data.status === 1) {
-      const updatedIds = new Set(wishlistItemIds);
-      if (updatedIds.has(productid)) {
-        updatedIds.delete(productid);
-        showMessage("Removed from Wishlist");
-      } else {
-        updatedIds.add(productid);
-        showMessage("Added to Wishlist");
-      }
-      setWishlistItemIds(updatedIds);
-      await saveToStorage("wishlistItemIds", updatedIds);
-
-    } else {
-      console.warn("Wishlist API failed:", res.data);
-      showMessage(res.data.message || "Wishlist update failed");
-    }
-  } catch (error) {
-    console.error(
-      "Wishlist toggle failed:",
-      error?.response?.data || error.message
-    );
-    showMessage("Failed to update wishlist");
+    const stored = await AsyncStorage.getItem("grand-store-cart");
+    const cart = stored ? JSON.parse(stored) : [];
+    const ids = new Set(cart.map((item) => item.id || item._id || item.productid));
+    setCartItems(ids);
+  } catch (err) {
+    // ignore
   }
+};
+
+const toggleWishlist = (item) => {
+  const productid = item.productid || item.id;
+  if (!productid) return;
+
+  // ⚡ 0ms Optimistic in-memory update
+  const updatedIds = new Set(wishlistItemIds);
+  if (updatedIds.has(productid)) {
+    updatedIds.delete(productid);
+  } else {
+    updatedIds.add(productid);
+  }
+
+  setWishlistItemIds(updatedIds);
+  DeviceEventEmitter.emit("wishlistUpdated", updatedIds.size);
+
+  // 💾 Background persistence (non-blocking)
+  AsyncStorage.setItem("grand-store-wishlist", JSON.stringify([...updatedIds])).catch(() => {});
 };
 // === Persistent Storage Helpers ===
 const saveToStorage = async (key, data) => {
@@ -255,91 +212,193 @@ const loadFromStorage = async (key) => {
 
 const handleAddToCartInstant = async (product) => {
   try {
-    const token = await AsyncStorage.getItem("userToken");
-    const userInfo = await AsyncStorage.getItem("userInfo");
-    if (!token || !userInfo) {
-      showMessage("You must be logged in to add to cart.");
-      return;
-    }
+    const pid = product.productid || product.id;
+    const stored = await AsyncStorage.getItem("grand-store-cart");
+    let cart = stored ? JSON.parse(stored) : [];
+    const existingIndex = cart.findIndex((c) => (c.id || c.productid) === pid);
 
-    const user = JSON.parse(userInfo);
-
-    const payload = {
-      customerid: user.id, // ✅ new field name
-      productid: product.productid || product.id,
-      variantid: product.variantid || product.id || "0",
-      quantity: "1",
-      vendorid: product.vendorid || "1",
-    };
-
-    const res = await axios.post(API_CART_ADD, payload, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-      },
-    });
-
-    if (res.data.status === 1) {
-      showMessage("✅ Added to cart");
-      setCartItems(new Set([...cartItems, product.id || product.productid]));
-      await saveToStorage("cartItems", new Set([...cartItems, product.id || product.productid]));
-      animateButton();
+    if (existingIndex >= 0) {
+      cart[existingIndex].quantity = (Number(cart[existingIndex].quantity) || 1) + 1;
     } else {
-      showMessage(res.data.message || "Failed to add to cart");
+      cart.push({
+        id: pid,
+        productid: pid,
+        name: product.title || product.name || product.product_name,
+        price: Number(product.price || product.final_price || 0),
+        image: product.image || product.product_image,
+        quantity: 1,
+      });
     }
+
+    await AsyncStorage.setItem("grand-store-cart", JSON.stringify(cart));
+    DeviceEventEmitter.emit("cartUpdated", cart.length);
+    const ids = new Set(cart.map((c) => c.id || c.productid));
+    setCartItems(ids);
+    showMessage("✅ Added to cart");
+    animateButton();
   } catch (err) {
-    console.error("Add to cart (instant) failed:", err?.response?.data || err.message);
+    console.error("Add to cart (instant) failed:", err);
     showMessage("❌ Could not add to cart");
   }
 };
 
-
-
   const fetchAllData = async () => {
     try {
-      const endpoints = {
-        newArrivals: "/new-arrivals",
-        trending: "/trending",
-        specialOffers: "/special-offers",
-        featured: "/featured",
-        bestSeller: "/best-seller",
-        wineBrands: "/getBrandSlider/14",
-        whiskyBrands: "/getBrandSlider/5",
-        vodkaBrands: "/getBrandSlider/13",
-        categories: "/categories",
-      };
+      // Fetch categories reliably from web backend with cross-platform fallback
+      try {
+        const catCandidates = [
+          `${API_BASE}/categories`,
+          'http://localhost:5000/api/categories',
+          'http://192.168.1.9:5000/api/categories',
+          'http://10.0.2.2:5000/api/categories',
+        ];
+        const uniqueCatUrls = [...new Set(catCandidates)];
+        let catRes = null;
 
-      const responses = await Promise.all(
-        Object.values(endpoints).map((url) => axios.get(`${API_BASE}${url}`))
-      );
+        for (const url of uniqueCatUrls) {
+          try {
+            catRes = await axios.get(url, { timeout: 3000 });
+            if (catRes?.data) break;
+          } catch (e) {
+            // try next
+          }
+        }
 
-  const normalizeSpecialOffers = (data = []) =>
-  data.map((item) => ({
-    ...item,
-    id: item.productid, // ✅ ensures FlatList & navigation work
-    vendorid: item.vendorid || 1, // ✅ safe fallback for cart
-    category_id: item.category_id || null, // ✅ optional
-    price: item.price || item.offer_price || item.final_price || 0,
-    final_price: item.final_price || item.offer_price || item.price || 0,
-  }));
+        if (catRes && catRes.data) {
+          const list = Array.isArray(catRes.data.data)
+            ? catRes.data.data
+            : Array.isArray(catRes.data)
+              ? catRes.data
+              : [];
+          setCategories(list);
+        }
+      } catch (catErr) {
+        console.error("Failed to fetch categories in HomeScreen:", catErr?.message || catErr);
+      }
 
+      // Fetch products from web backend (/products) and group by category
+      let newArrivals = [];
+      let categorySections = [];
+      try {
+        const prodCandidates = [
+          `${API_BASE}/products`,
+          'http://localhost:5000/api/products',
+          'http://192.168.1.9:5000/api/products',
+          'http://10.0.2.2:5000/api/products',
+        ];
+        const uniqueProdUrls = [...new Set(prodCandidates)];
+        let prodRes = null;
 
-setSections({
-  newArrivals: responses[0].data.data || [],
-  trending: responses[1].data.data || [],
-  specialOffers: normalizeSpecialOffers(responses[2].data.data || []),
-  featured: responses[3].data.data || [],
-  bestSeller: responses[4].data.data || [],
-  wineBrands: responses[5].data.data || [],
-  whiskyBrands: responses[6].data.data || [],
-  vodkaBrands: responses[7].data.data || [],
-});
+        for (const url of uniqueProdUrls) {
+          try {
+            prodRes = await axios.get(url, { timeout: 3000 });
+            if (prodRes?.data && Array.isArray(prodRes.data)) break;
+          } catch (e) {
+            // try next
+          }
+        }
 
+        if (prodRes && Array.isArray(prodRes.data)) {
+          const allNormalized = prodRes.data
+            .filter((p) => !p.vendorId || p.approvalStatus === 'approved')
+            .filter((p) => {
+              const cat = String(p.category || p.type || '').toLowerCase();
+              return cat !== 'accessories' && cat !== 'accessory';
+            })
+            .map((p) => {
+              const imgUrl = (Array.isArray(p.images) && p.images[0]) || p.image || '';
+              const origPrice = Number(p.price) || 0;
+              const offPrice = Number(p.offer_price) || 0;
+              const hasDiscount = offPrice > 0 && offPrice < origPrice;
+              return {
+                ...p,
+                id: p.id || p._id,
+                productid: p.id || p._id,
+                vendorid: p.vendorId || p.vendorid || 1,
+                name: p.name || 'Product',
+                image: imgUrl,
+                gallery: Array.isArray(p.images) ? p.images.join(',') : imgUrl,
+                price: origPrice,
+                final_price: hasDiscount ? offPrice : origPrice,
+                offer_price: offPrice || origPrice,
+                offer_active: hasDiscount,
+                size: p.size || p.options?.[0] || '',
+                category: p.category || p.type || '',
+                category_id: p.category_id || null,
+              };
+            });
 
-      setCategories(responses[8].data.data || []);
-      console.log("Special Offers API sample:", responses[2].data.data?.[0]);
-console.log("✅ Normalized Special Offers:", normalizeSpecialOffers(responses[2].data.data)[0]);
+          // 1. New Arrivals: newest bottles first
+          newArrivals = [...allNormalized]
+            .sort((a, b) => {
+              const aTime = Date.parse(a.createdAt || '') || 0;
+              const bTime = Date.parse(b.createdAt || '') || 0;
+              return bTime - aTime;
+            })
+            .slice(0, 15);
 
+          // 2. Category Sections: dynamically group products for each category
+          const categoryOrder = [
+            { key: 'whisky', title: 'Whisky Collection', defaultName: 'Whisky' },
+            { key: 'wine', title: 'Fine Wines', defaultName: 'Wine' },
+            { key: 'champagne', title: 'Champagne & Sparkling', defaultName: 'Champagne' },
+            { key: 'tequila', title: 'Tequila & Mezcal', defaultName: 'Tequila' },
+            { key: 'cognac', title: 'Cognac Collection', defaultName: 'Cognac' },
+            { key: 'brandy', title: 'Brandy Collection', defaultName: 'Brandy' },
+            { key: 'beer', title: 'Craft Beers', defaultName: 'Beer' },
+            { key: 'ciders', title: 'Ciders Collection', defaultName: 'Ciders' },
+            { key: 'spirits', title: 'Fine Spirits', defaultName: 'Spirits' },
+            { key: 'gin', title: 'Gin Selection', defaultName: 'Gin' },
+            { key: 'vodka', title: 'Premium Vodka', defaultName: 'Vodka' },
+            { key: 'rum', title: 'Aged Rums', defaultName: 'Rum' },
+            { key: 'liqueur', title: 'Liqueurs', defaultName: 'Liqueur' },
+          ];
+
+          const usedKeys = new Set();
+          for (const item of categoryOrder) {
+            const matches = allNormalized.filter((p) => {
+              const c = String(p.category || p.type || '').trim().toLowerCase();
+              return c === item.key || c.includes(item.key);
+            });
+            if (matches.length > 0) {
+              usedKeys.add(item.key);
+              categorySections.push({
+                category: item.defaultName,
+                title: item.title,
+                products: matches,
+              });
+            }
+          }
+
+          // Catch any other categories present in data
+          const otherCats = new Set(
+            allNormalized.map((p) => String(p.category || p.type || '').trim()).filter(Boolean)
+          );
+          for (const cat of otherCats) {
+            const lower = cat.toLowerCase();
+            if (!Array.from(usedKeys).some((k) => lower === k || lower.includes(k))) {
+              const matches = allNormalized.filter((p) => {
+                const c = String(p.category || p.type || '').trim().toLowerCase();
+                return c === lower;
+              });
+              if (matches.length > 0) {
+                categorySections.push({
+                  category: cat,
+                  title: `${cat} Collection`,
+                  products: matches,
+                });
+              }
+            }
+          }
+        }
+      } catch (prodErr) {
+        console.error("Failed to fetch products for categories:", prodErr?.message || prodErr);
+      }
+
+      setSections({
+        newArrivals,
+        categorySections,
+      });
     } catch (err) {
       console.error("Error fetching data:", err);
     } finally {
@@ -409,6 +468,59 @@ console.log("✅ Normalized Special Offers:", normalizeSpecialOffers(responses[2
   const getImageUrl = (imagePath) =>
     imagePath?.startsWith("http") ? imagePath : `${IMAGE_BASE_URL}${imagePath}`;
 
+  // 🧩 Animated Heart Button Component with Pop & Flying Zigzag to Header
+  const AnimatedHeartButton = React.memo(({ isWishlisted, onPress }) => {
+    const scaleAnim = useRef(new Animated.Value(1)).current;
+
+    const handlePress = (event) => {
+      // ⚡ Instant native driver pop (0ms JS delay)
+      Animated.sequence([
+        Animated.timing(scaleAnim, {
+          toValue: 1.45,
+          duration: 90,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          friction: 4,
+          tension: 80,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      // Trigger the zigzag flying heart immediately when saving a bottle!
+      if (!isWishlisted) {
+        const pageX = event?.nativeEvent?.pageX;
+        const pageY = event?.nativeEvent?.pageY;
+        DeviceEventEmitter.emit("flyHeartToHeader", {
+          startX: typeof pageX === "number" ? pageX : 200,
+          startY: typeof pageY === "number" ? pageY : 400,
+        });
+      }
+
+      onPress();
+    };
+
+    return (
+      <TouchableOpacity
+        style={[styles.wishlistIcon, isWishlisted && styles.wishlistIconActive]}
+        onPress={handlePress}
+        activeOpacity={0.8}
+      >
+        <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+          <Image
+            source={
+              isWishlisted
+                ? require("../resources/assets/heart.png")
+                : require("../resources/assets/wishlist.png")
+            }
+            style={[styles.icon2, { tintColor: isWishlisted ? "#f5c242" : "#ffffff" }]}
+          />
+        </Animated.View>
+      </TouchableOpacity>
+    );
+  });
+
   const renderProduct = ({ item, section }) => {
   const isInWishlist = wishlistItemIds.has(item.id || item.productid);
   const imageUrl = getImageUrl(item.image);
@@ -423,32 +535,38 @@ console.log("✅ Normalized Special Offers:", normalizeSpecialOffers(responses[2
 
   return (
     <View style={styles.card}>
-      <TouchableOpacity style={styles.wishlistIcon} onPress={() => toggleWishlist(item)}>
-        <Image
-          source={
-            isInWishlist
-              ? require("../resources/assets/heart.png")
-              : require("../resources/assets/wishlist.png")
-          }
-          style={[styles.icon2, { tintColor: isInWishlist ? "red" : "white" }]}
-        />
-      </TouchableOpacity>
+      <AnimatedHeartButton
+        isWishlisted={isInWishlist}
+        onPress={() => toggleWishlist(item)}
+      />
 
       <TouchableOpacity
+        activeOpacity={0.88}
         onPress={() =>
           navigation.push("ProductDetails", {
             product: item,
-            category: categories.find(cat => cat.id === item.category_id) || null,
-            related_products: sections.newArrivals.concat(sections.featured, sections.specialOffers)
-              .filter(p => (p.id || p.productid) !== (item.id || item.productid)),
+            category: categories.find((cat) => cat?.id === item?.category_id) || null,
+            related_products: allProducts
+              .filter((p) => p && (p.id || p.productid) !== (item?.id || item?.productid))
+              .slice(0, 8),
           })
         }
       >
-        {imageUrl ? (
-          <Image source={{ uri: imageUrl }} style={imageStyle} />
-        ) : (
-          <View style={[styles.productImage, { backgroundColor: "#333" }]} />
-        )}
+        {/* Golden Gradient Halo Around the Bottle */}
+        <LinearGradient
+          colors={["#e5c06e", "#634c22", "#d4af37"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.goldBottleHalo}
+        >
+          <View style={styles.bottlePedestal}>
+            {imageUrl ? (
+              <Image source={{ uri: imageUrl }} style={styles.productImage} resizeMode="contain" />
+            ) : (
+              <View style={[styles.productImage, { backgroundColor: "#12100d" }]} />
+            )}
+          </View>
+        </LinearGradient>
       </TouchableOpacity>
 
         <Text style={styles.productName}>
@@ -457,36 +575,69 @@ console.log("✅ Normalized Special Offers:", normalizeSpecialOffers(responses[2
 
         {item.size && <Text style={styles.productSize}>{item.size}</Text>}
 
-           <View style={styles.priceRow}>
-        <View>
-          {/* ✅ Show final_price and crossed-out original price if applicable */}
-          <Text style={styles.productPrice}>R{displayPrice}</Text>
-          {hasDiscount && (
-            <Text style={styles.oldPrice}>R{item.price}</Text>
-          )}
-        </View>
+        <View style={styles.cardPriceRow}>
+          <View style={{ flex: 1, paddingRight: 4 }}>
+            <Text style={styles.productPrice}>R{displayPrice}</Text>
+            {hasDiscount && (
+              <Text style={styles.oldPrice}>R{item.price}</Text>
+            )}
+          </View>
 
-          <TouchableOpacity
-            style={styles.cartBtn}
-           onPress={async () => {
-  setSelectedProduct(item);
-  setIsModalVisible(true);
-  await handleAddToCartInstant(item); // 👈 instantly add to cart
-}}
+          {/* Pure Icon Buttons: Cart & Shop (Icons Only, Purely Visible) */}
+          <View style={styles.cardIconActions}>
+            {/* 1. Add to Cart Icon Button */}
+            <TouchableOpacity
+              style={styles.cartIconOnlyBtn}
+              activeOpacity={0.7}
+              onPress={async () => {
+                await handleAddToCartInstant(item);
+              }}
+            >
+              <Image
+                source={require("../resources/images/shopping-cart.png")}
+                style={styles.cartIconOnlyImg}
+                resizeMode="contain"
+              />
+            </TouchableOpacity>
 
-          >
-            <Image source={require("../resources/assets/bag.png")} style={styles.icon1} />
-          </TouchableOpacity>
+            {/* 2. Shop Now (Opens Instant Checkout Confirmation Popup) */}
+            <TouchableOpacity
+              style={styles.shopIconOnlyBtn}
+              activeOpacity={0.8}
+              onPress={() => {
+                setSelectedProduct(item);
+                setIsCheckoutConfirmModalVisible(true);
+              }}
+            >
+              <LinearGradient
+                colors={["#f5c242", "#c99742"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.shopIconOnlyGradient}
+              >
+                <Image
+                  source={require("../resources/assets/bag.png")}
+                  style={styles.shopIconOnlyImg}
+                  resizeMode="contain"
+                />
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     );
   };
 
-  const renderVSectionTitle = (title, data) => (
+  const renderVSectionTitle = (title, data, categoryFilter) => (
     <View style={styles.sectionHeader}>
       <Text style={styles.sectionTitle}>{title}</Text>
       <TouchableOpacity
-        onPress={() => navigation.navigate("ViewAll", { category_title: title, products: data })}
+        onPress={() =>
+          navigation.navigate("ViewAll", {
+            category_title: categoryFilter || title,
+            products: data,
+          })
+        }
       >
         <Text style={styles.viewAll}>View All</Text>
       </TouchableOpacity>
@@ -519,9 +670,18 @@ console.log("✅ Normalized Special Offers:", normalizeSpecialOffers(responses[2
   return (
     <View style={{ flex: 1, backgroundColor: '#121212' }}>
       <ScrollView style={styles.container}>
-        <Text style={{ color: "#f5c242", fontSize: 20, fontWeight: "600", marginTop: 20, marginBottom: 10 }}>
-          {userName ? `Welcome, ${userName}` : "Please sign in"}
-        </Text>
+        <TouchableOpacity
+          activeOpacity={0.75}
+          onPress={() => {
+            if (!userName) {
+              navigation.navigate("LoginScreen");
+            }
+          }}
+        >
+          <Text style={{ color: "#f5c242", fontSize: 20, fontWeight: "600", marginTop: 20, marginBottom: 10 }}>
+            {userName ? `Welcome, ${userName}` : "Please sign in →"}
+          </Text>
+        </TouchableOpacity>
 
         <View style={{ zIndex: 100 }}>
           <SearchBar query={searchQuery} setQuery={setSearchQuery} placeholder="Search products..." />
@@ -535,8 +695,10 @@ console.log("✅ Normalized Special Offers:", normalizeSpecialOffers(responses[2
                     setSearchQuery("");
                     navigation.push("ProductDetails", {
                       product: item,
-                      category: categories.find(cat => cat.id === item.category_id) || null,
-                      related_products: []
+                      category: categories.find((cat) => cat?.id === item?.category_id) || null,
+                      related_products: allProducts
+                        .filter((p) => p && (p.id || p.productid) !== (item?.id || item?.productid))
+                        .slice(0, 8),
                     });
                   }}
                 >
@@ -554,85 +716,59 @@ console.log("✅ Normalized Special Offers:", normalizeSpecialOffers(responses[2
         <VideoSlider />
 
         {/* Categories */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 15, paddingVertical: 10, paddingLeft: 10 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
           {categories.map((cat, index) => (
             <TouchableOpacity
               key={cat.id || index}
-              onPress={() => navigation.navigate("ViewAll", { category_title: cat.name === 'View All' ? '' : cat.name })}
-              style={{ marginRight: 20, alignItems: 'center' }}
+              activeOpacity={0.78}
+              onPress={() => navigation.navigate("ViewAll", { category_title: cat.name === 'View All' ? '' : cat.name, category_id: cat.id })}
+              style={styles.categoryItem}
             >
-              <View style={styles.webCategoryIconContainer}>
-                <Icon name={cat.icon || 'bottle-wine'} size={30} color="#c99742" />
-              </View>
-              <Text style={styles.categoryIconText}>
+              <LinearGradient
+                colors={['#352a1b', '#1e1711', '#100c08']}
+                start={{ x: 0.1, y: 0 }}
+                end={{ x: 0.9, y: 1 }}
+                style={styles.webCategoryIconContainer}
+              >
+                <Image
+                  source={getCategoryIcon(cat.name)}
+                  style={styles.categoryIconImg}
+                  resizeMode="contain"
+                />
+              </LinearGradient>
+              <Text style={styles.categoryIconText} numberOfLines={1}>
                 {cat.name}
               </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
 
-        {/* Product Sections */}
-        {renderVSectionTitle("Special Offers", sections.specialOffers)}
-        <FlatList
-          horizontal
-          data={sections.specialOffers}
-          renderItem={renderProduct}
-keyExtractor={(item, index) => (item.id || item.productid || index).toString()}
-          showsHorizontalScrollIndicator={false}
-          // contentContainerStyle={{ paddingVertical: 10 }}
-        />
-
-        <Text style={styles.brandheading}>Top Wine Brands</Text>
-        <View style={styles.verticleline} />
-        {renderBrandSlider(sections.wineBrands)}
-
+        {/* New Arrivals - Immediately below Categories */}
         {renderVSectionTitle("New Arrivals", sections.newArrivals)}
         <FlatList
           horizontal
           data={sections.newArrivals}
-          renderItem={renderProduct}
-          keyExtractor={(item,index) => (item.id|| item.productid || index).toString()}
+          renderItem={(props) => renderProduct({ ...props, section: 'newArrivals' })}
+          keyExtractor={(item, index) => (item.id || item.productid || index).toString()}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ paddingVertical: 10 }}
         />
 
-        {renderVSectionTitle("Featured Collection", sections.featured)}
-        <FlatList
-          horizontal
-          data={sections.featured}
-          renderItem={renderProduct}
-          keyExtractor={(item,index) => (item.id|| item.productid || index).toString()}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingVertical: 10 }}
-        />
-
-        <Text style={styles.brandheading}>Top Whisky Brands</Text>
-        <View style={styles.verticleline} />
-        {renderBrandSlider(sections.whiskyBrands)}
-
-        {renderVSectionTitle("Best Seller", sections.bestSeller)}
-        <FlatList
-          horizontal
-          data={sections.bestSeller}
-          renderItem={renderProduct}
-          keyExtractor={(item,index) => (item.id|| item.productid || index).toString()}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingVertical: 10 }}
-        />
-
-        <Text style={styles.brandheading}>Top Vodka Brands</Text>
-        <View style={styles.verticleline} />
-        {renderBrandSlider(sections.vodkaBrands)}
-
-        {renderVSectionTitle("Trending Now", sections.trending)}
-        <FlatList
-          horizontal
-          data={sections.trending}
-          renderItem={renderProduct}
-          keyExtractor={(item,index) => (item.id|| item.productid || index).toString()}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingVertical: 10 }}
-        />
+        {/* Dynamic Category Sliders (Whisky, Wine, Champagne, Tequila, Cognac, Beer, etc.) */}
+        {sections.categorySections &&
+          sections.categorySections.map((sec) => (
+            <View key={sec.category}>
+              {renderVSectionTitle(sec.title, sec.products, sec.category)}
+              <FlatList
+                horizontal
+                data={sec.products}
+                renderItem={renderProduct}
+                keyExtractor={(item, index) => (item.id || item.productid || index).toString()}
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingVertical: 10, paddingLeft: 4 }}
+              />
+            </View>
+          ))}
       </ScrollView>
 
       {/* Modal */}
@@ -660,11 +796,21 @@ keyExtractor={(item, index) => (item.id || item.productid || index).toString()}
         <Text style={styles.closeBtnText}>✖</Text>
       </TouchableOpacity>
 
-      {/* Product Image */}
-      <Image
-        source={{ uri: getImageUrl(selectedProduct?.image) }}
-        style={styles.modalImage}
-      />
+      {/* Product Image with Golden Halo */}
+      <LinearGradient
+        colors={["#e5c06e", "#634c22", "#d4af37"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.modalBottleHalo}
+      >
+        <View style={styles.modalBottlePedestal}>
+          <Image
+            source={{ uri: getImageUrl(selectedProduct?.image) }}
+            style={styles.modalImage}
+            resizeMode="contain"
+          />
+        </View>
+      </LinearGradient>
 
       {/* Product Name & Price */}
       <Text style={styles.modalProductName}>{selectedProduct?.name}</Text>
@@ -742,6 +888,91 @@ keyExtractor={(item, index) => (item.id || item.productid || index).toString()}
     </View>
   </View>
 </Modal>
+
+      {/* ⚡ Instant Checkout Confirmation Modal ⚡ */}
+      <Modal
+        visible={isCheckoutConfirmModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsCheckoutConfirmModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.buyNowModalCard}>
+            <View style={styles.buyNowModalHeader}>
+              <Text style={styles.buyNowModalTitle}>Instant Checkout</Text>
+              <TouchableOpacity onPress={() => setIsCheckoutConfirmModalVisible(false)}>
+                <Text style={styles.buyNowModalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.buyNowModalItemRow}>
+              {selectedProduct?.image ? (
+                <Image
+                  source={{ uri: getImageUrl(selectedProduct.image) }}
+                  style={styles.buyNowModalThumb}
+                  resizeMode="contain"
+                />
+              ) : null}
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.buyNowModalItemName} numberOfLines={2}>
+                  {selectedProduct?.name || selectedProduct?.title}
+                </Text>
+                <Text style={styles.buyNowModalItemSub}>
+                  {selectedProduct?.size || "750ml"} • 1 bottle
+                </Text>
+                <Text style={styles.buyNowModalItemPrice}>
+                  R{selectedProduct?.offer_active && Number(selectedProduct?.offer_price) > 0
+                    ? Number(selectedProduct?.offer_price).toFixed(2)
+                    : Number(selectedProduct?.final_price || selectedProduct?.price || 0).toFixed(2)}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.buyNowModalNotice}>
+              Are you sure you want to proceed directly to checkout with this bottle?
+            </Text>
+
+            <View style={styles.buyNowModalActions}>
+              <TouchableOpacity
+                style={styles.buyNowModalCancelBtn}
+                onPress={() => setIsCheckoutConfirmModalVisible(false)}
+              >
+                <Text style={styles.buyNowModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.buyNowModalConfirmTouch}
+                activeOpacity={0.85}
+                onPress={() => {
+                  setIsCheckoutConfirmModalVisible(false);
+                  const pid = selectedProduct?.id || selectedProduct?.productid;
+                  const price = selectedProduct?.offer_active && Number(selectedProduct?.offer_price) > 0
+                    ? Number(selectedProduct?.offer_price)
+                    : Number(selectedProduct?.final_price || selectedProduct?.price || 0);
+
+                  const buyNowItem = {
+                    id: pid,
+                    productid: pid,
+                    name: selectedProduct?.name || selectedProduct?.title,
+                    price,
+                    image: selectedProduct?.image,
+                    quantity: 1,
+                    size: selectedProduct?.size || "750ml",
+                  };
+                  navigation.navigate("Checkout", { buyNowItem, singleItemCheckout: true });
+                }}
+              >
+                <LinearGradient
+                  colors={["#f5c242", "#c99742"]}
+                  style={styles.buyNowModalConfirmBtn}
+                >
+                  <Text style={styles.buyNowModalConfirmText}>Yes, Checkout →</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -751,53 +982,257 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0d0d0d", paddingHorizontal: 15 },
   card: {
     backgroundColor: "#1C1C1C",
-    borderRadius: 5,
-    padding: 15,
-    marginHorizontal: 10,
-    width: 160,
+    borderRadius: 8,
+    padding: 12,
+    marginHorizontal: 8,
+    width: 168,
     borderWidth: 1,
     borderColor: "#c99742",
   },
   oldPrice: {
-  color: "#888",
-  fontSize: 13,
-  textDecorationLine: "line-through",
-  marginTop: 2,
-},
+    color: "#888",
+    fontSize: 12,
+    textDecorationLine: "line-through",
+    marginLeft: 4,
+  },
 
   wishlistIcon: {
     position: "absolute",
     top: 10,
     right: 10,
-    zIndex: 1,
-    backgroundColor: "#3B3E40",
-    padding: 6,
+    zIndex: 15,
+    backgroundColor: "rgba(0, 0, 0, 0.55)",
+    padding: 7,
     borderRadius: 20,
-    elevation: 3,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  wishlistIconActive: {
+    backgroundColor: "rgba(201, 151, 66, 0.22)",
+    borderColor: "rgba(245, 194, 66, 0.75)",
+    shadowColor: "#f5c242",
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
   },
   superscript: { fontSize: 10, lineHeight: 16 },
   icon1: { width: 20, height: 20 },
   icon2: { width: 16, height: 16 },
-  productImage: { width: "100%", height: 150, resizeMode: "cover" },
-  productName: { color: "#fff", fontWeight: "400", fontSize: 14 },
-  productSize: { color: "#aaa", fontSize: 12 },
-  priceRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  productPrice: { color: "#9a7823ff", fontSize: 16, fontWeight: "700", marginVertical: 5 },
+  goldBottleHalo: {
+    padding: 1.5,
+    borderRadius: 12,
+    marginBottom: 8,
+    shadowColor: "#d4af37",
+    shadowOpacity: 0.32,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+  },
+  bottlePedestal: {
+    backgroundColor: "#13100d",
+    borderRadius: 11,
+    height: 145,
+    width: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    overflow: "hidden",
+  },
+  modalBottleHalo: {
+    padding: 1.5,
+    borderRadius: 14,
+    marginBottom: 10,
+    shadowColor: "#d4af37",
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  modalBottlePedestal: {
+    backgroundColor: "#13100d",
+    borderRadius: 13,
+    width: 140,
+    height: 140,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  productImage: { width: "88%", height: 130, resizeMode: "contain" },
+  productName: { color: "#fff", fontWeight: "600", fontSize: 13, minHeight: 34 },
+  productSize: { color: "#aaa", fontSize: 11, marginBottom: 2 },
+  cardPriceRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 6,
+  },
+  productPrice: { color: "#f5c242", fontSize: 15, fontWeight: "800" },
+  cardIconActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  cartIconOnlyBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    borderWidth: 1.2,
+    borderColor: "rgba(245, 194, 66, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cartIconOnlyImg: {
+    width: 17,
+    height: 17,
+    tintColor: "#f5c242",
+  },
+  shopIconOnlyBtn: {
+    width: 34,
+    height: 34,
+  },
+  shopIconOnlyGradient: {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    justifyContent: "center",
+    alignItems: "center",
+    elevation: 3,
+  },
+  shopIconOnlyImg: {
+    width: 17,
+    height: 17,
+    tintColor: "#0a0a0a",
+  },
   cartBtn: { backgroundColor: "#d19f42ff", padding: 8, borderRadius: 11 },
+  buyNowModalCard: {
+    width: "88%",
+    backgroundColor: "#16130f",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.4)",
+    padding: 20,
+    elevation: 10,
+  },
+  buyNowModalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.08)",
+    paddingBottom: 12,
+    marginBottom: 16,
+  },
+  buyNowModalTitle: {
+    color: "#f5c242",
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  buyNowModalClose: {
+    color: "#888",
+    fontSize: 18,
+    fontWeight: "700",
+    padding: 4,
+  },
+  buyNowModalItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.35)",
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+    marginBottom: 14,
+  },
+  buyNowModalThumb: {
+    width: 48,
+    height: 60,
+  },
+  buyNowModalItemName: {
+    color: "#f8f5ee",
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  buyNowModalItemSub: {
+    color: "#999",
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  buyNowModalItemPrice: {
+    color: "#f5c242",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  buyNowModalNotice: {
+    color: "#ccc",
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 18,
+  },
+  buyNowModalActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  buyNowModalCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+  },
+  buyNowModalCancelText: {
+    color: "#bbb",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  buyNowModalConfirmTouch: {
+    flex: 1.4,
+  },
+  buyNowModalConfirmBtn: {
+    height: 44,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  buyNowModalConfirmText: {
+    color: "#0a0a0a",
+    fontSize: 14,
+    fontWeight: "800",
+  },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", marginVertical: 15 },
   sectionTitle: { fontWeight: "500", color: "#CCC", fontSize: 20, fontFamily: APP_FONT },
   viewAll: { color: "#f5c242", fontSize: 14 },
-  categoryText: { color: "#ccc", fontSize: 18, fontWeight: "500" },
-  activeCategory: { color: "#936e2bff", borderBottomWidth: 2, borderBottomColor: "#f5c242" },
+  categoryScroll: {
+    marginVertical: 14,
+    paddingVertical: 8,
+    paddingLeft: 12,
+  },
+  categoryItem: {
+    marginRight: 16,
+    alignItems: 'center',
+    width: 72,
+  },
   webCategoryIconContainer: {
-    width: 65,
-    height: 65,
-    borderRadius: 35,
+    width: 66,
+    height: 66,
+    borderRadius: 33,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1.5,
-    borderColor: '#c99742',
-    marginBottom: 12,
+    borderColor: 'rgba(201, 151, 66, 0.75)',
+    shadowColor: '#f5c242',
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
+    marginBottom: 8,
+  },
+  categoryIconImg: {
+    width: 44,
+    height: 44,
   },
   categoryIconContainer: {
     width: 65,
@@ -816,10 +1251,11 @@ const styles = StyleSheet.create({
     height: 40,
   },
   categoryIconText: {
-    color: "#FFF",
+    color: "#f0ece3",
     fontSize: 12,
     fontWeight: "600",
-    textAlign: 'center',
+    letterSpacing: 0.3,
+    textAlign: "center",
   },
   brandheading: { color: "#fff", fontSize: 24, textAlign: "center", marginVertical: 15 },
   verticleline: { height: 2, width: "65%", backgroundColor: "#c39f5f", alignSelf: "center" },

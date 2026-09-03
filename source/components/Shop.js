@@ -176,7 +176,7 @@ const getImageUrl = (imagePath) => {
               }
               style={[
                 styles.icon2,
-                { tintColor: isInWishlist ? "red" : "white" },
+                { tintColor: isInWishlist ? "#f5c242" : "white" },
               ]}
             />
           </TouchableOpacity>

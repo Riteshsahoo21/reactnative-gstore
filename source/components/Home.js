@@ -1,7 +1,7 @@
 /* eslint-disable react-native/no-inline-styles */
 /* eslint-disable quotes */
 /* eslint-disable prettier/prettier */
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Image,
@@ -18,6 +18,9 @@ import {
   Platform,
   Alert,
   ToastAndroid,
+  Animated,
+  DeviceEventEmitter,
+  Easing,
 } from "react-native";
 import ModalRN from "react-native-modal";
 import RBSheet from "react-native-raw-bottom-sheet";
@@ -55,6 +58,189 @@ import { API_BASE } from "../resources/data/Constants";
 
 
 const { width, height } = Dimensions.get("window");
+
+// 💖 Dynamic Zigzag Flying Heart to Header 💖
+const FlyingHeart = ({ id, startX, startY, targetX, targetY, onComplete }) => {
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(anim, {
+      toValue: 1,
+      duration: 800,
+      easing: Easing.bezier(0.2, 0.7, 0.2, 1),
+      useNativeDriver: true,
+    }).start(() => {
+      onComplete(id);
+    });
+  }, []);
+
+  const deltaX = targetX - startX;
+
+  // Zigzag trajectory: swings left and right on its way to the top heart
+  const translateX = anim.interpolate({
+    inputRange: [0, 0.2, 0.45, 0.72, 0.9, 1],
+    outputRange: [
+      startX - 14,
+      startX + deltaX * 0.2 - 38,
+      startX + deltaX * 0.45 + 32,
+      startX + deltaX * 0.72 - 20,
+      startX + deltaX * 0.9 + 10,
+      targetX - 14,
+    ],
+  });
+
+  const translateY = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [startY - 14, targetY - 14],
+  });
+
+  const scale = anim.interpolate({
+    inputRange: [0, 0.15, 0.6, 0.88, 1],
+    outputRange: [0.6, 1.4, 1.15, 0.85, 0.25],
+  });
+
+  const rotate = anim.interpolate({
+    inputRange: [0, 0.2, 0.45, 0.72, 0.9, 1],
+    outputRange: ["0deg", "-26deg", "24deg", "-18deg", "10deg", "0deg"],
+  });
+
+  const opacity = anim.interpolate({
+    inputRange: [0, 0.05, 0.85, 1],
+    outputRange: [0, 1, 1, 0],
+  });
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: 28,
+        height: 28,
+        zIndex: 999999,
+        elevation: 99,
+        transform: [{ translateX }, { translateY }, { scale }, { rotate }],
+        opacity,
+      }}
+    >
+      <Image
+        source={require("../resources/assets/heart.png")}
+        style={{
+          width: 28,
+          height: 28,
+          tintColor: "#f5c242",
+        }}
+      />
+    </Animated.View>
+  );
+};
+
+// 💖 Isolated Flying Heart Overlay — zero parent re-renders
+const FlyingHeartOverlay = React.memo(() => {
+  const [flyingHearts, setFlyingHearts] = useState([]);
+  const targetX = width - 58;
+  const targetY = Platform.OS === "android" ? 38 : 45;
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("flyHeartToHeader", ({ startX, startY }) => {
+      const id = Date.now() + Math.random();
+      setFlyingHearts((prev) => [
+        ...prev,
+        {
+          id,
+          startX: typeof startX === "number" ? startX : 200,
+          startY: typeof startY === "number" ? startY : 400,
+        },
+      ]);
+    });
+    return () => sub.remove();
+  }, []);
+
+  const handleComplete = useCallback((id) => {
+    setFlyingHearts((prev) => prev.filter((h) => h.id !== id));
+    DeviceEventEmitter.emit("bounceHeaderHeart");
+  }, []);
+
+  if (flyingHearts.length === 0) return null;
+
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      {flyingHearts.map((fh) => (
+        <FlyingHeart
+          key={fh.id}
+          id={fh.id}
+          startX={fh.startX}
+          startY={fh.startY}
+          targetX={targetX}
+          targetY={targetY}
+          onComplete={handleComplete}
+        />
+      ))}
+    </View>
+  );
+});
+
+// 💖 Isolated Header Wishlist Icon — zero parent re-renders
+const HeaderWishlistIcon = React.memo(({ navigation }) => {
+  const [wishlistCount, setWishlistCount] = useState(0);
+  const heartScale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    AsyncStorage.getItem("grand-store-wishlist").then((stored) => {
+      const list = stored ? JSON.parse(stored) : [];
+      setWishlistCount(Array.isArray(list) ? list.length : 0);
+    }).catch(() => {});
+
+    const subCount = DeviceEventEmitter.addListener("wishlistUpdated", (count) => {
+      setWishlistCount(typeof count === "number" ? count : 0);
+    });
+
+    const subBounce = DeviceEventEmitter.addListener("bounceHeaderHeart", () => {
+      Animated.sequence([
+        Animated.timing(heartScale, {
+          toValue: 1.55,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+        Animated.spring(heartScale, {
+          toValue: 1,
+          friction: 3,
+          tension: 70,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    });
+
+    return () => {
+      subCount.remove();
+      subBounce.remove();
+    };
+  }, []);
+
+  return (
+    <TouchableOpacity
+      onPress={() => navigation.navigate("Wishlist")}
+      style={styles.wishlistHeaderTouch}
+      activeOpacity={0.75}
+    >
+      <Animated.View style={{ transform: [{ scale: heartScale }] }}>
+        <Image
+          source={require("../resources/images/heart.png")}
+          style={[
+            styles.headerIcon,
+            wishlistCount > 0 && { tintColor: "#f5c242" },
+          ]}
+        />
+      </Animated.View>
+      {wishlistCount > 0 && (
+        <View style={styles.headerBadge}>
+          <Text style={styles.headerBadgeText}>{wishlistCount}</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+});
 
 const Home = ({ navigation, route }) => {
   const [userName, setUserName] = useState(null);
@@ -181,29 +367,29 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
       </View>
 
       <View style={styles.sideContainer}>
-        <TouchableOpacity onPress={() => navigation.navigate("Wishlist")}>
-          <Image
-            source={require("../resources/images/heart.png")}
-            style={styles.headerIcon}
-          />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.navigate(Cart)}>
+        <HeaderWishlistIcon navigation={navigation} />
+        <TouchableOpacity onPress={() => navigation.navigate("Cart")}>
           <Image source={CART_ICON} style={styles.headerIcon} />
         </TouchableOpacity>
       </View>
     </View>
   );
 
+  const homeScreenMemo = useMemo(() => <HomeScreen navigation={navigation} />, [navigation]);
+  const whiskyScreenMemo = useMemo(() => <WhiskyBrands navigation={navigation} />, [navigation]);
+  const categoriesScreenMemo = useMemo(() => <RegisterPatients navigation={navigation} />, [navigation]);
+  const searchScreenMemo = useMemo(() => <Search navigation={navigation} />, [navigation]);
+
   const renderScreen = () => {
     switch (navigationIndex) {
       case 0:
-        return <HomeScreen navigation={navigation} />;
+        return homeScreenMemo;
       case 1:
-        return <WhiskyBrands navigation={navigation} />;
+        return whiskyScreenMemo;
       case 2:
-        return <RegisterPatients navigation={navigation} />;
+        return categoriesScreenMemo;
       case 3:
-        return <Search navigation={navigation} />;
+        return searchScreenMemo;
       default:
         return null;
     }
@@ -361,6 +547,9 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
           </ImageBackground>
         </View>
       </Modal>
+
+      {/* 💖 Isolated Flying Heart Overlay 💖 */}
+      <FlyingHeartOverlay />
     </SafeAreaView>
   );
 };
@@ -377,6 +566,30 @@ const styles = StyleSheet.create({
   centerContainer: { flex: 1, alignItems: "center" },
   headerLogo: { width: width * 0.45, resizeMode: "contain" },
   headerIcon: { width: 26, height: 26, resizeMode: "contain", marginHorizontal: 5 },
+  wishlistHeaderTouch: {
+    position: "relative",
+    padding: 3,
+    marginRight: 2,
+  },
+  headerBadge: {
+    position: "absolute",
+    top: -3,
+    right: -3,
+    backgroundColor: "#c99742",
+    borderRadius: 9,
+    minWidth: 17,
+    height: 17,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 3,
+    borderWidth: 1.5,
+    borderColor: "#0d0d0d",
+  },
+  headerBadgeText: {
+    color: "#111111",
+    fontSize: 9,
+    fontWeight: "900",
+  },
   footer: {
     width: "100%",
     backgroundColor: "#1a1a1a",

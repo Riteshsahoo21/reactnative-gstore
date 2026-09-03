@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
   Platform,
   Alert,
   Modal,
+  DeviceEventEmitter,
 } from "react-native";
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -66,135 +67,73 @@ const WhiskyBrands = ({ navigation }) => {
     }
   };
 
-const fetchWishlist = async () => {
-  try {
-    const token = await AsyncStorage.getItem("userToken");
-    const userInfo = await AsyncStorage.getItem("userInfo");
 
-    if (!token || !userInfo) {
-      console.warn("User not logged in or user info missing");
-      return;
-    }
-
-    const user = JSON.parse(userInfo);
-    const uid = user.id;
-
-    // ✅ POST with uid
-    const res = await axios.post(
-      API_GET_WISHLIST,
-      { uid },
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
-        },
-      }
-    );
-
-    const wishlist = res.data.wishlist || res.data.data || [];
-    setWishlistItemIds(new Set(wishlist.map((item) => item.productid)));
-  } catch (err) {
-    console.error("Error fetching wishlist:", err?.response?.data || err.message);
-  }
-};
-
-
-
-  const toggleWishlist = async (item) => {
+  // === Wishlist ===
+  const fetchWishlist = async () => {
     try {
-      const token = await AsyncStorage.getItem("userToken");
-      const userInfo = await AsyncStorage.getItem("userInfo");
-      if (!token || !userInfo) {
-        showMessage("You must be logged in to use wishlist.");
-        return;
-      }
-
-      const user = JSON.parse(userInfo);
-      const uid = user.id;
-      const productid = item.productid || item.id;
-
-      const formData = new FormData();
-      formData.append("uid", uid);
-      formData.append("productid", productid);
-
-      const res = await axios.post(API_WISHLIST_TOGGLE, formData, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
-          "Content-Type": "multipart/form-data",
-        },
-      });
-
-      if (res.data.status === "success" || res.data.status === 1) {
-        const updated = new Set(wishlistItemIds);
-        if (updated.has(productid)) {
-          updated.delete(productid);
-          showMessage("Removed from Wishlist");
-        } else {
-          updated.add(productid);
-          showMessage("Added to Wishlist");
-        }
-        setWishlistItemIds(updated);
-      } else {
-        showMessage(res.data.message || "Wishlist update failed");
-      }
-    } catch (error) {
-      console.error("Wishlist toggle failed:", error?.response?.data || error.message);
-      showMessage("Failed to update wishlist");
+      const stored = await AsyncStorage.getItem("grand-store-wishlist");
+      const list = stored ? JSON.parse(stored) : [];
+      setWishlistItemIds(new Set(list));
+    } catch (err) {
+      // ignore
     }
+  };
+
+  const toggleWishlist = (item) => {
+    const productid = item.productid || item.id;
+    if (!productid) return;
+
+    // ⚡ 0ms Optimistic update
+    const updated = new Set(wishlistItemIds);
+    if (updated.has(productid)) {
+      updated.delete(productid);
+    } else {
+      updated.add(productid);
+    }
+
+    setWishlistItemIds(updated);
+    DeviceEventEmitter.emit("wishlistUpdated", updated.size);
+    AsyncStorage.setItem("grand-store-wishlist", JSON.stringify([...updated])).catch(() => {});
   };
 
   // === Cart ===
   const fetchCartItems = async () => {
     try {
-      const token = await AsyncStorage.getItem("userToken");
-      if (!token) return;
-      const res = await axios.get(API_CART_SHOW, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.data.status === 1 && res.data.cart) {
-        const ids = new Set(res.data.cart.map((item) => item.productid));
-        setCartItems(ids);
-      }
+      const stored = await AsyncStorage.getItem("grand-store-cart");
+      const cart = stored ? JSON.parse(stored) : [];
+      setCartItems(new Set(cart.map((i) => i.id || i.productid)));
     } catch (err) {
-      console.error("Error fetching cart items:", err);
+      // ignore
     }
   };
 
   const handleAddToCartInstant = async (product) => {
     try {
-      const token = await AsyncStorage.getItem("userToken");
-      const userInfo = await AsyncStorage.getItem("userInfo");
-      if (!token || !userInfo) {
-        showMessage("You must be logged in to add to cart.");
-        return;
-      }
+      const pid = product.productid || product.id;
+      const stored = await AsyncStorage.getItem("grand-store-cart");
+      let cart = stored ? JSON.parse(stored) : [];
+      const existingIndex = cart.findIndex((c) => (c.id || c.productid) === pid);
 
-      const user = JSON.parse(userInfo);
-      const payload = {
-        customerid: user.id,
-        productid: product.productid || product.id,
-        variantid: product.variantid || product.id || "0",
-        quantity: "1",
-        vendorid: product.vendorid || "1",
-      };
-
-      const res = await axios.post(API_CART_ADD, payload, {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      });
-
-      if (res.data.status === 1) {
-        showMessage("✅ Added to cart");
-        const updated = new Set(cartItems);
-        updated.add(product.id);
-        setCartItems(updated);
-        setSelectedProduct(product);
-        setIsModalVisible(true);
+      if (existingIndex >= 0) {
+        cart[existingIndex].quantity = (Number(cart[existingIndex].quantity) || 1) + 1;
       } else {
-        showMessage(res.data.message || "Failed to add to cart");
+        cart.push({
+          id: pid,
+          productid: pid,
+          name: product.name,
+          price: Number(product.finalprice || product.price || 0),
+          image: product.image,
+          quantity: 1,
+        });
       }
+
+      await AsyncStorage.setItem("grand-store-cart", JSON.stringify(cart));
+      const updated = new Set(cart.map((i) => i.id || i.productid));
+      setCartItems(updated);
+      setSelectedProduct(product);
+      setIsModalVisible(true);
+      showMessage("✅ Added to cart");
     } catch (err) {
-      console.error("Add to cart failed:", err?.response?.data || err.message);
       showMessage("❌ Could not add to cart");
     }
   };
@@ -205,25 +144,57 @@ const fetchWishlist = async () => {
     fetchCartItems();
   }, []);
 
-  const renderProductCard = ({ item }) => {
-    const scale = new Animated.Value(1);
-    const isInWishlist = wishlistItemIds.has(item.id);
+  const AnimatedHeartButton = React.memo(({ isWishlisted, onPress }) => {
+    const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
-    const handlePressIn = () => {
-      Animated.spring(scale, { toValue: 0.97, useNativeDriver: true }).start();
-    };
-    const handlePressOut = () => {
-      Animated.spring(scale, { toValue: 1, friction: 3, useNativeDriver: true }).start();
+    const handlePress = (event) => {
+      // ⚡ Instant native driver pop
+      Animated.sequence([
+        Animated.timing(scaleAnim, { toValue: 1.45, duration: 90, useNativeDriver: true }),
+        Animated.spring(scaleAnim, { toValue: 1, friction: 4, tension: 80, useNativeDriver: true }),
+      ]).start();
+
+      if (!isWishlisted) {
+        const pageX = event?.nativeEvent?.pageX;
+        const pageY = event?.nativeEvent?.pageY;
+        DeviceEventEmitter.emit("flyHeartToHeader", {
+          startX: pageX || 200,
+          startY: pageY || 400,
+        });
+      }
+
+      onPress();
     };
 
     return (
-      <Animated.View style={{ transform: [{ scale }], marginBottom: 16, width: "48%" }}>
+      <TouchableOpacity
+        style={[styles.wishlistIcon, isWishlisted && styles.wishlistIconActive]}
+        onPress={handlePress}
+        activeOpacity={0.8}
+      >
+        <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+          <Image
+            source={
+              isWishlisted
+                ? require("../resources/assets/heart.png")
+                : require("../resources/assets/wishlist.png")
+            }
+            style={[styles.icon2, { tintColor: isWishlisted ? "#f5c242" : "#fff" }]}
+          />
+        </Animated.View>
+      </TouchableOpacity>
+    );
+  });
+
+  const renderProductCard = ({ item }) => {
+    const isInWishlist = wishlistItemIds.has(item.id || item.productid);
+
+    return (
+      <View key={item.id} style={{ marginBottom: 16, width: "48%" }}>
         <TouchableOpacity
           style={styles.card}
           activeOpacity={0.9}
           onPress={() => navigation.navigate("ProductDetails", { product: item })}
-          onPressIn={handlePressIn}
-          onPressOut={handlePressOut}
         >
           <Image
             source={{ uri: IMAGE_BASE_URL + item.image }}
@@ -232,38 +203,27 @@ const fetchWishlist = async () => {
           />
 
           {/* ❤️ Wishlist Icon */}
-          <TouchableOpacity
-            style={styles.wishlistIcon}
+          <AnimatedHeartButton
+            isWishlisted={isInWishlist}
             onPress={() => toggleWishlist(item)}
-          >
-            <Image
-              source={
-                isInWishlist
-                  ? require("../resources/assets/heart.png")
-                  : require("../resources/assets/wishlist.png")
-              }
-              style={[styles.icon2, { tintColor: isInWishlist ? "red" : "white" }]}
-            />
-          </TouchableOpacity>
+          />
 
           <View style={styles.cardContent}>
             <Text style={styles.name} numberOfLines={2}>{item.name}</Text>
             <Text style={styles.size}>{item.subcatname || "Whisky"}</Text>
-           {/* === Price + Cart Button Row === */}
-<View style={styles.priceCartRow}>
-  <Text style={styles.price}>R{item.finalprice}</Text>
+            <View style={styles.priceCartRow}>
+              <Text style={styles.price}>R{item.finalprice}</Text>
 
-  <TouchableOpacity
-    style={styles.cartBtn}
-    onPress={() => handleAddToCartInstant(item)}
-  >
-    <Image source={require("../resources/assets/bag.png")} style={styles.icon1} />
-  </TouchableOpacity>
-</View>
-
+              <TouchableOpacity
+                style={styles.cartBtn}
+                onPress={() => handleAddToCartInstant(item)}
+              >
+                <Image source={require("../resources/assets/bag.png")} style={styles.icon1} />
+              </TouchableOpacity>
+            </View>
           </View>
         </TouchableOpacity>
-      </Animated.View>
+      </View>
     );
   };
 
@@ -398,7 +358,26 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   productImage: { width: "100%", height: 180, borderTopLeftRadius: 16, borderTopRightRadius: 16 },
-  wishlistIcon: { position: "absolute", top: 10, right: 10, zIndex: 10 },
+  wishlistIcon: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    zIndex: 10,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    padding: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  wishlistIconActive: {
+    backgroundColor: "rgba(201, 151, 66, 0.22)",
+    borderColor: "rgba(245, 194, 66, 0.75)",
+    shadowColor: "#f5c242",
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
+  },
   icon1: { width: 22, height: 22, tintColor: "#fff" },
   icon2: { width: 20, height: 20 },
   cardContent: { padding: 12 , display:"flex"},

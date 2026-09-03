@@ -1,7 +1,6 @@
-/* eslint-disable semi */
-/* eslint-disable prettier/prettier */
-// 🛑 REPLACE '192.168.x.x' with your laptop's actual Wi-Fi IPv4 address!
-// If using Android Emulator, you can use 'http://10.0.2.2:5000/api'
+import { Platform } from 'react-native';
+
+// Default to localhost:5000 (forwarded via adb reverse on physical Android device & native on iOS)
 export const API_BASE = 'http://localhost:5000/api';
 export const FAQ_URL = ''
 export const CONTACT_US_URL = ''
