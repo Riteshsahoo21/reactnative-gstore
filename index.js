@@ -27,6 +27,14 @@ import Wishlist from './source/components/Wishlist';
 import PaymentDetails from './source/components/PaymentDetails';
 import Offers from './source/components/Offers';
 import Shop from './source/components/Shop';
+import EventsHub from './source/components/events/EventsHub';
+import EventDetails from './source/components/events/EventDetails';
+import EventTicketPass from './source/components/events/EventTicketPass';
+import AuctionsHub from './source/components/auction/AuctionsHub';
+import AuctionLotDetails from './source/components/auction/AuctionLotDetails';
+import AuctionCheckout from './source/components/auction/AuctionCheckout';
+import MyBids from './source/components/auction/MyBids';
+import CustomerDashboard from './source/components/CustomerDashboard';
 const Rootstack = createNativeStackNavigator();
 
 const App = () => {
@@ -35,7 +43,7 @@ const App = () => {
         NavigatorService.setContainer(navigatorRef);
       }}
     >
-      <Rootstack.Navigator>
+      <Rootstack.Navigator initialRouteName="SplashScreen">
         <Rootstack.Screen
           name="SplashScreen"
           component={SplashScreen}
@@ -68,6 +76,11 @@ const App = () => {
         />
         <Rootstack.Screen
           name="MyOrder"
+          component={MyOrders}
+          options={{ headerShown: false}}
+        />
+        <Rootstack.Screen
+          name="MyOrders"
           component={MyOrders}
           options={{ headerShown: false}}
         />
@@ -141,10 +154,51 @@ const App = () => {
           component={PaymentDetails}
           options={{ headerShown: false}}
         />
-         <Rootstack.Screen
+          <Rootstack.Screen
           name="Wishlist"
           component={Wishlist}
           options={{ headerShown: false}}
+        />
+        <Rootstack.Screen
+          name="EventsHub"
+          component={EventsHub}
+          options={{ headerShown: false }}
+        />
+        <Rootstack.Screen
+          name="EventDetails"
+          component={EventDetails}
+          options={{ headerShown: false }}
+        />
+        <Rootstack.Screen
+          name="EventTicketPass"
+          component={EventTicketPass}
+          options={{ headerShown: false }}
+        />
+        <Rootstack.Screen
+          name="AuctionsHub"
+          component={AuctionsHub}
+          options={{ headerShown: false }}
+        />
+        <Rootstack.Screen
+          name="AuctionLotDetails"
+          component={AuctionLotDetails}
+          initialParams={{ lotId: "6a95896cd59ce399e7017eb7" }}
+          options={{ headerShown: false }}
+        />
+        <Rootstack.Screen
+          name="AuctionCheckout"
+          component={AuctionCheckout}
+          options={{ headerShown: false }}
+        />
+        <Rootstack.Screen
+          name="MyBids"
+          component={MyBids}
+          options={{ headerShown: false }}
+        />
+        <Rootstack.Screen
+          name="CustomerDashboard"
+          component={CustomerDashboard}
+          options={{ headerShown: false }}
         />
       </Rootstack.Navigator>
     </NavigationContainer>

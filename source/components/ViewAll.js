@@ -1,4 +1,7 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+/* eslint-disable react-native/no-inline-styles */
+/* eslint-disable quotes */
+/* eslint-disable prettier/prettier */
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -15,20 +18,18 @@ import {
   ScrollView,
   Dimensions,
   DeviceEventEmitter,
+  TextInput,
+  StatusBar,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
-import tmh_styles from "../styles/tmh_styles";
-import AppHeader from "../widgets/AppHeader";
-import SearchBar from "./SearchBar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { API_BASE } from "../resources/data/Constants";
 
+const { width } = Dimensions.get("window");
+const cardWidth = (width - 40) / 2;
+
 const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
-const API_WISHLIST_TOGGLE = `${API_BASE}/customer/wishlist/add`;
-const API_GET_WISHLIST = `${API_BASE}/customer/wishlist`;
-const API_CART_ADD = `${API_BASE}/cart/addToCart`;
-const API_CART_SHOW = `${API_BASE}/cart/show`;
 
 const CATEGORY_CHIPS = [
   "All",
@@ -49,10 +50,10 @@ const CATEGORY_CHIPS = [
 
 const SORT_OPTIONS = [
   { id: "featured", label: "Featured" },
-  { id: "newest", label: "Newest Arrivals" },
+  { id: "name_asc", label: "Name: A to Z" },
   { id: "price_asc", label: "Price: Low to High" },
   { id: "price_desc", label: "Price: High to Low" },
-  { id: "name_asc", label: "Name: A to Z" },
+  { id: "newest", label: "Newest Arrivals" },
 ];
 
 const PRICE_RANGES = [
@@ -63,15 +64,30 @@ const PRICE_RANGES = [
   { id: "above_5000", label: "R5,000+", min: 5000, max: Infinity },
 ];
 
-const ViewAll = ({ route, navigation }) => {
-  const params = route.params || {};
-  const initialTitle = params.category_title || "Shop Collection";
+const FILTER_TABS = [
+  { id: "category", label: "Category" },
+  { id: "price", label: "Price" },
+  { id: "brand", label: "Brand" },
+  { id: "country", label: "Country" },
+  { id: "style", label: "Style" },
+  { id: "size", label: "Size" },
+];
 
-  const [allProducts, setAllProducts] = useState([]);
+const showMessage = (msg) => {
+  if (Platform.OS === "android") {
+    ToastAndroid.show(msg, ToastAndroid.SHORT);
+  } else {
+    Alert.alert("", msg);
+  }
+};
+
+const ViewAll = ({ route, navigation }) => {
+  const params = route?.params || {};
+  const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Initial category selection logic
+  // Determine initial category from route params
   const determineInitialCategory = () => {
     if (!params.category_title) return "All";
     const found = CATEGORY_CHIPS.find(
@@ -80,178 +96,329 @@ const ViewAll = ({ route, navigation }) => {
     return found || "All";
   };
 
+  // Filter states (mirroring web ShopPage.jsx)
   const [selectedCategory, setSelectedCategory] = useState(determineInitialCategory());
-  const [selectedSort, setSelectedSort] = useState("featured");
+  const [selectedBrand, setSelectedBrand] = useState("All");
+  const [selectedCountry, setSelectedCountry] = useState("All");
+  const [selectedSubcategory, setSelectedSubcategory] = useState("All");
+  const [selectedSize, setSelectedSize] = useState("All");
   const [selectedPriceRange, setSelectedPriceRange] = useState("all");
+  const [minPriceInput, setMinPriceInput] = useState("");
+  const [maxPriceInput, setMaxPriceInput] = useState("");
   const [onlyOffers, setOnlyOffers] = useState(
     params.category_title?.toLowerCase().includes("offer") || false
   );
+
+  // Sorting state (default to name_asc to match user's screenshot)
+  const [sortBy, setSortBy] = useState("name_asc");
+
+  // Filter modal search query
+  const [filterSearchQuery, setFilterSearchQuery] = useState("");
 
   // Modals
   const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
   const [isSortModalVisible, setIsSortModalVisible] = useState(false);
   const [isCartModalVisible, setIsCartModalVisible] = useState(false);
+  const [isCheckoutConfirmModalVisible, setIsCheckoutConfirmModalVisible] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [activeFilterTab, setActiveFilterTab] = useState("category");
 
-  // State for cart & wishlist
+  // Cart & Wishlist storage states
   const [cartItems, setCartItems] = useState(new Set());
-  const [wishlistItemIds, setWishlistItemIds] = useState(new Set());
+  const [wishlistIds, setWishlistIds] = useState(new Set());
 
-  useEffect(() => {
-    fetchWishlist();
-    fetchCartItems();
-    fetchAllShopProducts();
-  }, []);
+  const getImageUrl = (imagePath) => {
+    if (!imagePath) return "";
+    return imagePath.startsWith("http")
+      ? imagePath
+      : `${IMAGE_BASE_URL}${imagePath}`;
+  };
 
-  const fetchAllShopProducts = async () => {
+  const fetchProducts = useCallback(async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const productCandidates = [
+      const candidates = [
         `${API_BASE}/products`,
         "http://localhost:5000/api/products",
         "http://192.168.1.9:5000/api/products",
         "http://10.0.2.2:5000/api/products",
       ];
-      const uniqueUrls = [...new Set(productCandidates)];
-      let response = null;
-
+      const uniqueUrls = [...new Set(candidates)];
+      let rawData = [];
       for (const url of uniqueUrls) {
         try {
-          response = await axios.get(url, { timeout: 3000 });
-          if (response?.data && Array.isArray(response.data)) break;
-        } catch (e) {
-          // try next
-        }
+          const res = await axios.get(url, { timeout: 4000 });
+          if (res?.data && Array.isArray(res.data)) {
+            rawData = res.data;
+            break;
+          } else if (res?.data?.data && Array.isArray(res.data.data)) {
+            rawData = res.data.data;
+            break;
+          }
+        } catch (e) {}
       }
 
-      if (response && Array.isArray(response.data)) {
-        const normalized = response.data
-          .filter((p) => {
-            const cat = String(p.category || p.type || "").toLowerCase();
-            return cat !== "accessories" && cat !== "accessory";
-          })
-          .map((p) => {
-            const imgUrl = (Array.isArray(p.images) && p.images[0]) || p.image || "";
-            const origPrice = Number(p.price) || 0;
-            const offPrice = Number(p.offer_price) || 0;
-            const hasDiscount = offPrice > 0 && offPrice < origPrice;
-            return {
-              ...p,
-              id: p.id || p._id,
-              productid: p.id || p._id,
-              vendorid: p.vendorId || p.vendorid || 1,
-              name: p.name || "Product",
-              image: imgUrl,
-              gallery: Array.isArray(p.images) ? p.images.join(",") : imgUrl,
-              price: origPrice,
-              final_price: hasDiscount ? offPrice : origPrice,
-              offer_price: offPrice || origPrice,
-              offer_active: hasDiscount,
-              size: p.size || p.options?.[0] || "",
-              category: p.category || p.type || "",
-              category_id: p.category_id || null,
-            };
-          });
-        setAllProducts(normalized);
-      } else if (params.products && Array.isArray(params.products)) {
-        setAllProducts(params.products);
+      if ((!rawData || rawData.length === 0) && params.products && Array.isArray(params.products)) {
+        rawData = params.products;
       }
+
+      const normalized = rawData
+        .filter((p) => p.type !== "accessory" && p.category !== "accessory")
+        .map((p) => {
+          const imgUrl =
+            (Array.isArray(p.images) && p.images[0]) || p.image || "";
+          const origPrice = Number(p.price) || 0;
+          const offPrice = Number(p.offer_price) || 0;
+          const hasDiscount = offPrice > 0 && offPrice < origPrice;
+          const finalPrice = hasDiscount ? offPrice : origPrice;
+
+          return {
+            ...p,
+            id: p.id || p._id,
+            productid: p.id || p._id,
+            name: p.name || p.title || "Luxury Bottle",
+            image: imgUrl,
+            price: origPrice,
+            final_price: finalPrice,
+            offer_price: offPrice || origPrice,
+            offer_active: hasDiscount,
+            size:
+              p.size ||
+              p.identity?.bottleSize ||
+              (Array.isArray(p.options) && p.options[0]) ||
+              "750ml",
+            category: p.category || p.type || "Spirits",
+            subcategory: p.subcategory || p.identity?.style || "",
+            brand: p.brand || "",
+            country: p.country || p.identity?.origin || "",
+          };
+        });
+
+      setProducts(normalized);
     } catch (err) {
-      console.error("Failed to load shop products:", err?.message || err);
+      console.error("Error fetching shop products:", err?.message || err);
       if (params.products && Array.isArray(params.products)) {
-        setAllProducts(params.products);
+        setProducts(params.products);
       }
     } finally {
       setLoading(false);
     }
-  };
+  }, [params.products]);
 
-  const showMessage = (msg) => {
-    if (Platform.OS === "android") {
-      ToastAndroid.show(msg, ToastAndroid.SHORT);
-    } else {
-      Alert.alert(msg);
-    }
-  };
-
-  const getImageUrl = (imagePath) => {
-    if (!imagePath || typeof imagePath !== "string") return "";
-    return imagePath.startsWith("http") ? imagePath : `${IMAGE_BASE_URL}${imagePath}`;
-  };
-
-  // === Wishlist Operations ===
-  const fetchWishlist = async () => {
+  const fetchWishlist = useCallback(async () => {
     try {
       const stored = await AsyncStorage.getItem("grand-store-wishlist");
       const list = stored ? JSON.parse(stored) : [];
-      setWishlistItemIds(new Set(list));
-    } catch (err) {
-      // ignore
-    }
-  };
+      if (Array.isArray(list)) {
+        setWishlistIds(new Set(list));
+      }
+    } catch (e) {}
+  }, []);
 
-  const toggleWishlist = (item) => {
-    const pid = item.productid || item.id || item._id;
-    if (!pid) return;
-
-    // ⚡ 0ms Optimistic update
-    const updated = new Set(wishlistItemIds);
-    if (updated.has(pid)) {
-      updated.delete(pid);
-    } else {
-      updated.add(pid);
-    }
-
-    setWishlistItemIds(updated);
-    DeviceEventEmitter.emit("wishlistUpdated", updated.size);
-    AsyncStorage.setItem("grand-store-wishlist", JSON.stringify([...updated])).catch(() => {});
-  };
-
-  // === Cart Operations ===
-  const fetchCartItems = async () => {
+  const fetchCart = useCallback(async () => {
     try {
       const stored = await AsyncStorage.getItem("grand-store-cart");
       const cart = stored ? JSON.parse(stored) : [];
       setCartItems(new Set(cart.map((i) => i.id || i.productid)));
-    } catch (err) {
-      // ignore
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    fetchProducts();
+    fetchWishlist();
+    fetchCart();
+
+    const wishSub = DeviceEventEmitter.addListener(
+      "wishlistUpdated",
+      () => fetchWishlist()
+    );
+    return () => wishSub.remove();
+  }, [fetchProducts, fetchWishlist, fetchCart]);
+
+  // Wishlist toggle with optimistic UI and notification
+  const toggleWishlist = async (product) => {
+    try {
+      const prodId = product.id || product.productid;
+      if (!prodId) return;
+
+      const updated = new Set(wishlistIds);
+      if (updated.has(prodId)) {
+        updated.delete(prodId);
+        showMessage("Removed from Wishlist");
+      } else {
+        updated.add(prodId);
+        showMessage("Added to Wishlist");
+      }
+      setWishlistIds(updated);
+      await AsyncStorage.setItem(
+        "grand-store-wishlist",
+        JSON.stringify([...updated])
+      );
+      DeviceEventEmitter.emit("wishlistUpdated", updated.size);
+    } catch (e) {
+      showMessage("Error updating wishlist");
     }
   };
 
+  // Cart Add
   const handleAddToCart = async (product) => {
     try {
       const pid = product.productid || product.id;
       const stored = await AsyncStorage.getItem("grand-store-cart");
       let cart = stored ? JSON.parse(stored) : [];
-      const existingIndex = cart.findIndex((c) => (c.id || c.productid) === pid);
+      const idx = cart.findIndex((c) => (c.id || c.productid) === pid);
 
-      if (existingIndex >= 0) {
-        cart[existingIndex].quantity = (Number(cart[existingIndex].quantity) || 1) + 1;
+      if (idx >= 0) {
+        cart[idx].quantity = (Number(cart[idx].quantity) || 1) + 1;
       } else {
         cart.push({
           id: pid,
           productid: pid,
-          name: product.title || product.name || product.product_name,
-          price: Number(product.price || product.final_price || 0),
-          image: product.image || product.product_image,
+          name: product.name,
+          price: Number(product.final_price || product.price || 0),
+          image: product.image,
           quantity: 1,
         });
       }
 
       await AsyncStorage.setItem("grand-store-cart", JSON.stringify(cart));
-      const updated = new Set(cart.map((i) => i.id || i.productid));
-      setCartItems(updated);
+      setCartItems(new Set(cart.map((i) => i.id || i.productid)));
       setSelectedProduct(product);
       setIsCartModalVisible(true);
-      showMessage("Added to cart 🛒");
-    } catch (err) {
-      showMessage("❌ Could not add to cart");
+      showMessage("Added to bag 🛍️");
+    } catch (e) {
+      showMessage("Could not add to bag");
     }
   };
 
-  // === Computed Filtered Products ===
+  // Web-like Cascading Filter Options
+  // 1. Available Countries (dynamically filtered by selected Category)
+  const productsForCountries = useMemo(() => {
+    if (selectedCategory === "All") return products;
+    const catLower = selectedCategory.toLowerCase();
+    return products.filter((p) => {
+      const c = String(p.category || p.type || "").toLowerCase();
+      return c.includes(catLower);
+    });
+  }, [products, selectedCategory]);
+
+  const availableCountries = useMemo(() => {
+    const counts = {};
+    productsForCountries.forEach((p) => {
+      const c = (p.country || p.origin || "").trim();
+      if (c) counts[c] = (counts[c] || 0) + 1;
+    });
+    const sorted = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+    return [
+      { id: "All", label: "All Countries", count: productsForCountries.length },
+      ...sorted.map((name) => ({ id: name, label: name, count: counts[name] })),
+    ];
+  }, [productsForCountries]);
+
+  // 2. Available Subcategories / Styles (filtered by Category & Country)
+  const productsForSubcategories = useMemo(() => {
+    let pool = productsForCountries;
+    if (selectedCountry !== "All") {
+      pool = pool.filter(
+        (p) => String(p.country || "").toLowerCase() === selectedCountry.toLowerCase()
+      );
+    }
+    return pool;
+  }, [productsForCountries, selectedCountry]);
+
+  const availableSubcategories = useMemo(() => {
+    const counts = {};
+    productsForSubcategories.forEach((p) => {
+      const s = (p.subcategory || "").trim();
+      if (s) counts[s] = (counts[s] || 0) + 1;
+    });
+    const sorted = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+    return [
+      { id: "All", label: "All Styles", count: productsForSubcategories.length },
+      ...sorted.map((name) => ({ id: name, label: name, count: counts[name] })),
+    ];
+  }, [productsForSubcategories]);
+
+  // 3. Available Brands (filtered by Category, Country, and Subcategory)
+  const productsForBrands = useMemo(() => {
+    let pool = productsForSubcategories;
+    if (selectedSubcategory !== "All") {
+      pool = pool.filter(
+        (p) =>
+          String(p.subcategory || "").toLowerCase() ===
+          selectedSubcategory.toLowerCase()
+      );
+    }
+    return pool;
+  }, [productsForSubcategories, selectedSubcategory]);
+
+  const availableBrands = useMemo(() => {
+    const counts = {};
+    productsForBrands.forEach((p) => {
+      const b = (p.brand || "").trim();
+      if (b) counts[b] = (counts[b] || 0) + 1;
+    });
+    const sorted = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+    return [
+      { id: "All", label: "All Brands", count: productsForBrands.length },
+      ...sorted.map((name) => ({ id: name, label: name, count: counts[name] })),
+    ];
+  }, [productsForBrands]);
+
+  // 4. Available Bottle Sizes
+  const availableSizes = useMemo(() => {
+    const counts = {};
+    products.forEach((p) => {
+      const sz = (p.size || "").trim();
+      if (sz) counts[sz] = (counts[sz] || 0) + 1;
+    });
+    const sorted = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+    return [
+      { id: "All", label: "All Sizes", count: products.length },
+      ...sorted.map((name) => ({ id: name, label: name, count: counts[name] })),
+    ];
+  }, [products]);
+
+  // Active filter count
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (selectedCategory !== "All") count++;
+    if (selectedBrand !== "All") count++;
+    if (selectedCountry !== "All") count++;
+    if (selectedSubcategory !== "All") count++;
+    if (selectedSize !== "All") count++;
+    if (selectedPriceRange !== "all" || minPriceInput || maxPriceInput) count++;
+    if (onlyOffers) count++;
+    return count;
+  }, [
+    selectedCategory,
+    selectedBrand,
+    selectedCountry,
+    selectedSubcategory,
+    selectedSize,
+    selectedPriceRange,
+    minPriceInput,
+    maxPriceInput,
+    onlyOffers,
+  ]);
+
+  const resetAllFilters = () => {
+    setSelectedCategory("All");
+    setSelectedBrand("All");
+    setSelectedCountry("All");
+    setSelectedSubcategory("All");
+    setSelectedSize("All");
+    setSelectedPriceRange("all");
+    setMinPriceInput("");
+    setMaxPriceInput("");
+    setOnlyOffers(false);
+    setSearchQuery("");
+    setFilterSearchQuery("");
+  };
+
+  // Filter and sort products
   const filteredProducts = useMemo(() => {
-    let result = [...allProducts];
+    let result = [...products];
 
     // 1. Search Query
     if (searchQuery.trim()) {
@@ -260,55 +427,127 @@ const ViewAll = ({ route, navigation }) => {
         (p) =>
           (p.name && p.name.toLowerCase().includes(q)) ||
           (p.category && p.category.toLowerCase().includes(q)) ||
-          (p.brand && p.brand.toLowerCase().includes(q))
+          (p.brand && p.brand.toLowerCase().includes(q)) ||
+          (p.subcategory && p.subcategory.toLowerCase().includes(q)) ||
+          (p.country && p.country.toLowerCase().includes(q))
       );
     }
 
-    // 2. Category Chip Filter
+    // 2. Category
     if (selectedCategory !== "All") {
-      const targetCat = selectedCategory.toLowerCase();
+      const target = selectedCategory.toLowerCase();
       result = result.filter((p) => {
-        const cat = String(p.category || p.type || "").toLowerCase();
-        return cat.includes(targetCat);
+        const c = String(p.category || p.type || "").toLowerCase();
+        return c.includes(target);
       });
     }
 
-    // 3. Price Range Filter
-    const priceConfig = PRICE_RANGES.find((r) => r.id === selectedPriceRange);
-    if (priceConfig && priceConfig.id !== "all") {
+    // 3. Brand
+    if (selectedBrand !== "All") {
       result = result.filter(
-        (p) => p.final_price >= priceConfig.min && p.final_price <= priceConfig.max
+        (p) => String(p.brand || "").toLowerCase() === selectedBrand.toLowerCase()
       );
     }
 
-    // 4. Special Offers Toggle
-    if (onlyOffers) {
-      result = result.filter((p) => p.offer_active);
+    // 4. Country / Origin
+    if (selectedCountry !== "All") {
+      result = result.filter(
+        (p) =>
+          String(p.country || "").toLowerCase() ===
+          selectedCountry.toLowerCase()
+      );
     }
 
-    // 5. Sorting
-    result.sort((a, b) => {
-      if (selectedSort === "price_asc") return a.final_price - b.final_price;
-      if (selectedSort === "price_desc") return b.final_price - a.final_price;
-      if (selectedSort === "name_asc") return (a.name || "").localeCompare(b.name || "");
-      if (selectedSort === "newest") {
-        return (Date.parse(b.createdAt || "") || 0) - (Date.parse(a.createdAt || "") || 0);
+    // 5. Subcategory / Style
+    if (selectedSubcategory !== "All") {
+      result = result.filter(
+        (p) =>
+          String(p.subcategory || "").toLowerCase() ===
+          selectedSubcategory.toLowerCase()
+      );
+    }
+
+    // 6. Bottle Size
+    if (selectedSize !== "All") {
+      result = result.filter(
+        (p) => String(p.size || "").toLowerCase() === selectedSize.toLowerCase()
+      );
+    }
+
+    // 7. Price Filter (Ranges or Custom Inputs)
+    if (minPriceInput || maxPriceInput) {
+      const minP = minPriceInput ? Number(minPriceInput) : 0;
+      const maxP = maxPriceInput ? Number(maxPriceInput) : Infinity;
+      result = result.filter((p) => {
+        const pr = Number(p.final_price || p.price || 0);
+        return pr >= minP && pr <= maxP;
+      });
+    } else if (selectedPriceRange !== "all") {
+      const config = PRICE_RANGES.find((r) => r.id === selectedPriceRange);
+      if (config) {
+        result = result.filter((p) => {
+          const pr = Number(p.final_price || p.price || 0);
+          return pr >= config.min && pr <= config.max;
+        });
       }
-      return 0; // featured default
+    }
+
+    // 8. Special Offers Only
+    if (onlyOffers) {
+      result = result.filter(
+        (p) => p.offer_active || (p.final_price && p.final_price < p.price)
+      );
+    }
+
+    // 9. Sorting
+    result.sort((a, b) => {
+      const priceA = Number(a.final_price || a.price || 0);
+      const priceB = Number(b.final_price || b.price || 0);
+      if (sortBy === "price_asc") return priceA - priceB;
+      if (sortBy === "price_desc") return priceB - priceA;
+      if (sortBy === "name_asc") return (a.name || "").localeCompare(b.name || "");
+      if (sortBy === "newest") {
+        return (
+          (Date.parse(b.createdAt || "") || 0) -
+          (Date.parse(a.createdAt || "") || 0)
+        );
+      }
+      return 0; // featured
     });
 
     return result;
-  }, [allProducts, searchQuery, selectedCategory, selectedPriceRange, onlyOffers, selectedSort]);
+  }, [
+    products,
+    searchQuery,
+    selectedCategory,
+    selectedBrand,
+    selectedCountry,
+    selectedSubcategory,
+    selectedSize,
+    selectedPriceRange,
+    minPriceInput,
+    maxPriceInput,
+    onlyOffers,
+    sortBy,
+  ]);
 
-  // 🧩 Animated Heart Button with pop spring and pink glow
+  // Animated heart button inside the top-right of bottle pedestal
   const AnimatedHeartButton = React.memo(({ isWishlisted, onPress }) => {
-    const scaleAnim = React.useRef(new Animated.Value(1)).current;
+    const scaleAnim = useRef(new Animated.Value(1)).current;
 
     const handlePress = (event) => {
-      // ⚡ Instant native driver pop
       Animated.sequence([
-        Animated.timing(scaleAnim, { toValue: 1.45, duration: 90, useNativeDriver: true }),
-        Animated.spring(scaleAnim, { toValue: 1, friction: 4, tension: 80, useNativeDriver: true }),
+        Animated.timing(scaleAnim, {
+          toValue: 1.45,
+          duration: 90,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          friction: 4,
+          tension: 80,
+          useNativeDriver: true,
+        }),
       ]).start();
 
       if (!isWishlisted) {
@@ -319,7 +558,6 @@ const ViewAll = ({ route, navigation }) => {
           startY: typeof pageY === "number" ? pageY : 400,
         });
       }
-
       onPress();
     };
 
@@ -336,71 +574,109 @@ const ViewAll = ({ route, navigation }) => {
                 ? require("../resources/assets/heart.png")
                 : require("../resources/assets/wishlist.png")
             }
-            style={[styles.wishlistImg, { tintColor: isWishlisted ? "#f5c242" : "#fff" }]}
+            style={[
+              styles.wishlistImg,
+              { tintColor: isWishlisted ? "#f5c242" : "#ffffff" },
+            ]}
           />
         </Animated.View>
       </TouchableOpacity>
     );
   });
 
+  // Render 2-column product card matching user's screenshot exactly
   const renderProductItem = ({ item }) => {
-    const isInWishlist = wishlistItemIds.has(item.id || item.productid);
-    const hasDiscount = item.final_price && Number(item.final_price) < Number(item.price);
+    const isWishlisted = wishlistIds.has(item.id || item.productid);
+    const hasDiscount =
+      item.final_price && Number(item.final_price) < Number(item.price);
 
     return (
       <View style={styles.cardWrapper}>
         <TouchableOpacity
           activeOpacity={0.88}
           style={styles.card}
-          onPress={() => navigation.navigate("ProductDetails", { product: item })}
+          onPress={() =>
+            navigation.navigate("ProductDetails", {
+              product: item,
+              category: { name: item.category },
+            })
+          }
         >
-          {/* Wishlist Button */}
-          <AnimatedHeartButton
-            isWishlisted={isInWishlist}
-            onPress={() => toggleWishlist(item)}
-          />
+          {/* Golden Halo Box enclosing Bottle and Wishlist Heart */}
+          <View style={styles.bottleBox}>
+            <AnimatedHeartButton
+              isWishlisted={isWishlisted}
+              onPress={() => toggleWishlist(item)}
+            />
 
-          {/* Golden Gradient Halo Around the Bottle */}
-          <LinearGradient
-            colors={["#e5c06e", "#634c22", "#d4af37"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.goldBottleHalo}
-          >
-            <View style={styles.bottlePedestal}>
+            {getImageUrl(item.image) ? (
               <Image
                 source={{ uri: getImageUrl(item.image) }}
                 style={styles.productImage}
                 resizeMode="contain"
               />
-            </View>
-          </LinearGradient>
+            ) : null}
+          </View>
 
-          {/* Product Info */}
+          {/* Clean details outside box */}
           <View style={styles.cardInfo}>
             <Text style={styles.productName} numberOfLines={2}>
               {item.name}
             </Text>
-            {item.size ? <Text style={styles.productSize}>{item.size}</Text> : null}
+            <Text style={styles.productSize} numberOfLines={1}>
+              {item.size || "750ml"}
+            </Text>
 
-            {/* Price Row */}
+            {/* Bottom Row: Price + Add to Cart & Checkout Action Buttons */}
             <View style={styles.priceRow}>
-              <View>
-                <Text style={styles.productPrice}>R{item.final_price}</Text>
+              <View style={{ flex: 1, marginRight: 6 }}>
+                <Text style={styles.productPrice}>
+                  R{Number(item.final_price).toFixed(2)}
+                </Text>
                 {hasDiscount && (
-                  <Text style={styles.oldPrice}>R{item.price}</Text>
+                  <Text style={styles.oldPrice}>
+                    R{Number(item.price).toFixed(2)}
+                  </Text>
                 )}
               </View>
 
-              <TouchableOpacity
-                style={styles.cartBtn}
-                onPress={() => handleAddToCart(item)}
-              >
-                <Image
-                  source={require("../resources/assets/bag.png")}
-                  style={styles.cartIcon}
-                />
-              </TouchableOpacity>
+              <View style={styles.cardIconActions}>
+                {/* 1. Add to Cart Button */}
+                <TouchableOpacity
+                  style={styles.cartIconOnlyBtn}
+                  activeOpacity={0.7}
+                  onPress={() => handleAddToCart(item)}
+                >
+                  <Image
+                    source={require("../resources/images/shopping-cart.png")}
+                    style={styles.cartIconOnlyImg}
+                    resizeMode="contain"
+                  />
+                </TouchableOpacity>
+
+                {/* 2. Instant Checkout Button (Opens Checkout Confirmation Popup) */}
+                <TouchableOpacity
+                  style={styles.shopIconOnlyBtn}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    setSelectedProduct(item);
+                    setIsCheckoutConfirmModalVisible(true);
+                  }}
+                >
+                  <LinearGradient
+                    colors={["#f5c242", "#c99742"]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.shopIconOnlyGradient}
+                  >
+                    <Image
+                      source={require("../resources/assets/bag.png")}
+                      style={styles.shopIconOnlyImg}
+                      resizeMode="contain"
+                    />
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </TouchableOpacity>
@@ -408,29 +684,62 @@ const ViewAll = ({ route, navigation }) => {
     );
   };
 
+  const headerTitle =
+    selectedCategory !== "All"
+      ? selectedCategory
+      : (params.category_title || "Shop Collection");
+
   return (
     <View style={styles.container}>
-      <AppHeader
-        title={initialTitle}
-        isGradient={false}
-        backgroundColor="#c99742"
-        titleStyle={tmh_styles.header_title_tmb}
-        isShowShadow={true}
-        isBack={true}
-        backButtonStyle={{ width: 35, height: 25, alignItems: "center" }}
-        backIconColor="black"
-        logoImage={null}
-        navigation={navigation}
-      />
+      <StatusBar backgroundColor="#c99742" barStyle="dark-content" />
 
-      {/* Real-time Search */}
-      <SearchBar
-        query={searchQuery}
-        setQuery={setSearchQuery}
-        placeholder="Search bottles, brands, styles..."
-      />
+      {/* Luxury Gold Header with Back Arrow and Category Title */}
+      <View style={styles.goldHeader}>
+        <TouchableOpacity
+          style={styles.backTouch}
+          onPress={() => {
+            if (navigation?.canGoBack && navigation.canGoBack()) {
+              navigation.goBack();
+            } else if (navigation?.navigate) {
+              navigation.navigate("Home");
+            }
+          }}
+          activeOpacity={0.7}
+        >
+          <Image
+            source={require("../resources/images/back_icon.png")}
+            style={styles.backArrowIcon}
+            resizeMode="contain"
+          />
+        </TouchableOpacity>
 
-      {/* Horizontal Category Filter Chips (Web style) */}
+        <Text style={styles.headerTitleText} numberOfLines={1}>
+          {headerTitle}
+        </Text>
+      </View>
+
+      {/* Real-time Search Input */}
+      <View style={styles.searchContainer}>
+        <Image
+          source={require("../resources/assets/discover.png")}
+          style={styles.searchIcon}
+          resizeMode="contain"
+        />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search bottles, brands, styles..."
+          placeholderTextColor="#777777"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery("")}>
+            <Text style={{ color: "#777777", fontSize: 16, paddingHorizontal: 6 }}>✕</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Horizontal Category Chips */}
       <View style={styles.chipsContainer}>
         <ScrollView
           horizontal
@@ -438,7 +747,8 @@ const ViewAll = ({ route, navigation }) => {
           contentContainerStyle={styles.chipsContent}
         >
           {CATEGORY_CHIPS.map((cat) => {
-            const isActive = selectedCategory.toLowerCase() === cat.toLowerCase();
+            const isActive =
+              selectedCategory.toLowerCase() === cat.toLowerCase();
             return (
               <TouchableOpacity
                 key={cat}
@@ -446,18 +756,9 @@ const ViewAll = ({ route, navigation }) => {
                 onPress={() => setSelectedCategory(cat)}
                 style={[styles.chip, isActive && styles.chipActive]}
               >
-                {isActive ? (
-                  <LinearGradient
-                    colors={["#f0c768", "#c99742"]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.chipGradient}
-                  >
-                    <Text style={styles.chipTextActive}>{cat}</Text>
-                  </LinearGradient>
-                ) : (
-                  <Text style={styles.chipText}>{cat}</Text>
-                )}
+                <Text style={isActive ? styles.chipTextActive : styles.chipText}>
+                  {cat}
+                </Text>
               </TouchableOpacity>
             );
           })}
@@ -467,7 +768,8 @@ const ViewAll = ({ route, navigation }) => {
       {/* Controls Bar: Bottle Count + Sort & Filter Buttons */}
       <View style={styles.controlsBar}>
         <Text style={styles.countText}>
-          {filteredProducts.length} {filteredProducts.length === 1 ? "Bottle" : "Bottles"}
+          {filteredProducts.length}{" "}
+          {filteredProducts.length === 1 ? "Bottle" : "Bottles"}
         </Text>
 
         <View style={styles.controlsRight}>
@@ -475,35 +777,49 @@ const ViewAll = ({ route, navigation }) => {
           <TouchableOpacity
             style={styles.filterBtn}
             onPress={() => setIsSortModalVisible(true)}
+            activeOpacity={0.8}
           >
             <Text style={styles.filterBtnText}>
-              Sort: {SORT_OPTIONS.find((s) => s.id === selectedSort)?.label.split(":")[0]}
+              Sort:{" "}
+              {SORT_OPTIONS.find((s) => s.id === sortBy)?.label.split(":")[0]}
             </Text>
           </TouchableOpacity>
 
-          {/* Filter Modal Button */}
+          {/* Filters Button with Active Indicator */}
           <TouchableOpacity
             style={[
               styles.filterBtn,
-              (selectedPriceRange !== "all" || onlyOffers) && styles.filterBtnHighlighted,
+              activeFilterCount > 0 && styles.filterBtnHighlighted,
             ]}
             onPress={() => setIsFilterModalVisible(true)}
+            activeOpacity={0.8}
           >
-            <Text style={styles.filterBtnText}>
-              Filters {selectedPriceRange !== "all" || onlyOffers ? "•" : ""}
+            <Text
+              style={[
+                styles.filterBtnText,
+                activeFilterCount > 0 && { color: "#c99742" },
+              ]}
+            >
+              Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
             </Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Product List or Loading */}
+      {/* Product Grid */}
       {loading ? (
-        <ActivityIndicator size="large" color="#c99742" style={{ marginTop: 60 }} />
+        <ActivityIndicator
+          size="large"
+          color="#c99742"
+          style={{ marginTop: 60 }}
+        />
       ) : (
         <FlatList
           data={filteredProducts}
-          renderItem={renderProduct}
-          keyExtractor={(item, idx) => (item.id || item.productid || idx).toString()}
+          renderItem={renderProductItem}
+          keyExtractor={(item, idx) =>
+            (item.id || item.productid || idx).toString()
+          }
           numColumns={2}
           columnWrapperStyle={styles.columnWrapper}
           contentContainerStyle={styles.listContainer}
@@ -512,16 +828,11 @@ const ViewAll = ({ route, navigation }) => {
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyTitle}>No Bottles Found</Text>
               <Text style={styles.emptySubtitle}>
-                Try adjusting your search query or removing some active filters.
+                Try adjusting your search query or removing active filters.
               </Text>
               <TouchableOpacity
                 style={styles.resetBtn}
-                onPress={() => {
-                  setSearchQuery("");
-                  setSelectedCategory("All");
-                  setSelectedPriceRange("all");
-                  setOnlyOffers(false);
-                }}
+                onPress={resetAllFilters}
               >
                 <Text style={styles.resetBtnText}>Reset All Filters</Text>
               </TouchableOpacity>
@@ -530,7 +841,7 @@ const ViewAll = ({ route, navigation }) => {
         />
       )}
 
-      {/* === Filter Options Modal === */}
+      {/* === Comprehensive Web-Style Filters Modal === */}
       <Modal
         visible={isFilterModalVisible}
         transparent
@@ -539,61 +850,386 @@ const ViewAll = ({ route, navigation }) => {
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.filterModalCard}>
+            {/* Modal Header */}
             <View style={styles.modalHeader}>
-              <Text style={styles.modalHeading}>Filters</Text>
-              <TouchableOpacity onPress={() => setIsFilterModalVisible(false)}>
-                <Text style={styles.modalClose}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Price Filter Section */}
-            <Text style={styles.filterSectionTitle}>Price Range</Text>
-            <View style={styles.optionsWrap}>
-              {PRICE_RANGES.map((range) => {
-                const isSelected = selectedPriceRange === range.id;
-                return (
-                  <TouchableOpacity
-                    key={range.id}
-                    onPress={() => setSelectedPriceRange(range.id)}
-                    style={[styles.optionPill, isSelected && styles.optionPillSelected]}
-                  >
-                    <Text
-                      style={[styles.optionPillText, isSelected && styles.optionPillTextSelected]}
-                    >
-                      {range.label}
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Text style={styles.modalHeading}>FILTERS</Text>
+                {activeFilterCount > 0 && (
+                  <View style={styles.activeCountBadge}>
+                    <Text style={styles.activeCountBadgeText}>
+                      {activeFilterCount} Active
                     </Text>
+                  </View>
+                )}
+              </View>
+
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                {activeFilterCount > 0 && (
+                  <TouchableOpacity
+                    onPress={resetAllFilters}
+                    style={{ marginRight: 15 }}
+                  >
+                    <Text style={styles.clearAllText}>Clear all</Text>
                   </TouchableOpacity>
-                );
-              })}
+                )}
+                <TouchableOpacity
+                  onPress={() => setIsFilterModalVisible(false)}
+                  style={styles.closeBtnCircle}
+                >
+                  <Text style={styles.modalClose}>✕</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
-            {/* Offers Only Toggle */}
-            <TouchableOpacity
-              style={styles.toggleRow}
-              onPress={() => setOnlyOffers(!onlyOffers)}
-            >
-              <Text style={styles.toggleText}>Special Offers & Discounts Only</Text>
-              <View style={[styles.checkbox, onlyOffers && styles.checkboxActive]}>
-                {onlyOffers ? <Text style={styles.checkMark}>✓</Text> : null}
-              </View>
-            </TouchableOpacity>
+            {/* Filter Group Segment Tabs */}
+            <View style={styles.filterTabsRow}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {FILTER_TABS.map((tab) => {
+                  const isSelected = activeFilterTab === tab.id;
+                  let hasValue = false;
+                  if (tab.id === "category" && selectedCategory !== "All") hasValue = true;
+                  if (tab.id === "price" && (selectedPriceRange !== "all" || minPriceInput || maxPriceInput)) hasValue = true;
+                  if (tab.id === "brand" && selectedBrand !== "All") hasValue = true;
+                  if (tab.id === "country" && selectedCountry !== "All") hasValue = true;
+                  if (tab.id === "style" && selectedSubcategory !== "All") hasValue = true;
+                  if (tab.id === "size" && selectedSize !== "All") hasValue = true;
 
-            {/* Modal Actions */}
+                  return (
+                    <TouchableOpacity
+                      key={tab.id}
+                      onPress={() => setActiveFilterTab(tab.id)}
+                      style={[
+                        styles.filterSubTab,
+                        isSelected && styles.filterSubTabSelected,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.filterSubTabText,
+                          isSelected && styles.filterSubTabTextSelected,
+                        ]}
+                      >
+                        {tab.label}
+                        {hasValue ? " •" : ""}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+
+            {/* Search within active filter options */}
+            <View style={styles.modalSearchRow}>
+              <Text style={styles.modalSearchIcon}>🔍</Text>
+              <TextInput
+                style={styles.modalSearchInput}
+                placeholder={
+                  activeFilterTab === "brand"
+                    ? "Search brands (e.g. Aberlour, 1800)..."
+                    : activeFilterTab === "country"
+                    ? "Search countries (e.g. Mexico, France)..."
+                    : activeFilterTab === "style"
+                    ? "Search styles (e.g. Añejo, Single Malt)..."
+                    : activeFilterTab === "category"
+                    ? "Search categories (e.g. Tequila, Wine)..."
+                    : activeFilterTab === "size"
+                    ? "Search sizes (e.g. 750ml, 1L)..."
+                    : "Search filter options..."
+                }
+                placeholderTextColor="#777777"
+                value={filterSearchQuery}
+                onChangeText={setFilterSearchQuery}
+              />
+              {filterSearchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setFilterSearchQuery("")}>
+                  <Text style={{ color: "#777777", fontSize: 13, paddingHorizontal: 6 }}>✕</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Tab Body Contents */}
+            <ScrollView
+              style={{ maxHeight: 300 }}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingVertical: 6 }}
+            >
+              {/* Category Tab */}
+              {activeFilterTab === "category" && (
+                <View style={styles.optionsWrap}>
+                  {CATEGORY_CHIPS.filter((c) =>
+                    !filterSearchQuery ||
+                    c.toLowerCase().includes(filterSearchQuery.trim().toLowerCase())
+                  ).map((cat) => {
+                    const isSelected =
+                      selectedCategory.toLowerCase() === cat.toLowerCase();
+                    return (
+                      <TouchableOpacity
+                        key={cat}
+                        onPress={() => setSelectedCategory(cat)}
+                        style={[
+                          styles.optionPill,
+                          isSelected && styles.optionPillSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.optionPillText,
+                            isSelected && styles.optionPillTextSelected,
+                          ]}
+                        >
+                          {cat}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+
+              {/* Price Range Tab */}
+              {activeFilterTab === "price" && (
+                <View>
+                  <Text style={styles.filterSectionTitle}>Quick Ranges</Text>
+                  <View style={styles.optionsWrap}>
+                    {PRICE_RANGES.filter((r) =>
+                      !filterSearchQuery ||
+                      r.label.toLowerCase().includes(filterSearchQuery.trim().toLowerCase())
+                    ).map((range) => {
+                      const isSelected =
+                        selectedPriceRange === range.id &&
+                        !minPriceInput &&
+                        !maxPriceInput;
+                      return (
+                        <TouchableOpacity
+                          key={range.id}
+                          onPress={() => {
+                            setSelectedPriceRange(range.id);
+                            setMinPriceInput("");
+                            setMaxPriceInput("");
+                          }}
+                          style={[
+                            styles.optionPill,
+                            isSelected && styles.optionPillSelected,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.optionPillText,
+                              isSelected && styles.optionPillTextSelected,
+                            ]}
+                          >
+                            {range.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={[styles.filterSectionTitle, { marginTop: 16 }]}>
+                    Custom Price Range (ZAR)
+                  </Text>
+                  <View style={styles.priceInputsRow}>
+                    <TextInput
+                      style={styles.priceInput}
+                      placeholder="Min R"
+                      placeholderTextColor="#777"
+                      keyboardType="numeric"
+                      value={minPriceInput}
+                      onChangeText={(t) => {
+                        setMinPriceInput(t);
+                        setSelectedPriceRange("all");
+                      }}
+                    />
+                    <Text style={{ color: "#777", marginHorizontal: 8 }}>—</Text>
+                    <TextInput
+                      style={styles.priceInput}
+                      placeholder="Max R"
+                      placeholderTextColor="#777"
+                      keyboardType="numeric"
+                      value={maxPriceInput}
+                      onChangeText={(t) => {
+                        setMaxPriceInput(t);
+                        setSelectedPriceRange("all");
+                      }}
+                    />
+                  </View>
+                </View>
+              )}
+
+              {/* Brand Tab */}
+              {activeFilterTab === "brand" && (
+                <View style={styles.optionsWrap}>
+                  {availableBrands.filter((b) =>
+                    !filterSearchQuery ||
+                    b.label.toLowerCase().includes(filterSearchQuery.trim().toLowerCase())
+                  ).map((b) => {
+                    const isSelected =
+                      selectedBrand.toLowerCase() === b.id.toLowerCase();
+                    return (
+                      <TouchableOpacity
+                        key={b.id}
+                        onPress={() => setSelectedBrand(b.id)}
+                        style={[
+                          styles.optionPill,
+                          isSelected && styles.optionPillSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.optionPillText,
+                            isSelected && styles.optionPillTextSelected,
+                          ]}
+                        >
+                          {b.label} ({b.count})
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+
+              {/* Country / Origin Tab */}
+              {activeFilterTab === "country" && (
+                <View style={styles.optionsWrap}>
+                  {availableCountries.filter((c) =>
+                    !filterSearchQuery ||
+                    c.label.toLowerCase().includes(filterSearchQuery.trim().toLowerCase())
+                  ).map((c) => {
+                    const isSelected =
+                      selectedCountry.toLowerCase() === c.id.toLowerCase();
+                    return (
+                      <TouchableOpacity
+                        key={c.id}
+                        onPress={() => setSelectedCountry(c.id)}
+                        style={[
+                          styles.optionPill,
+                          isSelected && styles.optionPillSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.optionPillText,
+                            isSelected && styles.optionPillTextSelected,
+                          ]}
+                        >
+                          {c.label} ({c.count})
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+
+              {/* Style / Subcategory Tab */}
+              {activeFilterTab === "style" && (
+                <View style={styles.optionsWrap}>
+                  {availableSubcategories.filter((s) =>
+                    !filterSearchQuery ||
+                    s.label.toLowerCase().includes(filterSearchQuery.trim().toLowerCase())
+                  ).map((s) => {
+                    const isSelected =
+                      selectedSubcategory.toLowerCase() === s.id.toLowerCase();
+                    return (
+                      <TouchableOpacity
+                        key={s.id}
+                        onPress={() => setSelectedSubcategory(s.id)}
+                        style={[
+                          styles.optionPill,
+                          isSelected && styles.optionPillSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.optionPillText,
+                            isSelected && styles.optionPillTextSelected,
+                          ]}
+                        >
+                          {s.label} ({s.count})
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+
+              {/* Bottle Size Tab */}
+              {activeFilterTab === "size" && (
+                <View style={styles.optionsWrap}>
+                  {availableSizes.filter((sz) =>
+                    !filterSearchQuery ||
+                    sz.label.toLowerCase().includes(filterSearchQuery.trim().toLowerCase())
+                  ).map((sz) => {
+                    const isSelected =
+                      selectedSize.toLowerCase() === sz.id.toLowerCase();
+                    return (
+                      <TouchableOpacity
+                        key={sz.id}
+                        onPress={() => setSelectedSize(sz.id)}
+                        style={[
+                          styles.optionPill,
+                          isSelected && styles.optionPillSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.optionPillText,
+                            isSelected && styles.optionPillTextSelected,
+                          ]}
+                        >
+                          {sz.label} ({sz.count})
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+
+              {/* Special Offers Toggle */}
+              <TouchableOpacity
+                style={styles.toggleRow}
+                onPress={() => setOnlyOffers(!onlyOffers)}
+                activeOpacity={0.8}
+              >
+                <View>
+                  <Text style={styles.toggleText}>
+                    Special Offers & Vault Discounts
+                  </Text>
+                  <Text style={styles.toggleSub}>
+                    Show only bottles with marked-down pricing
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.checkbox,
+                    onlyOffers && styles.checkboxActive,
+                  ]}
+                >
+                  {onlyOffers ? <Text style={styles.checkMark}>✓</Text> : null}
+                </View>
+              </TouchableOpacity>
+            </ScrollView>
+
+            {/* Modal Bottom Action Row */}
             <View style={styles.modalActionRow}>
               <TouchableOpacity
                 style={styles.clearBtn}
-                onPress={() => {
-                  setSelectedPriceRange("all");
-                  setOnlyOffers(false);
-                }}
+                onPress={resetAllFilters}
               >
-                <Text style={styles.clearBtnText}>Clear</Text>
+                <Text style={styles.clearBtnText}>Reset</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.applyBtn}
                 onPress={() => setIsFilterModalVisible(false)}
               >
-                <Text style={styles.applyBtnText}>Apply</Text>
+                <LinearGradient
+                  colors={["#f0c768", "#c99742"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.applyBtnGradient}
+                >
+                  <Text style={styles.applyBtnText}>
+                    Show {filteredProducts.length} Bottles
+                  </Text>
+                </LinearGradient>
               </TouchableOpacity>
             </View>
           </View>
@@ -609,72 +1245,168 @@ const ViewAll = ({ route, navigation }) => {
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.sortModalCard}>
-            <Text style={styles.modalHeading}>Sort Collection</Text>
-            {SORT_OPTIONS.map((opt) => {
-              const isSelected = selectedSort === opt.id;
-              return (
-                <TouchableOpacity
-                  key={opt.id}
-                  style={[styles.sortItem, isSelected && styles.sortItemSelected]}
-                  onPress={() => {
-                    setSelectedSort(opt.id);
-                    setIsSortModalVisible(false);
-                  }}
-                >
-                  <Text style={[styles.sortItemText, isSelected && styles.sortItemTextSelected]}>
-                    {opt.label}
-                  </Text>
-                  {isSelected ? <Text style={styles.sortCheck}>✓</Text> : null}
-                </TouchableOpacity>
-              );
-            })}
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalHeading}>Sort Collection</Text>
+              <TouchableOpacity onPress={() => setIsSortModalVisible(false)}>
+                <Text style={styles.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ marginTop: 10 }}>
+              {SORT_OPTIONS.map((opt) => {
+                const isSelected = sortBy === opt.id;
+                return (
+                  <TouchableOpacity
+                    key={opt.id}
+                    style={[
+                      styles.sortOptionRow,
+                      isSelected && styles.sortOptionRowSelected,
+                    ]}
+                    onPress={() => {
+                      setSortBy(opt.id);
+                      setIsSortModalVisible(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.sortOptionText,
+                        isSelected && styles.sortOptionTextSelected,
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                    {isSelected && <Text style={styles.sortCheck}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
         </View>
       </Modal>
 
-      {/* === Cart Quick View Modal (Golden Aura) === */}
+      {/* Quick Add To Cart Feedback Modal */}
+      {selectedProduct && (
+        <Modal
+          visible={isCartModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setIsCartModalVisible(false)}
+        >
+          <View style={styles.modalBackdropCenter}>
+            <View style={styles.cartPopupCard}>
+              <Image
+                source={{ uri: getImageUrl(selectedProduct.image) }}
+                style={styles.cartPopupImage}
+                resizeMode="contain"
+              />
+              <Text style={styles.cartPopupTitle} numberOfLines={2}>
+                {selectedProduct.name}
+              </Text>
+              <Text style={styles.cartPopupPrice}>
+                R{Number(selectedProduct.final_price || selectedProduct.price).toFixed(2)}
+              </Text>
+              <Text style={styles.cartPopupMsg}>Added to your shopping bag!</Text>
+
+              <View style={styles.cartPopupActions}>
+                <TouchableOpacity
+                  style={styles.cartContinueBtn}
+                  onPress={() => setIsCartModalVisible(false)}
+                >
+                  <Text style={styles.cartContinueText}>Continue Shopping</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.cartViewBagBtn}
+                  onPress={() => {
+                    setIsCartModalVisible(false);
+                    navigation.navigate("Cart");
+                  }}
+                >
+                  <Text style={styles.cartViewBagText}>View Bag</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {/* ⚡ Instant Checkout Confirmation Modal ⚡ */}
       <Modal
-        visible={isCartModalVisible}
+        visible={isCheckoutConfirmModalVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setIsCartModalVisible(false)}
+        onRequestClose={() => setIsCheckoutConfirmModalVisible(false)}
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.cartModalCard}>
-            <TouchableOpacity
-              style={styles.cartModalClose}
-              onPress={() => setIsCartModalVisible(false)}
-            >
-              <Text style={styles.modalClose}>✕</Text>
-            </TouchableOpacity>
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.buyNowModalCard}>
+            <View style={styles.buyNowModalHeader}>
+              <Text style={styles.buyNowModalTitle}>Instant Checkout</Text>
+              <TouchableOpacity onPress={() => setIsCheckoutConfirmModalVisible(false)}>
+                <Text style={styles.buyNowModalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
 
-            <Text style={styles.cartModalTitle}>Added to Cart</Text>
-
-            {/* Bottle with Golden Halo */}
-            <LinearGradient
-              colors={["#e5c06e", "#634c22", "#d4af37"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.modalBottleHalo}
-            >
-              <View style={styles.modalBottlePedestal}>
+            <View style={styles.buyNowModalItemRow}>
+              {selectedProduct?.image ? (
                 <Image
-                  source={{ uri: getImageUrl(selectedProduct?.image) }}
-                  style={styles.modalImage}
+                  source={{ uri: getImageUrl(selectedProduct.image) }}
+                  style={styles.buyNowModalThumb}
                   resizeMode="contain"
                 />
+              ) : null}
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.buyNowModalItemName} numberOfLines={2}>
+                  {selectedProduct?.name || selectedProduct?.title}
+                </Text>
+                <Text style={styles.buyNowModalItemSub}>
+                  {selectedProduct?.size || "750ml"} • 1 bottle
+                </Text>
+                <Text style={styles.buyNowModalItemPrice}>
+                  R{Number(selectedProduct?.final_price || selectedProduct?.price || 0).toFixed(2)}
+                </Text>
               </View>
-            </LinearGradient>
+            </View>
 
-            <Text style={styles.modalProductName}>{selectedProduct?.name}</Text>
-            <Text style={styles.modalProductPrice}>R{selectedProduct?.final_price}</Text>
+            <Text style={styles.buyNowModalNotice}>
+              Are you sure you want to proceed directly to checkout with this bottle?
+            </Text>
 
-            <TouchableOpacity
-              style={styles.continueBtn}
-              onPress={() => setIsCartModalVisible(false)}
-            >
-              <Text style={styles.continueBtnText}>Continue Shopping</Text>
-            </TouchableOpacity>
+            <View style={styles.buyNowModalActions}>
+              <TouchableOpacity
+                style={styles.buyNowModalCancelBtn}
+                onPress={() => setIsCheckoutConfirmModalVisible(false)}
+              >
+                <Text style={styles.buyNowModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.buyNowModalConfirmTouch}
+                activeOpacity={0.85}
+                onPress={() => {
+                  setIsCheckoutConfirmModalVisible(false);
+                  const pid = selectedProduct?.id || selectedProduct?.productid;
+                  const price = Number(selectedProduct?.final_price || selectedProduct?.price || 0);
+
+                  const buyNowItem = {
+                    id: pid,
+                    productid: pid,
+                    name: selectedProduct?.name || selectedProduct?.title,
+                    price,
+                    image: selectedProduct?.image,
+                    quantity: 1,
+                    size: selectedProduct?.size || "750ml",
+                  };
+                  navigation.navigate("Checkout", { buyNowItem, singleItemCheckout: true });
+                }}
+              >
+                <LinearGradient
+                  colors={["#f5c242", "#c99742"]}
+                  style={styles.buyNowModalConfirmBtn}
+                >
+                  <Text style={styles.buyNowModalConfirmText}>Yes, Checkout →</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -682,167 +1414,219 @@ const ViewAll = ({ route, navigation }) => {
   );
 };
 
-const cardWidth = (Dimensions.get("window").width - 32) / 2;
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0d0b09",
+    backgroundColor: "#080808",
   },
+  // Luxury Gold Header
+  goldHeader: {
+    backgroundColor: "#c99742",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    height: Platform.OS === "android" ? 58 : 62,
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  backTouch: {
+    paddingVertical: 8,
+    paddingRight: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  backArrowIcon: {
+    width: 24,
+    height: 20,
+    tintColor: "#000000",
+  },
+  headerTitleText: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#000000",
+    letterSpacing: 0.3,
+  },
+
+  // Search Container matching screenshot
+  searchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#161616",
+    borderRadius: 12,
+    borderWidth: 1.2,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+    marginHorizontal: 16,
+    marginTop: 14,
+    height: 48,
+    paddingHorizontal: 14,
+  },
+  searchIcon: {
+    width: 18,
+    height: 18,
+    tintColor: "#777777",
+    marginRight: 10,
+  },
+  searchInput: {
+    flex: 1,
+    color: "#ffffff",
+    fontSize: 15,
+    paddingVertical: 0,
+  },
+
+  // Horizontal Category Chips
   chipsContainer: {
-    paddingVertical: 10,
-    backgroundColor: "#13100c",
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(201, 151, 66, 0.2)",
+    marginTop: 14,
   },
   chipsContent: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
   },
   chip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: "#1f1b15",
-    marginRight: 8,
+    backgroundColor: "#181818",
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: "rgba(201, 151, 66, 0.3)",
-    overflow: "hidden",
+    borderColor: "#2c2c2c",
+    paddingHorizontal: 18,
+    height: 36,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
   },
   chipActive: {
-    paddingHorizontal: 0,
-    paddingVertical: 0,
-    borderWidth: 0,
-  },
-  chipGradient: {
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    borderRadius: 20,
+    backgroundColor: "#cca152",
+    borderColor: "#cca152",
   },
   chipText: {
-    color: "#ccc",
-    fontSize: 13,
+    color: "#ffffff",
+    fontSize: 14,
     fontWeight: "600",
   },
   chipTextActive: {
-    color: "#000",
-    fontSize: 13,
+    color: "#000000",
+    fontSize: 14,
     fontWeight: "700",
   },
+
+  // Subheader Controls Bar
   controlsBar: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 12,
   },
   countText: {
-    color: "#d4af37",
-    fontSize: 13,
-    fontWeight: "600",
-    letterSpacing: 0.5,
+    color: "#cca152",
+    fontSize: 15,
+    fontWeight: "700",
   },
   controlsRight: {
     flexDirection: "row",
-    gap: 8,
+    alignItems: "center",
   },
   filterBtn: {
-    backgroundColor: "#1c1813",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
+    backgroundColor: "#181818",
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: "rgba(201, 151, 66, 0.35)",
+    borderColor: "#2c2c2c",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    marginLeft: 8,
   },
   filterBtnHighlighted: {
-    borderColor: "#f5c242",
-    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    borderColor: "#cca152",
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
   },
   filterBtnText: {
-    color: "#f5ede0",
-    fontSize: 12,
+    color: "#e0e0e0",
+    fontSize: 13,
     fontWeight: "600",
   },
+
+  // Product Grid List
   listContainer: {
-    paddingHorizontal: 10,
-    paddingBottom: 40,
-    paddingTop: 4,
+    paddingHorizontal: 14,
+    paddingBottom: 95,
+    paddingTop: 8,
   },
   columnWrapper: {
     justifyContent: "space-between",
   },
   cardWrapper: {
     width: cardWidth,
-    marginBottom: 14,
+    marginBottom: 16,
   },
   card: {
-    backgroundColor: "#171410",
-    borderRadius: 14,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: "rgba(201, 151, 66, 0.22)",
-    elevation: 3,
+    backgroundColor: "#14120f",
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: "#cca152",
+    overflow: "hidden",
+    elevation: 4,
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 6,
+  },
+
+  // The Bottle Showcase area inside the card
+  bottleBox: {
+    height: 174,
+    backgroundColor: "#080705",
+    justifyContent: "center",
+    alignItems: "center",
+    position: "relative",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(201, 151, 66, 0.25)",
   },
   wishlistIcon: {
     position: "absolute",
     top: 8,
     right: 8,
     zIndex: 10,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    padding: 6,
+    backgroundColor: "rgba(18, 15, 12, 0.75)",
+    width: 32,
+    height: 32,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(201, 151, 66, 0.35)",
     justifyContent: "center",
     alignItems: "center",
   },
   wishlistIconActive: {
-    backgroundColor: "rgba(201, 151, 66, 0.22)",
-    borderColor: "rgba(245, 194, 66, 0.75)",
-    shadowColor: "#f5c242",
-    shadowOpacity: 0.6,
-    shadowRadius: 6,
+    backgroundColor: "rgba(201, 151, 66, 0.3)",
+    borderColor: "#f5c242",
   },
   wishlistImg: {
     width: 16,
     height: 16,
   },
-  // Golden Gradient Halo Around the Bottle (MEMORY PATTERN)
-  goldBottleHalo: {
-    padding: 1.5,
-    borderRadius: 12,
-    marginBottom: 8,
-    shadowColor: "#d4af37",
-    shadowOpacity: 0.3,
-    shadowRadius: 7,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
-  },
-  bottlePedestal: {
-    backgroundColor: "#12100d",
-    borderRadius: 11,
-    height: 155,
-    width: "100%",
-    justifyContent: "center",
-    alignItems: "center",
-    overflow: "hidden",
-  },
   productImage: {
-    width: "88%",
-    height: 140,
+    width: "82%",
+    height: 150,
   },
+
+  // Card Text Details inside the card boundary
   cardInfo: {
-    paddingTop: 4,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    paddingBottom: 12,
+    backgroundColor: "#14120f",
   },
   productName: {
-    color: "#f7f3ed",
-    fontSize: 13,
-    fontWeight: "600",
-    minHeight: 34,
+    color: "#ffffff",
+    fontSize: 13.5,
+    fontWeight: "700",
+    lineHeight: 18,
+    minHeight: 36,
   },
   productSize: {
-    color: "#999",
-    fontSize: 11,
-    marginTop: 2,
+    color: "#a09585",
+    fontSize: 12,
+    marginTop: 3,
   },
   priceRow: {
     flexDirection: "row",
@@ -852,266 +1636,510 @@ const styles = StyleSheet.create({
   },
   productPrice: {
     color: "#f5c242",
-    fontSize: 15,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "800",
   },
   oldPrice: {
-    color: "#777",
+    color: "#777777",
     fontSize: 11,
     textDecorationLine: "line-through",
+    marginTop: 1,
   },
-  cartBtn: {
-    backgroundColor: "#c99742",
-    padding: 7,
-    borderRadius: 9,
+  cardIconActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
-  cartIcon: {
-    width: 17,
-    height: 17,
+  cartIconOnlyBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    borderWidth: 1.2,
+    borderColor: "rgba(245, 194, 66, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
   },
+  cartIconOnlyImg: {
+    width: 15,
+    height: 15,
+    tintColor: "#f5c242",
+  },
+  shopIconOnlyBtn: {
+    width: 32,
+    height: 32,
+  },
+  shopIconOnlyGradient: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+    elevation: 3,
+  },
+  shopIconOnlyImg: {
+    width: 15,
+    height: 15,
+    tintColor: "#0a0a0a",
+  },
+  modalOverlayCenter: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.78)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 16,
+  },
+  buyNowModalCard: {
+    width: "92%",
+    backgroundColor: "#16130f",
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: "#c99742",
+    padding: 20,
+    elevation: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+  },
+  buyNowModalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.08)",
+    paddingBottom: 12,
+    marginBottom: 16,
+  },
+  buyNowModalTitle: {
+    color: "#f5c242",
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  buyNowModalClose: {
+    color: "#888",
+    fontSize: 18,
+    fontWeight: "700",
+    padding: 4,
+  },
+  buyNowModalItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.35)",
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+    marginBottom: 14,
+  },
+  buyNowModalThumb: {
+    width: 48,
+    height: 60,
+  },
+  buyNowModalItemName: {
+    color: "#f8f5ee",
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  buyNowModalItemSub: {
+    color: "#999",
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  buyNowModalItemPrice: {
+    color: "#f5c242",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  buyNowModalNotice: {
+    color: "#ccc",
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 18,
+  },
+  buyNowModalActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  buyNowModalCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+  },
+  buyNowModalCancelText: {
+    color: "#bbb",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  buyNowModalConfirmTouch: {
+    flex: 1.4,
+  },
+  buyNowModalConfirmBtn: {
+    height: 44,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  buyNowModalConfirmText: {
+    color: "#0a0a0a",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+
+  // Empty View
   emptyContainer: {
     alignItems: "center",
-    marginTop: 60,
-    paddingHorizontal: 24,
+    paddingVertical: 60,
+    paddingHorizontal: 20,
   },
   emptyTitle: {
-    color: "#f8f4ec",
+    color: "#c99742",
     fontSize: 18,
     fontWeight: "700",
     marginBottom: 8,
   },
   emptySubtitle: {
-    color: "#888",
+    color: "#777",
     fontSize: 13,
     textAlign: "center",
-    marginBottom: 16,
+    lineHeight: 18,
+    marginBottom: 20,
   },
   resetBtn: {
-    backgroundColor: "#c99742",
+    backgroundColor: "#1c1914",
     paddingHorizontal: 20,
     paddingVertical: 10,
-    borderRadius: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#c99742",
   },
   resetBtnText: {
-    color: "#000",
-    fontWeight: "700",
+    color: "#c99742",
     fontSize: 13,
+    fontWeight: "700",
   },
-  // Modal Backdrop
+
+  // Modal styles
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.8)",
-    justifyContent: "center",
-    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.75)",
+    justifyContent: "flex-end",
   },
   filterModalCard: {
-    width: "88%",
-    backgroundColor: "#181410",
-    borderRadius: 16,
+    backgroundColor: "#14110d",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     padding: 20,
-    borderWidth: 1.2,
-    borderColor: "rgba(201, 151, 66, 0.4)",
-  },
-  sortModalCard: {
-    width: "80%",
-    backgroundColor: "#181410",
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1.2,
-    borderColor: "rgba(201, 151, 66, 0.4)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+    maxHeight: "85%",
   },
   modalHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 14,
+    marginBottom: 12,
   },
   modalHeading: {
+    fontSize: 17,
+    fontWeight: "800",
     color: "#f5c242",
-    fontSize: 18,
+    letterSpacing: 1,
+  },
+  activeCountBadge: {
+    backgroundColor: "rgba(201, 151, 66, 0.2)",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+    marginLeft: 10,
+    borderWidth: 1,
+    borderColor: "#c99742",
+  },
+  activeCountBadgeText: {
+    color: "#f5c242",
+    fontSize: 11,
     fontWeight: "700",
+  },
+  clearAllText: {
+    color: "#d4af37",
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  closeBtnCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   modalClose: {
     color: "#aaa",
-    fontSize: 18,
+    fontSize: 15,
+    fontWeight: "bold",
   },
-  filterSectionTitle: {
-    color: "#eee",
-    fontSize: 14,
+  filterTabsRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.08)",
+    paddingBottom: 8,
+    marginBottom: 10,
+  },
+  filterSubTab: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: "#1e1a14",
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  filterSubTabSelected: {
+    backgroundColor: "#c99742",
+    borderColor: "#c99742",
+  },
+  filterSubTabText: {
+    color: "#aaa",
+    fontSize: 13,
     fontWeight: "600",
-    marginBottom: 8,
+  },
+  filterSubTabTextSelected: {
+    color: "#000",
+    fontWeight: "700",
   },
   optionsWrap: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
-    marginBottom: 14,
   },
   optionPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    backgroundColor: "#221d17",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: "#1a1612",
     borderWidth: 1,
-    borderColor: "rgba(201, 151, 66, 0.25)",
+    borderColor: "rgba(255,255,255,0.1)",
+    marginBottom: 6,
   },
   optionPillSelected: {
-    backgroundColor: "#c99742",
     borderColor: "#c99742",
+    backgroundColor: "rgba(201, 151, 66, 0.2)",
   },
   optionPillText: {
     color: "#ccc",
-    fontSize: 12,
+    fontSize: 13,
   },
   optionPillTextSelected: {
-    color: "#000",
+    color: "#f5c242",
     fontWeight: "700",
+  },
+  filterSectionTitle: {
+    color: "#888",
+    fontSize: 12,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  priceInputsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  priceInput: {
+    flex: 1,
+    backgroundColor: "#1a1612",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 8,
+    color: "#f5c242",
+    fontSize: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
   toggleRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginVertical: 12,
-    paddingTop: 8,
+    marginTop: 16,
+    paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: "rgba(201, 151, 66, 0.15)",
+    borderTopColor: "rgba(255,255,255,0.06)",
   },
   toggleText: {
     color: "#eee",
-    fontSize: 13,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  toggleSub: {
+    color: "#777",
+    fontSize: 11,
+    marginTop: 2,
   },
   checkbox: {
     width: 22,
     height: 22,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: "#c99742",
-    justifyContent: "center",
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: "#666",
     alignItems: "center",
+    justifyContent: "center",
   },
   checkboxActive: {
     backgroundColor: "#c99742",
+    borderColor: "#c99742",
   },
   checkMark: {
     color: "#000",
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "bold",
   },
   modalActionRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 18,
-    gap: 12,
+    alignItems: "center",
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.08)",
   },
   clearBtn: {
-    flex: 1,
     paddingVertical: 10,
+    paddingHorizontal: 18,
     borderRadius: 10,
-    backgroundColor: "#28231c",
-    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.05)",
   },
   clearBtnText: {
     color: "#aaa",
+    fontSize: 13,
     fontWeight: "600",
   },
   applyBtn: {
     flex: 1,
-    paddingVertical: 10,
+    marginLeft: 12,
+  },
+  applyBtnGradient: {
+    paddingVertical: 12,
     borderRadius: 10,
-    backgroundColor: "#c99742",
     alignItems: "center",
+    justifyContent: "center",
   },
   applyBtnText: {
     color: "#000",
-    fontWeight: "700",
+    fontSize: 14,
+    fontWeight: "800",
   },
-  sortItem: {
+
+  // Sort Modal
+  sortModalCard: {
+    backgroundColor: "#14110d",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+  },
+  sortOptionRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(201, 151, 66, 0.12)",
+    borderBottomColor: "rgba(255,255,255,0.06)",
   },
-  sortItemSelected: {
-    borderBottomColor: "#c99742",
+  sortOptionRowSelected: {
+    backgroundColor: "rgba(201, 151, 66, 0.1)",
+    borderRadius: 8,
+    paddingHorizontal: 8,
   },
-  sortItemText: {
-    color: "#ccc",
+  sortOptionText: {
+    color: "#aaa",
     fontSize: 14,
   },
-  sortItemTextSelected: {
+  sortOptionTextSelected: {
     color: "#f5c242",
     fontWeight: "700",
   },
   sortCheck: {
     color: "#f5c242",
+    fontSize: 15,
     fontWeight: "bold",
   },
-  // Cart Quick View Modal
-  cartModalCard: {
-    width: "82%",
-    backgroundColor: "#181410",
-    borderRadius: 18,
-    padding: 22,
-    alignItems: "center",
-    borderWidth: 1.2,
-    borderColor: "#c99742",
-  },
-  cartModalClose: {
-    position: "absolute",
-    top: 12,
-    right: 14,
-  },
-  cartModalTitle: {
-    color: "#2ec4b6",
-    fontSize: 16,
-    fontWeight: "700",
-    marginBottom: 12,
-  },
-  modalBottleHalo: {
-    padding: 1.5,
-    borderRadius: 14,
-    marginBottom: 12,
-    shadowColor: "#d4af37",
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    elevation: 6,
-  },
-  modalBottlePedestal: {
-    backgroundColor: "#12100d",
-    borderRadius: 13,
-    width: 140,
-    height: 140,
+
+  // Centered Quick Cart Modal
+  modalBackdropCenter: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.8)",
     justifyContent: "center",
     alignItems: "center",
+    paddingHorizontal: 20,
   },
-  modalImage: {
-    width: 110,
-    height: 110,
+  cartPopupCard: {
+    backgroundColor: "#14110d",
+    borderRadius: 16,
+    padding: 20,
+    width: "88%",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#c99742",
   },
-  modalProductName: {
-    color: "#fdfaf5",
-    fontSize: 16,
+  cartPopupImage: {
+    width: 100,
+    height: 120,
+    marginBottom: 12,
+  },
+  cartPopupTitle: {
+    color: "#eee",
+    fontSize: 15,
     fontWeight: "700",
     textAlign: "center",
-    marginVertical: 4,
   },
-  modalProductPrice: {
+  cartPopupPrice: {
     color: "#f5c242",
-    fontSize: 18,
-    fontWeight: "bold",
-    marginBottom: 14,
+    fontSize: 16,
+    fontWeight: "800",
+    marginTop: 4,
   },
-  continueBtn: {
-    backgroundColor: "#c99742",
+  cartPopupMsg: {
+    color: "#888",
+    fontSize: 12,
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  cartPopupActions: {
+    flexDirection: "row",
+    width: "100%",
+    justifyContent: "space-between",
+  },
+  cartContinueBtn: {
+    flex: 1,
     paddingVertical: 10,
-    paddingHorizontal: 24,
-    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 8,
+    marginRight: 6,
+    alignItems: "center",
   },
-  continueBtnText: {
+  cartContinueText: {
+    color: "#aaa",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  cartViewBagBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    backgroundColor: "#c99742",
+    borderRadius: 8,
+    marginLeft: 6,
+    alignItems: "center",
+  },
+  cartViewBagText: {
     color: "#000",
+    fontSize: 12,
     fontWeight: "700",
-    fontSize: 13,
   },
 });
 

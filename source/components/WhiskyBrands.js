@@ -56,12 +56,32 @@ const WhiskyBrands = ({ navigation }) => {
   const fetchProducts = async () => {
     try {
       setLoading(true);
-      const response = await axios.post(API_PRODUCTS_BY_WINE_CAT, { catid: "8" });
-      if (response.data.status === 1 && Array.isArray(response.data.products)) {
-        setProducts(response.data.products);
-      } else setProducts([]);
+      const candidates = [
+        `${API_BASE}/products`,
+        'http://192.168.1.9:5000/api/products',
+        'http://localhost:5000/api/products',
+      ];
+      let data = null;
+      for (const url of candidates) {
+        try {
+          const res = await axios.get(url, { timeout: 3500 });
+          if (res?.data && Array.isArray(res.data)) {
+            data = res.data;
+            break;
+          }
+        } catch (e) {}
+      }
+      if (Array.isArray(data)) {
+        const filtered = data.filter((p) => {
+          const c = String(p.category || p.type || '').toLowerCase();
+          return c.includes('whisky') || c.includes('wine') || c.includes('spirit') || p.category_id === 8 || p.category_id === 13 || p.category_id === 14;
+        });
+        setProducts(filtered.length > 0 ? filtered : data.slice(0, 20));
+      } else {
+        setProducts([]);
+      }
     } catch (error) {
-      console.error("Error fetching products:", error?.response?.data || error.message);
+      console.error("Error fetching products:", error?.message || error);
     } finally {
       setLoading(false);
     }

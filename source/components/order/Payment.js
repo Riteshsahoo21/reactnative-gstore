@@ -1,55 +1,73 @@
 /* eslint-disable react-native/no-inline-styles */
 /* eslint-disable prettier/prettier */
 import React from 'react';
-import { View, Text, ScrollView, StyleSheet, Image } from 'react-native';
-import vector from '../../resources/assets/Vector-3.png'
-import back from '../../resources/assets/back.png'
-const Payment = ({ order }) => {
+import { View, Text, ScrollView, StyleSheet, Image, TouchableOpacity } from 'react-native';
+import vector from '../../resources/assets/Vector-3.png';
+import back from '../../resources/assets/back.png';
+
+const Payment = ({ route, navigation, order: propOrder }) => {
+  const order = propOrder || route?.params?.order || {};
+  const amount = Number(order.grandTotal || order.totalPrice || 0);
+  const formattedAmount = `R${amount.toFixed(2)}`;
+  const formattedDate =
+    order.date ||
+    (order.createdAt
+      ? new Date(order.createdAt).toLocaleDateString("en-ZA", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        })
+      : new Date().toLocaleDateString("en-ZA", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        }));
+  const orderNumber = order.orderId || order.id || order._id || "GS-ORDER";
+
   return (
     <ScrollView style={{ flex: 1, backgroundColor: '#080a0b' }}>
-      <View style={styles.header}>
-        <Image style={styles.backIcon} source={back}/>
+      <TouchableOpacity
+        style={styles.header}
+        onPress={() => navigation?.goBack?.()}
+        activeOpacity={0.8}
+      >
+        <Image style={styles.backIcon} source={back} />
         <Text style={styles.backText}>Back</Text>
-      </View>
+      </TouchableOpacity>
 
       {/* Order Confirmation */}
       <View style={styles.confirmBox}>
-        {/* Logo */}
         <View style={styles.logoWrapper}>
-          <Image
-            source={vector}
-          />
+          <Image source={vector} />
         </View>
 
         <Text style={styles.title}>Congratulations !</Text>
         <Text style={styles.subtitle}>Your order has been placed</Text>
-        <Text style={styles.amount}>$745,75</Text>
-        <Text style={styles.date}>Jan 08,2024</Text>
+        <Text style={styles.amount}>{formattedAmount}</Text>
+        <Text style={styles.date}>{formattedDate}</Text>
       </View>
 
-
       <View style={styles.section}>
-        <Text style={styles.title} >Order Details</Text>
-        <DetailRow  label="Order Number" value={123}/>
-        <DetailRow  label="Payment Mode" value={'Direct Bank Transfer'}/>
+        <Text style={styles.title}>Order Details</Text>
+        <DetailRow label="Order Number" value={`#${orderNumber}`} />
+        <DetailRow label="Payment Mode" value={order.paymentMethod || 'PayFast / Bank Transfer'} />
 
         <View style={{ height: 1, backgroundColor: '#343333', marginTop: 10, marginBottom: 20 }} />
 
         <Text style={styles.noticeText}>
-          Your order will not be shipped until the funds have cleared in our
-          account.
+          Your order will be packaged and prepared for dispatch once funds reflect in our account.
         </Text>
 
-        <Text style={[styles.rowText, { textAlign: "left", marginBottom: 10 , fontSize:18, color:"white",fontWeight:"bold",}]}>
-          Banking Details
+        <Text style={[styles.rowText, { textAlign: "left", marginBottom: 10, fontSize: 18, color: "white", fontWeight: "bold" }]}>
+          Standard Bank Banking Details
         </Text>
-        <DetailRow label="Company Name" value="Nivarp International (PVT) LTD" />
-        <DetailRow label="Bank Name" value="First National Bank" />
-        <DetailRow label="Branch Name" value="Bryanston" />
-        <DetailRow label="Bank Account Number" value="62555239419" />
-        <DetailRow label="Swift Code" value="FIRNZAJJ" />
-        <DetailRow label="Branch Code" value="250017" />
-      <View style={{ height: 1, backgroundColor: '#343333', marginTop: 10, marginBottom: 20 }} />
+        <DetailRow label="Company Name" value="The Grand Store PTY LTD" />
+        <DetailRow label="Bank Name" value="Standard Bank" />
+        <DetailRow label="Branch Name" value="Sandton City" />
+        <DetailRow label="Account Number" value="0123456789" />
+        <DetailRow label="Branch Code" value="051001" />
+        <DetailRow label="Reference" value={String(orderNumber).slice(-8).toUpperCase()} />
+        <View style={{ height: 1, backgroundColor: '#343333', marginTop: 10, marginBottom: 20 }} />
       </View>
     </ScrollView>
   );
@@ -61,61 +79,67 @@ const DetailRow = ({ label, value }) => (
     <Text style={styles.rowText}>{value}</Text>
   </View>
 );
+
 const styles = StyleSheet.create({
   header: {
-    flexDirection:'row',
-    backgroundColor:'#ae7718',
-    padding: 12,
+    flexDirection: 'row',
+    backgroundColor: '#c99742',
+    padding: 14,
+    alignItems: 'center',
   },
-  backIcon:{
-     marginTop:5,
-     marginRight:10,
+  backIcon: {
+    marginRight: 10,
   },
   backText: {
-    color: '#1b1c1e',
+    color: '#000',
     fontWeight: 'bold',
-    fontSize: 19,
-
+    fontSize: 16,
   },
   confirmBox: {
-    backgroundColor: '#1A1C1E',
+    backgroundColor: '#15120e',
     alignItems: 'center',
     padding: 20,
-    margin: 12,
-    borderRadius: 10,
+    margin: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(201, 151, 66, 0.22)',
   },
   logoWrapper: {
-    backgroundColor: '#ae7718',
+    backgroundColor: '#c99742',
     borderRadius: 50,
-    padding: 20,
+    padding: 18,
     marginBottom: 12,
   },
   title: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: '#ffffff',
-    marginBottom:10,
+    marginBottom: 6,
   },
   subtitle: {
-    fontSize: 18,
-    color: '#fff',
-    marginBottom:25,
+    fontSize: 14,
+    color: '#ccc',
+    marginBottom: 16,
   },
   amount: {
     fontSize: 24,
-    fontWeight: 'bold',
-    marginVertical: 10,
-    color: '#fff',
+    fontWeight: '900',
+    marginVertical: 6,
+    color: '#f5c242',
   },
   date: {
-    color: '#ccc',
+    color: '#888',
+    fontSize: 12,
   },
   section: {
-    backgroundColor: '#1A1C1E',
-    padding: 15,
-    marginHorizontal: 12,
-    marginTop: 12,
+    backgroundColor: '#15120e',
+    padding: 16,
+    marginHorizontal: 14,
+    marginTop: 6,
+    marginBottom: 30,
     borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(201, 151, 66, 0.22)',
   },
   row: {
     flexDirection: 'row',
@@ -124,21 +148,15 @@ const styles = StyleSheet.create({
   },
   rowText: {
     color: '#8B8B8B',
-    fontSize: 16,
-    
-  },
-  notice: {
-    padding: 15,
-    marginHorizontal: 12,
+    fontSize: 14,
   },
   noticeText: {
-    color: '#8B8B8B',
+    color: '#aaa',
     marginBottom: 12,
-    marginTop:8,
-    fontSize: 16,
-    textAlign:"center",
-    fontFamily:'Roboto Slab',
-    lineHeight:23
+    marginTop: 8,
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 19,
   },
 });
 

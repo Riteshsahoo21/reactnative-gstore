@@ -5,8 +5,8 @@ import { ImageBackground, StyleSheet } from 'react-native';
 const SplashScreen = ({ navigation }) => {
   useEffect(() => {
     const timer = setTimeout(() => {
-      navigation.replace('Home', { showPopup: true }); // 👈 pass flag
-    }, 3000);
+      navigation.replace('Home', { showPopup: false });
+    }, 1500);
 
     return () => clearTimeout(timer);
   }, [navigation]);

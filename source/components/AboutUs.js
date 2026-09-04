@@ -235,6 +235,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     resizeMode: 'cover',
-    tint:"#c99742"
+    tintColor: '#c99742',
   },
 });

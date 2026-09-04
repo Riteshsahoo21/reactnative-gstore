@@ -62,6 +62,58 @@ const DEFAULT_CATEGORIES = [
   { id: 9, name: "Scotch", slug: "scotch" },
 ];
 
+const DEFAULT_AUCTIONS = [
+  {
+    _id: "6a95896cd59ce399e7017eb7",
+    lotNumber: "LOT-2026-17EB7",
+    title: "wine",
+    description: "best in the town",
+    category: "Wine",
+    status: "live",
+    currentBid: 2002,
+    startingBid: 100,
+    bidIncrement: 500,
+    endDate: "2026-09-07T14:05:00.000Z",
+    reserveMet: false,
+    bidCount: 3,
+    images: [
+      "https://res.cloudinary.com/oioqrgj0/image/upload/v1788184939/grandstore-uploads/wyonfqo8yf7mdhhc3rub.jpg",
+    ],
+  },
+  {
+    _id: "6a9a728552d8c97805c587aa",
+    lotNumber: "GS-2026-00112",
+    title: "The Macallan 1926 60-Year-Old Valerio Adami Edition",
+    description: "Distilled in 1926 and matured in sherry-seasoned oak cask #263 for six decades. Features artwork label by Valerio Adami.",
+    category: "Whisky",
+    status: "sold",
+    currentBid: 75000,
+    winningBid: 75000,
+    startingBid: 75000,
+    reserveMet: true,
+    bidCount: 1,
+    images: [
+      "https://images.unsplash.com/photo-1527281400683-1aae777175f8?auto=format&fit=crop&q=80&w=1200",
+    ],
+  },
+  {
+    _id: "6a994ca431f127330aa8ff46",
+    lotNumber: "LOT-2026-094CA",
+    title: "Château Chaplosi Grand Cru Réserve 2015",
+    description: "Grand Cru classified vintage with unparalleled complexity, velvety tannins, and cellared in optimal conditions.",
+    category: "Wine",
+    status: "sold",
+    currentBid: 25000,
+    winningBid: 25000,
+    startingBid: 15000,
+    reserveMet: true,
+    bidCount: 4,
+    images: [
+      "https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?auto=format&fit=crop&q=80&w=1000",
+    ],
+  },
+];
+
 const HomeScreen = ({ navigation }) => {
   const [wishlistItemIds, setWishlistItemIds] = useState(new Set());
   const [cartItems, setCartItems] = useState(new Set());
@@ -77,6 +129,36 @@ const HomeScreen = ({ navigation }) => {
   const [userName, setUserName] = useState(null);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [featuredEvents, setFeaturedEvents] = useState([]);
+  const [featuredAuctions, setFeaturedAuctions] = useState(DEFAULT_AUCTIONS);
+  const [wonAuctionAlert, setWonAuctionAlert] = useState(null);
+
+  const displayedVaultAuctions = useMemo(() => {
+    if (!Array.isArray(featuredAuctions)) return [];
+    const liveLots = featuredAuctions.filter(
+      (a) => a && (a.status === "live" || a.status === "extended")
+    );
+    const pastLots = featuredAuctions.filter(
+      (a) => a && a.status === "sold"
+    );
+    const upcomingLots = featuredAuctions.filter(
+      (a) => a && a.status === "upcoming"
+    );
+
+    if (liveLots.length >= 2) {
+      // More than one live auction: show live auctions only!
+      return liveLots;
+    } else if (liveLots.length === 1) {
+      // Exactly 1 live auction: the only live auction first, then only ONE past auction
+      return [...liveLots, ...pastLots.slice(0, 1)];
+    } else if (pastLots.length > 0) {
+      // No live auctions: at most one past auction
+      return pastLots.slice(0, 1);
+    } else if (upcomingLots.length > 0) {
+      return upcomingLots.slice(0, 1);
+    }
+    return [];
+  }, [featuredAuctions]);
 
   const allProducts = useMemo(() => {
     const productsMap = new Map();
@@ -394,6 +476,87 @@ const handleAddToCartInstant = async (product) => {
       } catch (prodErr) {
         console.error("Failed to fetch products for categories:", prodErr?.message || prodErr);
       }
+
+      try {
+        const evtCandidates = [
+          `${API_BASE}/events`,
+          'http://localhost:5000/api/events',
+          'http://192.168.1.9:5000/api/events',
+          'http://10.0.2.2:5000/api/events',
+        ];
+        for (const url of evtCandidates) {
+          try {
+            const evtRes = await axios.get(url, { timeout: 3500 });
+            if (evtRes?.data && Array.isArray(evtRes.data)) {
+              setFeaturedEvents(evtRes.data.slice(0, 6));
+              break;
+            }
+          } catch (e) {}
+        }
+      } catch (evtErr) {
+        console.error("Error fetching events for home:", evtErr?.message || evtErr);
+      }
+
+      try {
+        const aucCandidates = [
+          'http://192.168.1.9:5000/api/auction',
+          `${API_BASE}/auction`,
+          'http://localhost:5000/api/auction',
+          `${API_BASE}/auctions`,
+          'http://10.0.2.2:5000/api/auction',
+        ];
+        for (const url of aucCandidates) {
+          try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 4000);
+            const res = await fetch(url, { signal: controller.signal });
+            clearTimeout(timer);
+            if (res && res.ok) {
+              const data = await res.json();
+              const list = Array.isArray(data) ? data : (data.lots || data.data || []);
+              if (list.length > 0) {
+                setFeaturedAuctions(list.slice(0, 10));
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+      } catch (aucErr) {
+        console.error("Error fetching auctions for home:", aucErr?.message || aucErr);
+      }
+
+      // Check for user's won auctions (for luxury top alert)
+      try {
+        const token = await AsyncStorage.getItem("userToken");
+        if (token) {
+          const dashCandidates = [
+            'http://192.168.1.9:5000/api/auction/user/dashboard',
+            `${API_BASE}/auction/user/dashboard`,
+            'http://localhost:5000/api/auction/user/dashboard',
+          ];
+          for (const url of dashCandidates) {
+            try {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 3500);
+              const res = await fetch(url, {
+                headers: { Authorization: `Bearer ${token}` },
+                signal: controller.signal,
+              });
+              clearTimeout(timer);
+              if (res && res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data.wonLots) && data.wonLots.length > 0) {
+                  const pending = data.wonLots.find(l => l.paymentStatus !== 'Paid') || data.wonLots[0];
+                  if (pending) {
+                    setWonAuctionAlert(pending);
+                    break;
+                  }
+                }
+              }
+            } catch (e) {}
+          }
+        }
+      } catch (dashErr) {}
 
       setSections({
         newArrivals,
@@ -713,10 +876,61 @@ const handleAddToCartInstant = async (product) => {
           )}
         </View>
 
+        {/* 🏆 Luxury Won Auction Notification Banner (matches web AuctionWinnerHomeAlert.jsx) */}
+        {wonAuctionAlert && (
+          <TouchableOpacity
+            style={styles.wonAlertBanner}
+            activeOpacity={0.88}
+            onPress={() => navigation.navigate("AuctionCheckout", { lotId: wonAuctionAlert._id, lot: wonAuctionAlert })}
+          >
+            <LinearGradient
+              colors={["#2b1f0d", "#1c1408", "#120d04"]}
+              style={styles.wonAlertGradient}
+            />
+            <View style={styles.wonAlertIconWrap}>
+              <Text style={{ fontSize: 20 }}>🏆</Text>
+            </View>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.wonAlertTitle}>
+                AUCTION WON • LOT #{wonAuctionAlert.lotNumber || (wonAuctionAlert._id && wonAuctionAlert._id.slice(-6).toUpperCase()) || "GS-LOT"}
+              </Text>
+              <Text style={styles.wonAlertDesc} numberOfLines={1}>
+                {wonAuctionAlert.title} — Hammer: R{Number(wonAuctionAlert.winningBid || wonAuctionAlert.currentBid || 0).toLocaleString("en-ZA")}
+              </Text>
+            </View>
+            <View style={styles.wonAlertBtn}>
+              <Text style={styles.wonAlertBtnText}>Claim →</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
         <VideoSlider />
 
         {/* Categories */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
+          {/* Auctions Quick Entry */}
+          <TouchableOpacity
+            activeOpacity={0.78}
+            onPress={() => navigation.navigate("AuctionsHub")}
+            style={styles.categoryItem}
+          >
+            <LinearGradient
+              colors={['#4a3512', '#2a1e0a', '#171005']}
+              start={{ x: 0.1, y: 0 }}
+              end={{ x: 0.9, y: 1 }}
+              style={[styles.webCategoryIconContainer, { borderColor: '#d4af37', borderWidth: 1.2 }]}
+            >
+              <Image
+                source={require("../resources/images/event.png")}
+                style={[styles.categoryIconImg, { tintColor: '#ffd700' }]}
+                resizeMode="contain"
+              />
+            </LinearGradient>
+            <Text style={[styles.categoryIconText, { color: '#ffd700', fontWeight: 'bold' }]} numberOfLines={1}>
+              Auctions
+            </Text>
+          </TouchableOpacity>
+
           {categories.map((cat, index) => (
             <TouchableOpacity
               key={cat.id || index}
@@ -753,6 +967,161 @@ const handleAddToCartInstant = async (product) => {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ paddingVertical: 10 }}
         />
+
+        {/* Exclusive Events & Tastings Spotlight */}
+        {featuredEvents.length > 0 && (
+          <View style={styles.eventsSection}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>Cellar Tastings & Events</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => navigation.navigate("EventsHub")}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.viewAll}>View All →</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 10 }}
+            >
+              {featuredEvents.map((evt) => {
+                const prices = (evt.ticketTiers || [])
+                  .map((t) => Number(t.price))
+                  .filter((p) => Number.isFinite(p));
+                const startPrice = prices.length ? Math.min(...prices) : null;
+                const evtDate = evt.date
+                  ? new Date(evt.date).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    })
+                  : "Upcoming";
+                const imgUri = evt.image
+                  ? evt.image.startsWith("http")
+                    ? evt.image
+                    : `http://192.168.1.9:5000/${evt.image.replace(/^\//, "")}`
+                  : "https://ik.imagekit.io/thegrandstore/bg.webp";
+
+                return (
+                  <TouchableOpacity
+                    key={evt._id}
+                    style={styles.eventHomeCard}
+                    onPress={() => navigation.navigate("EventDetails", { eventId: evt._id, event: evt })}
+                    activeOpacity={0.88}
+                  >
+                    <Image source={{ uri: imgUri }} style={styles.eventHomeImage} resizeMode="cover" />
+                    <LinearGradient
+                      colors={["transparent", "rgba(10, 9, 7, 0.75)", "#0a0907"]}
+                      style={styles.eventHomeGradient}
+                    />
+
+                    <View style={styles.eventHomeBadge}>
+                      <Text style={styles.eventHomeBadgeText}>{evt.type || "TASTING"}</Text>
+                    </View>
+
+                    <View style={styles.eventHomeInfo}>
+                      <Text style={styles.eventHomeDate}>📅 {evtDate} {evt.startTime ? `• ${evt.startTime}` : ""}</Text>
+                      <Text style={styles.eventHomeTitle} numberOfLines={1}>
+                        {evt.title}
+                      </Text>
+                      <View style={styles.eventHomeFooter}>
+                        <Text style={styles.eventHomePrice}>
+                          {startPrice === null ? "Complimentary" : `From R${startPrice.toLocaleString("en-ZA")}`}
+                        </Text>
+                        <Text style={styles.eventHomeArrow}>Book →</Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Rare Vault Auctions Spotlight */}
+        {displayedVaultAuctions && displayedVaultAuctions.length > 0 && (
+          <View style={styles.eventsSection}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>Rare Vault Auctions 🏛️</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => navigation.navigate("AuctionsHub")}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.viewAll}>Enter Vault Room →</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 10 }}
+            >
+              {displayedVaultAuctions.map((lot) => {
+                const imgUri = lot.images && lot.images.length > 0
+                  ? (lot.images[0].startsWith("http") ? lot.images[0] : `http://192.168.1.9:5000/${lot.images[0].replace(/^\//, "")}`)
+                  : "https://ik.imagekit.io/thegrandstore/bg.webp";
+                const isSold = lot.status === "sold";
+                const isLive = lot.status === "live" || lot.status === "extended";
+                const displayPrice = isSold && lot.winningBid ? lot.winningBid : (lot.currentBid || lot.startingBid || 0);
+
+                return (
+                  <TouchableOpacity
+                    key={lot._id}
+                    style={styles.eventHomeCard}
+                    onPress={() => navigation.navigate("AuctionLotDetails", { lotId: lot._id, lot })}
+                    activeOpacity={0.88}
+                  >
+                    <Image source={{ uri: imgUri }} style={styles.eventHomeImage} resizeMode="contain" />
+                    <LinearGradient
+                      colors={["transparent", "rgba(10, 9, 7, 0.8)", "#0a0907"]}
+                      style={styles.eventHomeGradient}
+                    />
+
+                    <View style={[
+                      styles.eventHomeBadge,
+                      isLive && { backgroundColor: "rgba(220, 38, 38, 0.35)", borderColor: "#ef4444" },
+                      isSold && { backgroundColor: "rgba(201, 151, 66, 0.25)", borderColor: "#c99742" },
+                    ]}>
+                      <Text style={[
+                        styles.eventHomeBadgeText,
+                        isLive && { color: "#fca5a5" },
+                      ]}>
+                        {isSold ? "👑 SOLD ARCHIVE" : isLive ? "● LIVE AUCTION" : "UPCOMING"}
+                      </Text>
+                    </View>
+
+                    <View style={styles.eventHomeInfo}>
+                      <Text style={styles.eventHomeDate}>
+                        LOT #{lot.lotNumber || lot._id.slice(-6).toUpperCase()} • {lot.category || "Fine Spirits"}
+                      </Text>
+                      <Text style={styles.eventHomeTitle} numberOfLines={1}>
+                        {lot.title}
+                      </Text>
+                      <View style={styles.eventHomeFooter}>
+                        <View>
+                          <Text style={{ color: "#8a7e72", fontSize: 9, textTransform: "uppercase", fontWeight: "700" }}>
+                            {isSold ? "Hammer Price" : "Current Leading"}
+                          </Text>
+                          <Text style={styles.eventHomePrice}>
+                            R{Number(displayPrice).toLocaleString("en-ZA")}
+                          </Text>
+                        </View>
+                        <View style={styles.bidNowPill}>
+                          <Text style={styles.bidNowPillText}>{isSold ? "Recap →" : "Bid Now →"}</Text>
+                        </View>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
 
         {/* Dynamic Category Sliders (Whisky, Wine, Champagne, Tequila, Cognac, Beer, etc.) */}
         {sections.categorySections &&
@@ -1389,6 +1758,141 @@ continueShoppingText: {
   fontWeight: "600",
   fontSize: 14,
 },
+
+// Featured Events Carousel Styles
+eventsSection: {
+  marginVertical: 14,
+},
+eventHomeCard: {
+  width: 260,
+  height: 200,
+  borderRadius: 14,
+  marginRight: 14,
+  backgroundColor: "#13100c",
+  borderWidth: 1.2,
+  borderColor: "rgba(201, 151, 66, 0.25)",
+  overflow: "hidden",
+  position: "relative",
+  justifyContent: "flex-end",
+},
+eventHomeImage: {
+  ...StyleSheet.absoluteFillObject,
+},
+eventHomeGradient: {
+  ...StyleSheet.absoluteFillObject,
+},
+eventHomeBadge: {
+  position: "absolute",
+  top: 10,
+  left: 10,
+  backgroundColor: "rgba(201, 151, 66, 0.25)",
+  borderWidth: 1,
+  borderColor: "#c99742",
+  paddingHorizontal: 8,
+  paddingVertical: 3,
+  borderRadius: 4,
+},
+eventHomeBadgeText: {
+  color: "#f5c242",
+  fontSize: 9,
+  fontWeight: "800",
+},
+eventHomeInfo: {
+  padding: 12,
+},
+eventHomeDate: {
+  color: "#c2bab0",
+  fontSize: 11,
+  fontWeight: "600",
+  marginBottom: 2,
+},
+eventHomeTitle: {
+  color: "#ffffff",
+  fontSize: 15,
+  fontWeight: "800",
+  marginBottom: 8,
+},
+eventHomeFooter: {
+  flexDirection: "row",
+  justifyContent: "space-between",
+  alignItems: "center",
+},
+eventHomePrice: {
+  color: "#f5c242",
+  fontSize: 13,
+  fontWeight: "900",
+},
+eventHomeArrow: {
+  color: "#ffffff",
+  fontSize: 12,
+  fontWeight: "800",
+},
+bidNowPill: {
+  backgroundColor: "rgba(212, 175, 55, 0.15)",
+  borderWidth: 1,
+  borderColor: "#d4af37",
+  paddingHorizontal: 10,
+  paddingVertical: 4,
+  borderRadius: 6,
+},
+bidNowPillText: {
+  color: "#ffd700",
+  fontSize: 11,
+  fontWeight: "800",
+},
+
+// Won Auction Alert Banner (matches web AuctionWinnerHomeAlert)
+wonAlertBanner: {
+  marginHorizontal: 12,
+  marginTop: 10,
+  marginBottom: 6,
+  borderRadius: 12,
+  borderWidth: 1.2,
+  borderColor: "#d4af37",
+  overflow: "hidden",
+  padding: 12,
+  flexDirection: "row",
+  alignItems: "center",
+  elevation: 6,
+},
+wonAlertGradient: {
+  ...StyleSheet.absoluteFillObject,
+},
+wonAlertIconWrap: {
+  width: 40,
+  height: 40,
+  borderRadius: 20,
+  backgroundColor: "rgba(212, 175, 55, 0.2)",
+  borderWidth: 1,
+  borderColor: "#ffd700",
+  justifyContent: "center",
+  alignItems: "center",
+},
+wonAlertTitle: {
+  color: "#ffd700",
+  fontSize: 12,
+  fontWeight: "900",
+  letterSpacing: 0.5,
+},
+wonAlertDesc: {
+  color: "#e8dec8",
+  fontSize: 12,
+  fontWeight: "600",
+  marginTop: 2,
+},
+wonAlertBtn: {
+  backgroundColor: "#d4af37",
+  paddingHorizontal: 12,
+  paddingVertical: 6,
+  borderRadius: 6,
+  marginLeft: 8,
+},
+wonAlertBtnText: {
+  color: "#080705",
+  fontSize: 11,
+  fontWeight: "800",
+},
+
 
 });
 

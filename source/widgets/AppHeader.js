@@ -57,7 +57,13 @@ const Header = (props) => {
                     <TouchableOpacity
                         style={[styles.back, backButtonStyle, { marginRight:10}]}
                         onPress={() => {
-                            navigation.goBack();
+                            if (props.onBack) {
+                                props.onBack();
+                            } else if (navigation?.canGoBack && navigation.canGoBack()) {
+                                navigation.goBack();
+                            } else if (navigation?.navigate) {
+                                navigation.navigate("Home");
+                            }
                         }}>
 
                         <Image

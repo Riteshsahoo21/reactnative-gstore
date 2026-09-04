@@ -1,235 +1,686 @@
 /* eslint-disable prettier/prettier */
 /* eslint-disable quotes */
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
   StyleSheet,
+  ScrollView,
   Image,
   TouchableOpacity,
-  TextInput,
+  SafeAreaView,
+  ActivityIndicator,
+  StatusBar,
+  Alert,
 } from "react-native";
 import AppHeader from "../../widgets/AppHeader";
 import tmh_styles from "../../styles/tmh_styles";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_BASE } from "../../resources/data/Constants";
 
-export default function OrderDetails({ navigation }) {
-  const [showProducts, setShowProducts] = useState(false); // <--- State to toggle visibility
+const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
+
+const API_CANDIDATES = [
+  API_BASE,
+  "http://localhost:5000/api",
+  "http://192.168.1.9:5000/api",
+  "http://10.0.2.2:5000/api",
+];
+
+const getImageUrl = (imagePath) => {
+  if (!imagePath || typeof imagePath !== "string") return "";
+  const cleaned = imagePath.startsWith("/") ? imagePath.slice(1) : imagePath;
+  return cleaned.startsWith("http") ? cleaned : `${IMAGE_BASE_URL}${cleaned}`;
+};
+
+export default function OrderDetails({ route, navigation }) {
+  const initialOrder = route?.params?.order || null;
+  const [order, setOrder] = useState(initialOrder);
+  const [isLoading, setIsLoading] = useState(!initialOrder);
+
+  useEffect(() => {
+    const syncPaidStatus = async (targetOrder) => {
+      if (!targetOrder) return targetOrder;
+      try {
+        const rawPaid = await AsyncStorage.getItem("grand_store_paid_order_ids");
+        if (rawPaid) {
+          const paidList = JSON.parse(rawPaid);
+          const key = targetOrder.orderId || targetOrder.id || targetOrder._id;
+          if (
+            paidList.includes(key) ||
+            (targetOrder.id && paidList.includes(targetOrder.id)) ||
+            (targetOrder._id && paidList.includes(targetOrder._id)) ||
+            (targetOrder.orderMongoId && paidList.includes(targetOrder.orderMongoId))
+          ) {
+            return {
+              ...targetOrder,
+              isPaid: true,
+              paymentStatus: "Paid",
+            };
+          }
+        }
+      } catch (e) {}
+      return targetOrder;
+    };
+
+    if (initialOrder) {
+      syncPaidStatus(initialOrder).then((finalOrd) => {
+        setOrder(finalOrd);
+        setIsLoading(false);
+      });
+      return;
+    }
+
+    // Fallback: Fetch most recent order from local storage if no params passed
+    const fetchLatestOrder = async () => {
+      try {
+        // 1. Try single latest order key
+        const rawLast = await AsyncStorage.getItem("grand_store_last_order");
+        if (rawLast) {
+          const parsedLast = JSON.parse(rawLast);
+          if (
+            parsedLast &&
+            !String(parsedLast.date || "").includes("2024") &&
+            !String(parsedLast.createdAt || "").startsWith("2024") &&
+            !String(parsedLast.name || "").includes("Buld Light")
+          ) {
+            const synced = await syncPaidStatus(parsedLast);
+            setOrder(synced);
+            setIsLoading(false);
+            return;
+          }
+        }
+
+        // 2. Try recent orders list
+        const rawOrders = await AsyncStorage.getItem("grand_store_recent_orders");
+        if (rawOrders) {
+          const list = JSON.parse(rawOrders);
+          if (Array.isArray(list) && list.length > 0) {
+            const cleanList = list.filter(
+              (o) =>
+                !String(o.date || "").includes("2024") &&
+                !String(o.createdAt || "").startsWith("2024") &&
+                !String(o.name || "").includes("Buld Light") &&
+                !String(o.name || "").includes("Flyrsian") &&
+                !String(o.name || "").includes("Besperados")
+            );
+            if (cleanList.length > 0) {
+              setOrder(cleanList[0]);
+              setIsLoading(false);
+              return;
+            }
+          }
+        }
+
+        // 3. Try server API
+        const token = await AsyncStorage.getItem("userToken");
+        if (token) {
+          for (const base of API_CANDIDATES) {
+            try {
+              const res = await fetch(`${base}/orders/myorders`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (res.ok) {
+                const serverOrders = await res.json();
+                if (Array.isArray(serverOrders) && serverOrders.length > 0) {
+                  const cleanServer = serverOrders.filter(
+                    (o) =>
+                      !String(o.createdAt || "").startsWith("2024") &&
+                      !String(o.orderId || "").includes("2024")
+                  );
+                  if (cleanServer.length > 0) {
+                    const first = cleanServer[0];
+                    setOrder({
+                      id: first._id,
+                      orderId: first.orderId || first.invoiceNumber || first._id,
+                      date: new Date(first.createdAt).toLocaleDateString("en-ZA", {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                      }),
+                      createdAt: first.createdAt,
+                      totalPrice: first.totalPrice,
+                      grandTotal: first.totalPrice,
+                      subtotal: first.subTotal || first.totalPrice - (first.shippingCost || 0),
+                      shippingFee: first.shippingCost || 0,
+                      paymentMethod: first.paymentMethod || "PayFast",
+                      paymentStatus: first.paymentStatus || (first.isPaid ? "Paid" : "Pending"),
+                      isPaid: first.isPaid || first.paymentStatus === "Paid",
+                      courierName: first.shipments?.[0]?.selectedCourier?.courierName || "Courier Guy",
+                      items: (first.orderItems || []).map((item) => ({
+                        name: item.name,
+                        price: Number(item.price || 0),
+                        quantity: Number(item.qty || item.quantity || 1),
+                        image: item.image,
+                        size: item.size || "750ml",
+                      })),
+                      recipient: {
+                        address: first.shippingAddress?.address,
+                        city: first.shippingAddress?.city,
+                        postalCode: first.shippingAddress?.postalCode,
+                        country: first.shippingAddress?.country,
+                        phone: first.shippingAddress?.phone || first.shippingAddress?.phoneNumber,
+                      },
+                    });
+                    break;
+                  }
+                }
+              }
+            } catch (err) {
+              // try next candidate
+            }
+          }
+        }
+      } catch (e) {
+        console.log("Error loading order details:", e);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchLatestOrder();
+  }, [initialOrder]);
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#0c0a08" />
+        <AppHeader
+          title="Order Details"
+          isGradient={false}
+          backgroundColor="#c99742"
+          titleStyle={tmh_styles.header_title_tmb}
+          isShowShadow={true}
+          isBack={true}
+          backButtonStyle={{ width: 35, height: 25, alignItems: "center" }}
+          backIconColor="black"
+          logoImage={null}
+          navigation={navigation}
+        />
+        <View style={styles.loadingCenter}>
+          <ActivityIndicator size="large" color="#c99742" />
+          <Text style={styles.loadingText}>Retrieving Order Information...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!order) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#0c0a08" />
+        <AppHeader
+          title="Order Details"
+          isGradient={false}
+          backgroundColor="#c99742"
+          titleStyle={tmh_styles.header_title_tmb}
+          isShowShadow={true}
+          isBack={true}
+          backButtonStyle={{ width: 35, height: 25, alignItems: "center" }}
+          backIconColor="black"
+          logoImage={null}
+          navigation={navigation}
+        />
+        <View style={styles.emptyContainer}>
+          <View style={styles.emptyIconCircle}>
+            <Text style={{ fontSize: 36 }}>🔍</Text>
+          </View>
+          <Text style={styles.emptyTitle}>Order Not Found</Text>
+          <Text style={styles.emptySubtitle}>
+            We could not find the details for this order. Check your recent orders or browse our catalog.
+          </Text>
+          <TouchableOpacity
+            style={styles.primaryBtn}
+            onPress={() => navigation.navigate("MyOrder")}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.primaryBtnText}>View All My Orders</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const isPaid = order.isPaid || order.paymentStatus === "Paid";
+  const items = (order.items && order.items.length > 0)
+    ? order.items
+    : (order.orderItems && order.orderItems.length > 0)
+    ? order.orderItems
+    : [];
+  const grandTotal = Number(order.grandTotal || order.totalPrice || 0);
+  const subtotal = Number(order.subtotal || grandTotal - (order.shippingFee || 0));
+  const shippingFee = Number(order.shippingFee || 0);
+  const discount = Number(order.discount || 0);
+
+  const formattedDate =
+    order.date ||
+    (order.createdAt
+      ? new Date(order.createdAt).toLocaleDateString("en-ZA", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        })
+      : "Recent Order");
+
+  const orderRefId = order.orderId || order.id || order._id || "GS-ORDER";
+  const recipient = order.recipient || {};
+  const isPostNet =
+    order.deliveryPreference === "postnet" ||
+    String(order.courierName || "").toLowerCase().includes("postnet") ||
+    !!order.pickupStore;
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#0c0a08" />
       <AppHeader
-        title="Orders Details"
+        title="Order Details"
         isGradient={false}
-        backgroundColor={"#c99742"}
+        backgroundColor="#c99742"
         titleStyle={tmh_styles.header_title_tmb}
-        isShowShadow={false}
-        navigation={navigation}
+        isShowShadow={true}
         isBack={true}
         backButtonStyle={{ width: 35, height: 25, alignItems: "center" }}
-        backIconColor={"black"}
+        backIconColor="black"
         logoImage={null}
+        navigation={navigation}
       />
 
-      <View style={{ alignItems: 'center', marginTop: 10 }}>
-        <View style={styles.searchBox}>
-          <Image
-            source={require('../../resources/assets/discover.png')} 
-            style={styles.icon}
-          />
-          <TextInput
-            placeholder="Search In Orders"
-            placeholderTextColor={'#8b8b8b'}
-            style={styles.input}
-          />
-        </View>
-      </View>
-
-      <View style={styles.orderCard}>
-        {/* Order Info Row */}
-        <View style={styles.rowBetween}>
-          <View>
-            <Text style={styles.orderId}>Order ID: 486</Text>
-            <Text style={styles.amount}>Final Amount: $8200</Text>
-            <Text style={styles.date}>15 May 2023 • 5 Products</Text>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* Top Reference & Status Card */}
+        <View style={styles.card}>
+          <View style={styles.refRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.refLabel}>ORDER REFERENCE</Text>
+              <Text style={styles.refNumber}>#{orderRefId}</Text>
+              <Text style={styles.refDate}>Placed on {formattedDate}</Text>
+            </View>
+            <View style={[styles.statusBadge, isPaid ? styles.statusBadgePaid : styles.statusBadgePending]}>
+              <Text style={[styles.statusText, isPaid ? styles.statusTextPaid : styles.statusTextPending]}>
+                {isPaid ? "✓ PAID" : "⏳ PENDING"}
+              </Text>
+            </View>
           </View>
-          <View style={styles.statusBadge}>
-            <Text style={styles.statusText}>Pending</Text>
+
+          <View style={styles.divider} />
+
+          {/* Delivery Status Banner */}
+          <View style={styles.deliveryStatusRow}>
+            <Text style={{ fontSize: 18, marginRight: 10 }}>{isPaid ? "📦" : "⏳"}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.deliveryStatusTitle}>
+                {isPaid ? "Preparing for Courier Collection" : "Awaiting Payment Confirmation"}
+              </Text>
+              <Text style={styles.deliveryStatusSub}>
+                {isPaid
+                  ? "Your luxury order is packaged with tamper-proof security seals."
+                  : "Complete payment to initiate priority warehouse fulfillment."}
+              </Text>
+            </View>
           </View>
         </View>
 
-        {/* View All Products Link */}
-        <TouchableOpacity onPress={() => setShowProducts(!showProducts)}>
-          <Text style={styles.viewAll}>
-            {showProducts ? "Hide products ⌃" : "View all products ⌄"}
+        {/* Ordered Products Section */}
+        <View style={styles.card}>
+          <Text style={styles.sectionHeading}>
+            PURCHASED PRODUCTS ({items.length})
           </Text>
-        </TouchableOpacity>
 
-        {/* Product Thumbnails (only show if showProducts is true) */}
-        {showProducts && (
-          <View style={styles.productRow}>
-            {[1, 2, 3, 4, 5].map((_, idx) => (
-              <View key={idx} style={styles.thumbWrapper}>
-                <Image
-                  source={require('../../resources/assets/order1.png')} 
-                  style={styles.thumb}
-                />
+          {items.map((prod, idx) => {
+            const qty = Number(prod.quantity || prod.qty || 1);
+            const unitPrice = Number(prod.price || 0);
+            const lineTotal = qty * unitPrice;
+
+            return (
+              <View key={idx} style={styles.productRow}>
+                {prod.image ? (
+                  <Image
+                    source={{ uri: getImageUrl(prod.image) }}
+                    style={styles.productImg}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <View style={styles.productPlaceholder}>
+                    <Text style={styles.placeholderText}>GS</Text>
+                  </View>
+                )}
+
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.productTitle} numberOfLines={2}>
+                    {prod.name}
+                  </Text>
+                  <Text style={styles.productSpecs}>
+                    {prod.size ? `${prod.size} • ` : ""}Qty: {qty} • R{unitPrice.toFixed(2)} each
+                  </Text>
+                  <Text style={styles.productSubtotal}>
+                    Total: R{lineTotal.toFixed(2)}
+                  </Text>
+                </View>
               </View>
-            ))}
+            );
+          })}
+        </View>
+
+        {/* Delivery Destination Card */}
+        <View style={styles.card}>
+          <Text style={styles.sectionHeading}>DELIVERY DESTINATION</Text>
+
+          <View style={styles.infoBlock}>
+            <Text style={styles.infoLabel}>Courier / Method</Text>
+            <Text style={styles.infoValue}>
+              {order.courierName || (isPostNet ? "PostNet Counter-to-Counter" : "The Courier Guy Express")}
+            </Text>
+          </View>
+
+          {recipient.fullName && (
+            <View style={styles.infoBlock}>
+              <Text style={styles.infoLabel}>Recipient</Text>
+              <Text style={styles.infoValue}>
+                {recipient.fullName} {recipient.phone ? `(${recipient.phone})` : ""}
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.infoBlock}>
+            <Text style={styles.infoLabel}>
+              {isPostNet ? "PostNet Pickup Branch" : "Shipping Address"}
+            </Text>
+            <Text style={styles.infoValue}>
+              {recipient.address ||
+                [recipient.city, recipient.postalCode, recipient.country]
+                  .filter(Boolean)
+                  .join(", ") ||
+                "Destination registered on file"}
+            </Text>
+          </View>
+        </View>
+
+        {/* Financial & Invoice Summary Card */}
+        <View style={styles.card}>
+          <Text style={styles.sectionHeading}>FINANCIAL BREAKDOWN</Text>
+
+          <View style={styles.costRow}>
+            <Text style={styles.costLabel}>Subtotal</Text>
+            <Text style={styles.costValue}>R{subtotal.toFixed(2)}</Text>
+          </View>
+
+          <View style={styles.costRow}>
+            <Text style={styles.costLabel}>Delivery Fee</Text>
+            <Text style={styles.costValue}>
+              {shippingFee > 0 ? `R${shippingFee.toFixed(2)}` : "Free Delivery"}
+            </Text>
+          </View>
+
+          {discount > 0 && (
+            <View style={styles.costRow}>
+              <Text style={styles.costLabelDiscount}>Special Discount</Text>
+              <Text style={styles.costValueDiscount}>-R{discount.toFixed(2)}</Text>
+            </View>
+          )}
+
+          <View style={styles.divider} />
+
+          <View style={styles.costRowTotal}>
+            <Text style={styles.totalHeading}>GRAND TOTAL</Text>
+            <Text style={styles.totalAmount}>R{grandTotal.toFixed(2)}</Text>
+          </View>
+
+          <View style={styles.paymentMethodRow}>
+            <Text style={styles.paymentMethodLabel}>Payment Method:</Text>
+            <Text style={styles.paymentMethodValue}>
+              {order.paymentMethod || "PayFast Sandbox (Instant Cards / EFT)"}
+            </Text>
+          </View>
+        </View>
+
+        {/* Bank Transfer Instructions (Only shown if pending bank transfer) */}
+        {!isPaid && (
+          <View style={[styles.card, styles.bankCard]}>
+            <Text style={styles.bankHeader}>🏦 Standard Bank Payment Instructions</Text>
+            <Text style={styles.bankSub}>
+              Please transfer R{grandTotal.toFixed(2)} using your Order Reference:
+            </Text>
+
+            <View style={styles.bankDetailRow}>
+              <Text style={styles.bankDetailLabel}>Bank:</Text>
+              <Text style={styles.bankDetailValue}>Standard Bank</Text>
+            </View>
+            <View style={styles.bankDetailRow}>
+              <Text style={styles.bankDetailLabel}>Account Name:</Text>
+              <Text style={styles.bankDetailValue}>The Grand Store PTY LTD</Text>
+            </View>
+            <View style={styles.bankDetailRow}>
+              <Text style={styles.bankDetailLabel}>Account Number:</Text>
+              <Text style={styles.bankDetailValue}>0123456789</Text>
+            </View>
+            <View style={styles.bankDetailRow}>
+              <Text style={styles.bankDetailLabel}>Branch Code:</Text>
+              <Text style={styles.bankDetailValue}>051001</Text>
+            </View>
+            <View style={styles.bankDetailRow}>
+              <Text style={styles.bankDetailLabel}>Reference:</Text>
+              <Text style={[styles.bankDetailValue, { color: "#f5c242", fontWeight: "900" }]}>
+                {orderRefId.slice(-8).toUpperCase()}
+              </Text>
+            </View>
           </View>
         )}
 
-        {/* Description */}
-        <View style={styles.descriptionBox}>
-          <Text style={styles.descriptionText}>
-            Lorem ipsum dolor sit amet consectetur. Viverra at et lacus cursus sed in tempor mattis.
-          </Text>
-        </View>
+        {/* Action Buttons */}
+        <View style={styles.actionsContainer}>
+          <TouchableOpacity
+            style={styles.primaryActionBtn}
+            onPress={() => navigation.navigate("MyOrder")}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.primaryActionBtnText}>← Back to All Orders</Text>
+          </TouchableOpacity>
 
-        {/* Rate Product Section */}
-        <View style={styles.rateSection}>
-          <Text style={styles.rateLabel}>Rate Product:</Text>
-          <View style={styles.starsContainer}>
-            {[1, 2, 3, 4, 5].map((star) => (
-              <Text key={star} style={{ color: star <= 4 ? '#ae7718' : '#555', fontSize: 18 }}>★</Text>
-            ))}
-          </View>
+          <TouchableOpacity
+            style={styles.secondaryActionBtn}
+            onPress={() => navigation.navigate("Home")}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.secondaryActionBtnText}>Continue Shopping</Text>
+          </TouchableOpacity>
         </View>
-      </View>
-    </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#080a0b" },
+  container: { flex: 1, backgroundColor: "#0c0a08" },
+  scrollContent: { padding: 14, paddingBottom: 40 },
 
-  icon: {
-    width: 22,
-    height: 22,
-    marginRight: 10,
-    tintColor: '#8b8b8b',
-  },
+  loadingCenter: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { color: "#c99742", marginTop: 12, fontSize: 13, fontWeight: "600" },
 
-  input: {
+  emptyContainer: {
     flex: 1,
-    fontSize: 16,
-    color: '#f3f3f3',
-    paddingVertical: 6,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 32,
   },
-
-  searchBox: {
-    flexDirection: 'row',
-    backgroundColor: '#1c1c1c',
+  emptyIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(201, 151, 66, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    color: "#f5c242",
+    fontSize: 18,
+    fontWeight: "800",
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    color: "#888",
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 18,
+    marginBottom: 24,
+  },
+  primaryBtn: {
+    backgroundColor: "#c99742",
+    paddingVertical: 12,
+    paddingHorizontal: 28,
     borderRadius: 12,
-    marginBottom: 15,
-    paddingHorizontal: 12,
-    marginTop: 10,
-    width: "90%",
-    alignItems: 'center',
-    height: 45,
+  },
+  primaryBtnText: { color: "#000", fontWeight: "800", fontSize: 13 },
+
+  card: {
+    backgroundColor: "#15120e",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.22)",
+  },
+  refRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  refLabel: { color: "#777", fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
+  refNumber: { color: "#fff", fontSize: 16, fontWeight: "900", marginTop: 2 },
+  refDate: { color: "#888", fontSize: 11, marginTop: 3 },
+
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  statusBadgePaid: {
+    backgroundColor: "rgba(76, 217, 100, 0.12)",
+    borderColor: "rgba(76, 217, 100, 0.35)",
+  },
+  statusBadgePending: {
+    backgroundColor: "rgba(245, 194, 66, 0.12)",
+    borderColor: "rgba(245, 194, 66, 0.35)",
+  },
+  statusText: { fontSize: 10, fontWeight: "800", letterSpacing: 0.5 },
+  statusTextPaid: { color: "#4cd964" },
+  statusTextPending: { color: "#f5c242" },
+
+  divider: {
+    height: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    marginVertical: 12,
   },
 
-  orderCard: {
-    backgroundColor: '#1c1c1c',
-    marginHorizontal: 15,
-    marginVertical: 10,
-    borderRadius: 12,
-    padding: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 3,
+  deliveryStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(201, 151, 66, 0.05)",
+    padding: 10,
+    borderRadius: 10,
   },
+  deliveryStatusTitle: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  deliveryStatusSub: { color: "#888", fontSize: 10, marginTop: 2, lineHeight: 14 },
 
-  rowBetween: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  sectionHeading: {
+    color: "#c99742",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.5,
     marginBottom: 12,
   },
 
-  orderId: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: 'bold',
-  },
-
-  amount: {
-    color: '#fff',
-    marginTop: 6,
-    fontSize: 15,
-    fontWeight: '500',
-  },
-
-  date: {
-    color: '#aaa',
-    marginTop: 3,
-    fontSize: 13,
-  },
-
-  statusBadge: {
-    backgroundColor: '#ae7718',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-  },
-
-  statusText: {
-    color: '#000',
-    fontWeight: 'bold',
-    fontSize: 13,
-  },
-
-  viewAll: {
-    color: '#ae7718',
-    marginTop: 12,
-    fontWeight: '600',
-    fontSize: 15,
-  },
-
   productRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginVertical: 15,
-    flexWrap: 'wrap',
-  },
-
-  thumbWrapper: {
-    backgroundColor: '#080a0b',
-    padding: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.02)",
     borderRadius: 12,
+    padding: 10,
     marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.05)",
   },
+  productImg: { width: 50, height: 50, borderRadius: 8 },
+  productPlaceholder: {
+    width: 50,
+    height: 50,
+    borderRadius: 8,
+    backgroundColor: "rgba(201, 151, 66, 0.1)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  placeholderText: { color: "#c99742", fontWeight: "800", fontSize: 12 },
+  productTitle: { color: "#fff", fontSize: 13, fontWeight: "700", lineHeight: 17 },
+  productSpecs: { color: "#888", fontSize: 11, marginTop: 3 },
+  productSubtotal: { color: "#f5c242", fontSize: 12, fontWeight: "800", marginTop: 2 },
 
-  thumb: {
-    width: 60,
-    height: 100,
-    resizeMode: 'contain',
-  },
+  infoBlock: { marginBottom: 10 },
+  infoLabel: { color: "#777", fontSize: 10, fontWeight: "700", textTransform: "uppercase" },
+  infoValue: { color: "#fff", fontSize: 13, fontWeight: "600", marginTop: 2, lineHeight: 18 },
 
-  descriptionBox: {
-    marginBottom: 15,
+  costRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 4,
   },
+  costLabel: { color: "#888", fontSize: 12 },
+  costValue: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  costLabelDiscount: { color: "#4cd964", fontSize: 12 },
+  costValueDiscount: { color: "#4cd964", fontSize: 12, fontWeight: "700" },
 
-  descriptionText: {
-    color: '#ccc',
-    fontSize: 14,
-    lineHeight: 20,
+  costRowTotal: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 6,
   },
+  totalHeading: { color: "#fff", fontSize: 14, fontWeight: "900", letterSpacing: 0.5 },
+  totalAmount: { color: "#f5c242", fontSize: 18, fontWeight: "900" },
 
-  rateSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
+  paymentMethodRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.05)",
   },
+  paymentMethodLabel: { color: "#777", fontSize: 10, fontWeight: "700" },
+  paymentMethodValue: { color: "#ccc", fontSize: 11, fontWeight: "600" },
 
-  rateLabel: {
-    color: '#aaa',
-    marginRight: 10,
-    fontSize: 14,
+  bankCard: {
+    backgroundColor: "#161310",
+    borderColor: "rgba(201, 151, 66, 0.35)",
   },
+  bankHeader: { color: "#f5c242", fontSize: 13, fontWeight: "800", marginBottom: 4 },
+  bankSub: { color: "#888", fontSize: 11, marginBottom: 12, lineHeight: 15 },
+  bankDetailRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 3,
+  },
+  bankDetailLabel: { color: "#777", fontSize: 11 },
+  bankDetailValue: { color: "#fff", fontSize: 11, fontWeight: "700" },
 
-  starsContainer: {
-    flexDirection: 'row',
+  actionsContainer: { marginTop: 6, gap: 10 },
+  primaryActionBtn: {
+    backgroundColor: "#c99742",
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
   },
+  primaryActionBtnText: { color: "#000", fontWeight: "800", fontSize: 13 },
+  secondaryActionBtn: {
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  secondaryActionBtnText: { color: "#ccc", fontWeight: "700", fontSize: 13 },
 });
-

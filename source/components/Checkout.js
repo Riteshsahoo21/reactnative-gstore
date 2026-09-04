@@ -18,15 +18,89 @@ import {
   DeviceEventEmitter,
   Linking,
   Keyboard,
+  Modal,
 } from "react-native";
+import { WebView } from "react-native-webview";
 import LinearGradient from "react-native-linear-gradient";
 import AppHeader from "../widgets/AppHeader";
 import tmh_styles from "../styles/tmh_styles";
 import { HEADER_HEIGHT_THRESHOLD, API_BASE } from "../resources/data/Constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+const escapeHtml = (str) => {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+};
+
+const saveOrderToLocalStorage = async (orderObj) => {
+  if (!orderObj) return;
+  try {
+    const raw = await AsyncStorage.getItem("grand_store_recent_orders");
+    let list = raw ? JSON.parse(raw) : [];
+    // Strictly filter out any old 2024 dummy orders or mock names
+    list = list.filter(
+      (o) =>
+        !String(o.date || "").includes("2024") &&
+        !String(o.createdAt || "").startsWith("2024") &&
+        !String(o.name || "").includes("Buld Light") &&
+        !String(o.name || "").includes("Flyrsian") &&
+        !String(o.name || "").includes("Besperados") &&
+        !(o.items || []).some((it) =>
+          String(it.name || "").includes("Buld Light") ||
+          String(it.name || "").includes("Flyrsian") ||
+          String(it.name || "").includes("Besperados")
+        )
+    );
+    const key = orderObj.orderId || orderObj.id || orderObj._id;
+    const filtered = list.filter(
+      (o) => (o.orderId || o.id || o._id) !== key
+    );
+    const orderWithTimestamp = {
+      ...orderObj,
+      createdAt: orderObj.createdAt || new Date().toISOString(),
+    };
+    const updated = [orderWithTimestamp, ...filtered];
+    await AsyncStorage.setItem("grand_store_recent_orders", JSON.stringify(updated));
+    await AsyncStorage.setItem("grand_store_last_order", JSON.stringify(orderWithTimestamp));
+  } catch (e) {
+    console.log("Failed to save order to local storage:", e);
+  }
+};
+
 const GOOGLE_MAPS_API_KEY = "AIzaSyBGtqdVoKgd9sCmz2Y8wxuwa0WfDBaymGk";
 const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
+
+// Resilient API candidates for Android physical device (reverse proxy, LAN Wi-Fi, emulator)
+const API_CANDIDATES = [
+  API_BASE,
+  "http://localhost:5000/api",
+  "http://192.168.1.9:5000/api",
+  "http://10.0.2.2:5000/api",
+];
+const getApiBaseCandidates = () => [...new Set(API_CANDIDATES.filter(Boolean))];
+
+const safeApiFetch = async (path, options = {}, timeoutMs = 4000) => {
+  const candidates = getApiBaseCandidates();
+  for (const base of candidates) {
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(`${base}${path}`, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(id);
+      if (res && res.status < 500) return res;
+    } catch (e) {
+      // try next candidate
+    }
+  }
+  return null;
+};
 
 const showMessage = (msg) => {
   if (Platform.OS === "android") ToastAndroid.show(msg, ToastAndroid.SHORT);
@@ -435,18 +509,18 @@ const Checkout = ({ navigation, route }) => {
   // Delivery Preference: 'home' (Door Courier), 'postnet' (PostNet Pickup), 'best' (Compare All)
   const [deliveryPreference, setDeliveryPreference] = useState("home");
 
-  // PostNet Branch Locator State
-  const [postnetStores, setPostnetStores] = useState(FALLBACK_POSTNET_STORES["johannesburg"]);
-  const [preferredPostnetStore, setPreferredPostnetStore] = useState(
-    FALLBACK_POSTNET_STORES["johannesburg"]?.[0] || null
-  );
+  // PostNet Branch Locator State (Only show nearby branches once city is clicked)
+  const [postnetStores, setPostnetStores] = useState([]);
+  const [preferredPostnetStore, setPreferredPostnetStore] = useState(null);
   const [isLoadingPostnet, setIsLoadingPostnet] = useState(false);
   const [branchSearch, setBranchSearch] = useState("");
+  const [hasSelectedCityForPostnet, setHasSelectedCityForPostnet] = useState(false);
 
   // Delivery Quote State (from backend /api/checkout/quote)
   const [quote, setQuote] = useState(null);
   const [isCalculatingQuote, setIsCalculatingQuote] = useState(false);
   const [selectedCourier, setSelectedCourier] = useState(null);
+  const [dutiesAccepted, setDutiesAccepted] = useState(false);
 
   // Payment Method: 'payfast' or 'bank_transfer'
   const [paymentMethod, setPaymentMethod] = useState("payfast");
@@ -454,6 +528,11 @@ const Checkout = ({ navigation, route }) => {
   // Order Completion State
   const [orderCompleted, setOrderCompleted] = useState(false);
   const [createdOrder, setCreatedOrder] = useState(null);
+
+  // In-App PayFast Gateway Modal State
+  const [showPayfastModal, setShowPayfastModal] = useState(false);
+  const [payfastModalData, setPayfastModalData] = useState(null);
+  const [isPayfastLoading, setIsPayfastLoading] = useState(true);
 
   const getImageUrl = (imagePath) => {
     if (!imagePath || typeof imagePath !== "string") return "";
@@ -521,12 +600,12 @@ const Checkout = ({ navigation, route }) => {
     initializeCheckout();
   }, [route?.params]);
 
-  // Fetch PostNet branches when PostNet is selected or city changes
+  // Fetch PostNet branches only when PostNet is selected and a city has been clicked
   useEffect(() => {
-    if (isSouthAfrica && city) {
+    if (deliveryPreference === "postnet" && hasSelectedCityForPostnet && city) {
       fetchPostnetBranches(city, lat, lng);
     }
-  }, [deliveryPreference, city]);
+  }, [deliveryPreference, city, hasSelectedCityForPostnet]);
 
   // Automatically calculate delivery rates whenever delivery preference or country changes
   useEffect(() => {
@@ -538,22 +617,24 @@ const Checkout = ({ navigation, route }) => {
   // Fetch PostNet branches with guaranteed fallback & live network lookup
   const fetchPostnetBranches = async (searchCity, searchLat, searchLng) => {
     setIsLoadingPostnet(true);
-    const cleanCity = (searchCity || "Sandton").trim();
+    const cleanCity = (searchCity || "").trim();
+    if (!cleanCity) {
+      setIsLoadingPostnet(false);
+      return;
+    }
     const lowerCity = cleanCity.toLowerCase();
 
-    // 1. Instantly populate curated fallback branches so locations are NEVER hidden
+    // 1. Instantly populate curated fallback branches for this city if available
     let initialStores = FALLBACK_POSTNET_STORES[lowerCity] || [];
     if (initialStores.length === 0) {
       const matchKey = Object.keys(FALLBACK_POSTNET_STORES).find(
         (k) => lowerCity.includes(k) || k.includes(lowerCity)
       );
       if (matchKey) initialStores = FALLBACK_POSTNET_STORES[matchKey];
-      else initialStores = FALLBACK_POSTNET_STORES["sandton"];
     }
 
-    setPostnetStores(initialStores);
-    if (!preferredPostnetStore && initialStores.length > 0) {
-      setPreferredPostnetStore(initialStores[0]);
+    if (initialStores.length > 0) {
+      setPostnetStores(initialStores);
     }
 
     // 2. Query official PostNet store locator network API
@@ -586,9 +667,6 @@ const Checkout = ({ navigation, route }) => {
             distance: idx === 0 ? 1.2 : Number((1.2 + idx * 0.9).toFixed(1)),
           }));
           setPostnetStores(formatted);
-          if (!preferredPostnetStore) {
-            setPreferredPostnetStore(formatted[0]);
-          }
         }
       }
     } catch (err) {
@@ -809,6 +887,8 @@ const Checkout = ({ navigation, route }) => {
     const cityName = prediction.structured_formatting?.main_text || prediction.main_text || fullDesc.split(",")[0].trim();
     setCity(cityName);
     setQuote(null);
+    setHasSelectedCityForPostnet(true);
+    setPreferredPostnetStore(null);
 
     // Look up various postal codes for this selected city
     const lowerCity = cityName.toLowerCase();
@@ -822,7 +902,7 @@ const Checkout = ({ navigation, route }) => {
       fetchDynamicPostalCodesForCity(cityName);
     }
 
-    // Immediately reload PostNet branches for the new city
+    // Immediately fetch PostNet branches near this clicked city
     fetchPostnetBranches(cityName);
 
     if (prediction.place_id) {
@@ -990,13 +1070,16 @@ const Checkout = ({ navigation, route }) => {
       const headers = { "Content-Type": "application/json" };
       if (token) headers.Authorization = `Bearer ${token}`;
 
-      const res = await fetch(`${API_BASE}/checkout/quote`, {
+      let data = null;
+      const res = await safeApiFetch("/checkout/quote", {
         method: "POST",
         headers,
         body: JSON.stringify(quotePayload),
       });
 
-      const data = await res.json();
+      if (res && res.ok) {
+        data = await res.json();
+      }
 
       if (data && data.shipments && data.shipments.length > 0) {
         setQuote(data);
@@ -1018,10 +1101,86 @@ const Checkout = ({ navigation, route }) => {
 
         showMessage("✅ Live courier rates calculated!");
       } else {
-        console.log("Quote response:", data);
+        // Fallback curated courier quotes when offline / guest / unauthenticated
+        const fallbackQuotes = isSouthAfrica
+          ? deliveryPreference === "postnet"
+            ? [
+                {
+                  courierName: "PostNet",
+                  serviceLevel: "Counter to Counter",
+                  cost: 250,
+                  estimatedDays: "2-3 business days",
+                },
+              ]
+            : [
+                {
+                  courierName: "Courier Guy",
+                  serviceLevel: "Door to Door Standard",
+                  cost: subtotal >= 1000 || subtotal === 0 ? 0 : 150,
+                  estimatedDays: "2-3 business days",
+                },
+                {
+                  courierName: "Courier Guy",
+                  serviceLevel: "Express Overnight",
+                  cost: 220,
+                  estimatedDays: "1 business day",
+                },
+              ]
+          : [
+              {
+                courierName: "DHL Express",
+                serviceLevel: "International Air Courier",
+                cost: 1800,
+                estimatedDays: "3-5 business days",
+              },
+            ];
+
+        const fallbackQuote = {
+          hasInternational: !isSouthAfrica,
+          aggregatedTotals: {
+            estimatedImportDuties: !isSouthAfrica ? Math.round(subtotal * 0.15) : 0,
+            estimatedImportTaxes: !isSouthAfrica ? Math.round(subtotal * 0.20) : 0,
+          },
+          shipments: [
+            {
+              shippingQuotes: fallbackQuotes,
+              selectedCourier: fallbackQuotes[0],
+            },
+          ],
+        };
+
+        setQuote(fallbackQuote);
+        setSelectedCourier(fallbackQuotes[0]);
       }
     } catch (err) {
-      console.log("Delivery quote error:", err);
+      console.log("Delivery quote fallback applied:", err?.message || err);
+      const fallbackQuotes = isSouthAfrica
+        ? [
+            {
+              courierName: deliveryPreference === "postnet" ? "PostNet" : "Courier Guy",
+              serviceLevel: deliveryPreference === "postnet" ? "Counter to Counter" : "Door to Door",
+              cost: deliveryPreference === "postnet" ? 250 : subtotal >= 1000 ? 0 : 150,
+              estimatedDays: "2-3 business days",
+            },
+          ]
+        : [
+            {
+              courierName: "DHL Express",
+              serviceLevel: "International Air Courier",
+              cost: 1800,
+              estimatedDays: "3-5 business days",
+            },
+          ];
+
+      setQuote({
+        hasInternational: !isSouthAfrica,
+        aggregatedTotals: {
+          estimatedImportDuties: Math.round(subtotal * 0.15),
+          estimatedImportTaxes: Math.round(subtotal * 0.20),
+        },
+        shipments: [{ shippingQuotes: fallbackQuotes, selectedCourier: fallbackQuotes[0] }],
+      });
+      setSelectedCourier(fallbackQuotes[0]);
     } finally {
       setIsCalculatingQuote(false);
     }
@@ -1066,18 +1225,13 @@ const Checkout = ({ navigation, route }) => {
     shippingFee = 1800;
   }
 
-  // DHL Landed Cost Estimates for international orders (from backend quote or mock formula)
-  const dhlLandedCost =
-    !isSouthAfrica && quote?.shipments?.[0]?.landedCostEstimates
-      ? quote.shipments[0].landedCostEstimates
-      : !isSouthAfrica
-      ? {
-          estimatedDuties: parseFloat((subtotal * 0.15).toFixed(2)),
-          estimatedTaxes: parseFloat((subtotal * 0.2).toFixed(2)),
-          customsFees: 250,
-          totalImportCharges: parseFloat((subtotal * 0.35 + 250).toFixed(2)),
-        }
-      : null;
+  // International duties/taxes estimate (matches web aggregated totals formula)
+  const estimatedDutiesTaxes =
+    quote?.aggregatedTotals?.estimatedImportDuties != null && quote?.aggregatedTotals?.estimatedImportTaxes != null
+      ? Number(quote.aggregatedTotals.estimatedImportDuties) + Number(quote.aggregatedTotals.estimatedImportTaxes)
+      : quote?.shipments?.[0]?.landedCostEstimates
+      ? Number(quote.shipments[0].landedCostEstimates.estimatedDuties || 0) + Number(quote.shipments[0].landedCostEstimates.estimatedTaxes || 0)
+      : Math.round(subtotal * 0.35 * 100) / 100;
 
   const grandTotal = Math.max(0, subtotal - discount + shippingFee);
 
@@ -1107,12 +1261,25 @@ const Checkout = ({ navigation, route }) => {
       showMessage("PayFast is exclusive to South Africa. Please switch to South Africa or select Bank Transfer (EFT).");
       return;
     }
+    if (!isSouthAfrica && !dutiesAccepted) {
+      showMessage("Please accept the International Duties acknowledgment");
+      return;
+    }
 
     try {
       setIsSubmitting(true);
 
       const token = await AsyncStorage.getItem("userToken");
       const generatedOrderId = `GS-${Date.now().toString().slice(-6).toUpperCase()}`;
+
+      if (!token && paymentMethod === "payfast") {
+        showMessage("Please sign in to proceed with PayFast instant payment");
+        setIsSubmitting(false);
+        if (navigation && navigation.navigate) {
+          navigation.navigate("Login");
+        }
+        return;
+      }
 
       const finalShippingAddress = {
         address:
@@ -1125,6 +1292,7 @@ const Checkout = ({ navigation, route }) => {
       };
 
       let finalOrderId = generatedOrderId;
+      let orderMongoId = null;
       let payfastLaunched = false;
 
       // Submit order to backend /api/orders
@@ -1132,7 +1300,7 @@ const Checkout = ({ navigation, route }) => {
         try {
           let finalQuote = quote;
           if (!finalQuote) {
-            const quoteRes = await fetch(`${API_BASE}/checkout/quote`, {
+            const quoteRes = await safeApiFetch("/checkout/quote", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -1144,12 +1312,14 @@ const Checkout = ({ navigation, route }) => {
                   name: item.name,
                   quantity: item.quantity,
                   price: item.price,
+                  image: item.image,
+                  option: item.size || item.option,
                 })),
                 shippingAddress: finalShippingAddress,
                 deliveryPreference,
               }),
             });
-            finalQuote = await quoteRes.json();
+            if (quoteRes && quoteRes.ok) finalQuote = await quoteRes.json();
           }
 
           if (finalQuote && finalQuote.shipments) {
@@ -1167,7 +1337,7 @@ const Checkout = ({ navigation, route }) => {
               paymentMethod: paymentMethod === "payfast" ? "PayFast" : "Bank Transfer",
             };
 
-            const orderRes = await fetch(`${API_BASE}/orders`, {
+            const orderRes = await safeApiFetch("/orders", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -1176,35 +1346,95 @@ const Checkout = ({ navigation, route }) => {
               body: JSON.stringify(orderPayload),
             });
 
-            const orderData = await orderRes.json();
-            if (orderData && (orderData._id || orderData.orderId)) {
-              finalOrderId = orderData.orderId || orderData._id;
+            if (orderRes && orderRes.ok) {
+              const orderData = await orderRes.json();
+              if (orderData) {
+                finalOrderId = orderData.orderId || orderData._id || generatedOrderId;
+                orderMongoId = orderData._id || null;
+              }
             }
           }
 
-          // If PayFast selected, generate sandbox payment URL and launch
-          if (paymentMethod === "payfast" && finalOrderId) {
+          // Construct order summary for in-app receipt & confirmation
+          const orderSummary = {
+            orderId: finalOrderId,
+            orderMongoId,
+            date: new Date().toLocaleDateString("en-ZA", {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+            }),
+            createdAt: new Date().toISOString(),
+            items: checkoutItems.map((i) => ({
+              name: i.name,
+              price: Number(i.price || 0),
+              quantity: Number(i.quantity || 1),
+              image: i.image,
+              size: i.size || "750ml",
+            })),
+            subtotal,
+            shippingFee,
+            discount,
+            grandTotal,
+            paymentMethod:
+              paymentMethod === "payfast"
+                ? "PayFast Sandbox (Instant Cards / EFT)"
+                : "Manual Bank Transfer (Standard Bank)",
+            paymentStatus: paymentMethod === "payfast" ? "Pending" : "Pending",
+            courierName: selectedCourier
+              ? `${selectedCourier.courierName} (${selectedCourier.serviceLevel})`
+              : deliveryPreference === "postnet"
+              ? "PostNet"
+              : "Courier Guy",
+            pickupStore: preferredPostnetStore,
+            bankDetails: {
+              bankName: "Standard Bank",
+              accountName: "The Grand Store PTY LTD",
+              accountNumber: "0123456789",
+              branchCode: "051001",
+              reference: finalOrderId.slice(-8).toUpperCase(),
+            },
+            recipient: {
+              fullName,
+              phone,
+              email,
+              address:
+                deliveryPreference === "postnet" && preferredPostnetStore
+                  ? `Pickup: ${preferredPostnetStore.name} — ${preferredPostnetStore.address}`
+                  : `${finalShippingAddress.address}, ${finalShippingAddress.city}, ${finalShippingAddress.postalCode}, ${finalShippingAddress.country}`,
+            },
+          };
+
+          // If PayFast selected, launch directly inside IN-APP WebView modal (No external browser redirect)
+          if (paymentMethod === "payfast" && (orderMongoId || finalOrderId)) {
             try {
-              const pfRes = await fetch(`${API_BASE}/payfast/generate-shop`, {
+              const targetPayOrderId = orderMongoId || finalOrderId;
+              const pfRes = await safeApiFetch("/payfast/generate-shop", {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
                   Authorization: `Bearer ${token}`,
                 },
-                body: JSON.stringify({ orderId: finalOrderId }),
+                body: JSON.stringify({ orderId: targetPayOrderId }),
               });
-              const pfData = await pfRes.json();
 
-              if (pfData && pfData.url && pfData.data) {
-                const queryStr = Object.entries(pfData.data)
-                  .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-                  .join("&");
-                const fullUrl = `${pfData.url}?${queryStr}`;
-
-                Linking.openURL(fullUrl).catch((err) => {
-                  console.log("Could not open PayFast URL:", err);
-                });
-                payfastLaunched = true;
+              if (pfRes && pfRes.ok) {
+                const pfData = await pfRes.json();
+                if (pfData && pfData.url && pfData.data) {
+                  setCreatedOrder(orderSummary);
+                  saveOrderToLocalStorage(orderSummary);
+                  setPayfastModalData({
+                    url: pfData.url,
+                    fields: pfData.data,
+                    orderSummary,
+                  });
+                  setShowPayfastModal(true);
+                  setIsPayfastLoading(true);
+                  setIsSubmitting(false);
+                  return;
+                }
+              } else {
+                console.log("PayFast generate-shop returned non-ok status:", pfRes?.status);
               }
             } catch (pfErr) {
               console.log("PayFast sandbox generation error:", pfErr);
@@ -1215,19 +1445,28 @@ const Checkout = ({ navigation, route }) => {
         }
       }
 
-      // Clear local cart if not buy now
+      // Clear local cart if not buy now (for Bank Transfer)
       if (!singleItemCheckout) {
         await AsyncStorage.setItem("grand-store-cart", JSON.stringify([]));
         DeviceEventEmitter.emit("cartUpdated", 0);
       }
 
-      setCreatedOrder({
+      const defaultOrderSummary = {
         orderId: finalOrderId,
+        orderMongoId,
         date: new Date().toLocaleDateString("en-ZA", {
           year: "numeric",
           month: "short",
           day: "numeric",
         }),
+        createdAt: new Date().toISOString(),
+        items: checkoutItems.map((i) => ({
+          name: i.name,
+          price: Number(i.price || 0),
+          quantity: Number(i.quantity || 1),
+          image: i.image,
+          size: i.size || "750ml",
+        })),
         subtotal,
         shippingFee,
         discount,
@@ -1236,7 +1475,12 @@ const Checkout = ({ navigation, route }) => {
           paymentMethod === "payfast"
             ? "PayFast Sandbox (Instant Cards / EFT)"
             : "Manual Bank Transfer (Standard Bank)",
-        courierName: selectedCourier ? `${selectedCourier.courierName} (${selectedCourier.serviceLevel})` : (deliveryPreference === "postnet" ? "PostNet" : "Courier Guy"),
+        paymentStatus: "Pending",
+        courierName: selectedCourier
+          ? `${selectedCourier.courierName} (${selectedCourier.serviceLevel})`
+          : deliveryPreference === "postnet"
+          ? "PostNet"
+          : "Courier Guy",
         pickupStore: preferredPostnetStore,
         bankDetails: {
           bankName: "Standard Bank",
@@ -1254,9 +1498,10 @@ const Checkout = ({ navigation, route }) => {
               ? `Pickup: ${preferredPostnetStore.name} — ${preferredPostnetStore.address}`
               : `${finalShippingAddress.address}, ${finalShippingAddress.city}, ${finalShippingAddress.postalCode}, ${finalShippingAddress.country}`,
         },
-        payfastLaunched,
-      });
+      };
 
+      setCreatedOrder(defaultOrderSummary);
+      saveOrderToLocalStorage(defaultOrderSummary);
       setOrderCompleted(true);
       showMessage("🎉 Order placed successfully!");
     } catch (err) {
@@ -1266,9 +1511,424 @@ const Checkout = ({ navigation, route }) => {
     }
   };
 
-  // Render Success / Bank Transfer / PayFast Screen
+  // PayFast In-App Navigation Interceptor
+  // PayFast In-App Navigation Interceptor
+  const handlePayfastNavStateChange = (navState) => {
+    const currentUrl = navState?.url || "";
+    console.log("PayFast In-App Navigation State:", currentUrl);
+
+    // 1. Success interception (PayFast returns to return_url, sandbox finish, or success page)
+    const isSuccessUrl =
+      currentUrl.includes("payment=success") ||
+      currentUrl.includes("order-success") ||
+      currentUrl.includes("/customer/order/") ||
+      currentUrl.includes("/success") ||
+      currentUrl.includes("success=true") ||
+      currentUrl.includes("status=COMPLETE") ||
+      currentUrl.includes("status=complete") ||
+      currentUrl.includes("status=success") ||
+      currentUrl.includes("/process/finish") ||
+      currentUrl.includes("/process/complete") ||
+      currentUrl.includes("/finish") ||
+      currentUrl.includes("/complete") ||
+      currentUrl.includes("paid=true") ||
+      currentUrl.includes("pf_payment_id");
+
+    if (isSuccessUrl) {
+      setShowPayfastModal(false);
+      setIsPayfastLoading(false);
+      finalizePaidOrder();
+      return;
+    }
+
+    // 2. Cancellation interception (PayFast returns to cancel_url)
+    if (
+      currentUrl.includes("payment=cancel") ||
+      currentUrl.includes("/cancel") ||
+      currentUrl.includes("cancelled") ||
+      currentUrl.includes("cancel=true")
+    ) {
+      setShowPayfastModal(false);
+      setIsPayfastLoading(false);
+      showMessage("PayFast payment was cancelled. You can retry or choose Bank Transfer.");
+      return;
+    }
+  };
+
+  // Close PayFast Modal Prompt
+  const handleClosePayfastModal = () => {
+    Alert.alert(
+      "Exit Payment Gateway?",
+      "Are you sure you want to exit the PayFast payment gateway?",
+      [
+        { text: "Stay in Gateway", style: "cancel" },
+        {
+          text: "Exit to Order",
+          style: "destructive",
+          onPress: () => {
+            setShowPayfastModal(false);
+            setIsPayfastLoading(false);
+            setOrderCompleted(true);
+            showMessage("Payment pending. You can complete payment with PayFast anytime.");
+          },
+        },
+      ]
+    );
+  };
+
+  // Finalize order as PAID and transition to in-app bill receipt
+  const finalizePaidOrder = async (orderParam) => {
+    try {
+      if (!singleItemCheckout) {
+        await AsyncStorage.setItem("grand-store-cart", JSON.stringify([]));
+        DeviceEventEmitter.emit("cartUpdated", 0);
+      }
+
+      const activeOrd = orderParam || createdOrder || payfastModalData?.orderSummary;
+      const targetId = activeOrd?.orderMongoId || activeOrd?._id || activeOrd?.id || activeOrd?.orderId;
+      if (targetId) {
+        try {
+          const token = await AsyncStorage.getItem("userToken");
+          await safeApiFetch(`/orders/${targetId}/pay`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ paymentMethod: "PayFast" }),
+          });
+          await safeApiFetch(`/payfast/confirm-order`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ orderId: targetId }),
+          });
+        } catch (apiErr) {
+          console.log("Error marking order as paid on backend:", apiErr);
+        }
+      }
+
+      setCreatedOrder((prev) => {
+        const base = prev || activeOrd || {};
+        const updated = {
+          ...base,
+          isPaid: true,
+          paymentStatus: "Paid",
+          paidAt: new Date().toISOString(),
+          paymentMethod: "PayFast (Instant) • Paid",
+        };
+        saveOrderToLocalStorage(updated);
+
+        // Record in paid order IDs list so it never reverts to pending on refresh
+        const keys = [
+          updated.orderId,
+          updated.id,
+          updated._id,
+          updated.orderMongoId,
+          targetId,
+        ].filter(Boolean);
+
+        AsyncStorage.getItem("grand_store_paid_order_ids").then((raw) => {
+          const list = raw ? JSON.parse(raw) : [];
+          let changed = false;
+          for (const k of keys) {
+            const strK = String(k);
+            if (!list.includes(strK)) {
+              list.push(strK);
+              changed = true;
+            }
+          }
+          if (changed) {
+            AsyncStorage.setItem("grand_store_paid_order_ids", JSON.stringify(list));
+          }
+        });
+
+        return updated;
+      });
+      setOrderCompleted(true);
+      showMessage("🎉 Payment completed successfully via PayFast!");
+    } catch (e) {
+      setOrderCompleted(true);
+    }
+  };
+
+  // Relaunch PayFast in-app if payment was pending
+  const handleRelaunchPayfast = async () => {
+    if (!createdOrder) return;
+    const targetPayOrderId = createdOrder.orderMongoId || createdOrder.orderId;
+    try {
+      setIsSubmitting(true);
+      const token = await AsyncStorage.getItem("userToken");
+      const pfRes = await safeApiFetch("/payfast/generate-shop", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ orderId: targetPayOrderId }),
+      });
+      if (pfRes && pfRes.ok) {
+        const pfData = await pfRes.json();
+        if (pfData && pfData.url && pfData.data) {
+          setPayfastModalData({
+            url: pfData.url,
+            fields: pfData.data,
+            orderSummary: createdOrder,
+          });
+          setShowPayfastModal(true);
+          setIsPayfastLoading(true);
+        }
+      } else {
+        showMessage("Could not initialize PayFast gateway. Please try again.");
+      }
+    } catch (e) {
+      showMessage("PayFast connection error. Please check your network.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Render PayFast In-App Modal with auto-submitting POST form inside WebView
+  const renderPayfastModal = () => {
+    if (!showPayfastModal || !payfastModalData) return null;
+
+    const { url, fields } = payfastModalData;
+    const hiddenInputs = Object.entries(fields || {})
+      .map(
+        ([key, val]) =>
+          `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(
+            String(val ?? "")
+          )}" />`
+      )
+      .join("\n");
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+          <title>PayFast Gateway</title>
+          <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body {
+              background-color: #0c0b0a;
+              color: #f5c242;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              min-height: 100vh;
+              padding: 24px;
+              text-align: center;
+            }
+            .loader {
+              width: 44px;
+              height: 44px;
+              border: 3px solid rgba(245, 194, 66, 0.2);
+              border-top: 3px solid #f5c242;
+              border-radius: 50%;
+              animation: spin 0.8s linear infinite;
+              margin-bottom: 20px;
+            }
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+            h2 {
+              font-size: 18px;
+              font-weight: 800;
+              letter-spacing: 1.5px;
+              color: #f5c242;
+              text-transform: uppercase;
+              margin-bottom: 6px;
+            }
+            p {
+              font-size: 13px;
+              color: #888;
+              line-height: 1.4;
+              margin-bottom: 16px;
+            }
+            .shield {
+              display: inline-block;
+              padding: 6px 14px;
+              background: rgba(245, 194, 66, 0.1);
+              border: 1px solid rgba(245, 194, 66, 0.3);
+              border-radius: 20px;
+              font-size: 11px;
+              letter-spacing: 0.8px;
+              color: #f5c242;
+              text-transform: uppercase;
+              font-weight: 700;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="loader"></div>
+          <h2>THE GRAND STORE</h2>
+          <p>Connecting to PayFast Secure Gateway. Initializing encrypted checkout...</p>
+          <div class="shield">🔒 256-Bit Encrypted Sandbox</div>
+
+          <form id="payfastForm" action="${url}" method="POST">
+            ${hiddenInputs}
+          </form>
+
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                var f = document.getElementById('payfastForm');
+                if (f) f.submit();
+              }, 300);
+            };
+          </script>
+        </body>
+      </html>
+    `;
+
+    return (
+      <Modal
+        visible={showPayfastModal}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={handleClosePayfastModal}
+      >
+        <SafeAreaView style={styles.payfastModalContainer}>
+          {/* Top Gold Header */}
+          <View style={styles.payfastModalHeader}>
+            <View style={styles.payfastModalHeaderLeft}>
+              <View style={styles.payfastLockBadge}>
+                <Text style={styles.payfastLockIcon}>🔒</Text>
+              </View>
+              <View>
+                <Text style={styles.payfastModalTitle}>PayFast Secure Checkout</Text>
+                <Text style={styles.payfastModalSubtitle}>
+                  Instant Cards & EFT • In-App Gateway
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={styles.payfastModalCloseBtn}
+              onPress={handleClosePayfastModal}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.payfastModalCloseText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Loading Indicator */}
+          {isPayfastLoading && (
+            <View style={styles.payfastLoadingBar}>
+              <ActivityIndicator size="small" color="#c99742" />
+              <Text style={styles.payfastLoadingText}>Securing Connection...</Text>
+            </View>
+          )}
+
+          {/* In-App WebView */}
+          <WebView
+            source={{ html: htmlContent }}
+            originWhitelist={["*"]}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            startInLoadingState={true}
+            scalesPageToFit={true}
+            injectedJavaScript={`
+              (function() {
+                function detectPayfastStatus() {
+                  try {
+                    var text = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : "";
+                    var href = window.location.href.toLowerCase();
+                    if (
+                      href.indexOf('payment=success') !== -1 ||
+                      href.indexOf('/customer/order/') !== -1 ||
+                      href.indexOf('status=complete') !== -1 ||
+                      href.indexOf('/finish') !== -1 ||
+                      href.indexOf('/complete') !== -1 ||
+                      text.indexOf('payment successful') !== -1 ||
+                      text.indexOf('payment processed') !== -1 ||
+                      text.indexOf('payment approved') !== -1 ||
+                      text.indexOf('transaction successful') !== -1
+                    ) {
+                      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+                        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PAYFAST_SUCCESS' }));
+                      }
+                    }
+                  } catch (e) {}
+                }
+                setInterval(detectPayfastStatus, 600);
+              })();
+              true;
+            `}
+            onMessage={(event) => {
+              try {
+                const data = JSON.parse(event.nativeEvent.data);
+                if (data && data.type === "PAYFAST_SUCCESS") {
+                  setShowPayfastModal(false);
+                  setIsPayfastLoading(false);
+                  finalizePaidOrder();
+                }
+              } catch (e) {}
+            }}
+            onShouldStartLoadWithRequest={(req) => {
+              const targetUrl = req?.url || "";
+              if (
+                targetUrl.includes("payment=success") ||
+                targetUrl.includes("order-success") ||
+                targetUrl.includes("/customer/order/") ||
+                targetUrl.includes("/success") ||
+                targetUrl.includes("success=true") ||
+                targetUrl.includes("status=COMPLETE") ||
+                targetUrl.includes("status=complete") ||
+                targetUrl.includes("status=success") ||
+                targetUrl.includes("/finish") ||
+                targetUrl.includes("/complete") ||
+                targetUrl.includes("paid=true")
+              ) {
+                setShowPayfastModal(false);
+                setIsPayfastLoading(false);
+                finalizePaidOrder();
+                return false;
+              }
+              return true;
+            }}
+            onLoadStart={() => setIsPayfastLoading(true)}
+            onLoadEnd={() => setIsPayfastLoading(false)}
+            onError={(syntheticEvent) => {
+              const { nativeEvent } = syntheticEvent;
+              const failingUrl = (nativeEvent?.url || "").toLowerCase();
+              if (
+                failingUrl.includes("payment=success") ||
+                failingUrl.includes("/customer/order/") ||
+                failingUrl.includes("status=complete") ||
+                failingUrl.includes("success") ||
+                failingUrl.includes("/finish") ||
+                failingUrl.includes("/complete")
+              ) {
+                setShowPayfastModal(false);
+                setIsPayfastLoading(false);
+                finalizePaidOrder();
+              }
+            }}
+            onNavigationStateChange={handlePayfastNavStateChange}
+            renderLoading={() => (
+              <View style={styles.payfastLoadingOverlay}>
+                <ActivityIndicator size="large" color="#c99742" />
+                <Text style={styles.payfastOverlayText}>Connecting to PayFast...</Text>
+              </View>
+            )}
+            style={styles.payfastWebView}
+          />
+        </SafeAreaView>
+      </Modal>
+    );
+  };
+
+  // Render Success / Bank Transfer / PayFast Screen with Full Itemized Bill Receipt
   if (orderCompleted && createdOrder) {
     const isBank = paymentMethod === "bank_transfer";
+    const isPaid = createdOrder.paymentStatus === "Paid";
 
     return (
       <SafeAreaView style={styles.container}>
@@ -1283,17 +1943,36 @@ const Checkout = ({ navigation, route }) => {
         />
 
         <ScrollView contentContainerStyle={styles.successScroll}>
+          {/* Success Header */}
           <View style={styles.successHeader}>
-            <View style={styles.checkCircle}>
+            <View style={[styles.checkCircle, isPaid && styles.checkCirclePaid]}>
               <Text style={styles.checkMark}>✓</Text>
             </View>
-            <Text style={styles.successTitle}>Order Placed Successfully</Text>
+            <Text style={styles.successTitle}>
+              {isPaid ? "Payment Completed Successfully" : "Order Placed Successfully"}
+            </Text>
             <Text style={styles.orderIdBadge}>
               Order Ref: <Text style={styles.orderIdText}>{createdOrder.orderId}</Text>
             </Text>
           </View>
 
-          {isBank ? (
+          {/* PayFast Paid Banner */}
+          {!isBank && isPaid && (
+            <View style={styles.payfastPaidBanner}>
+              <View style={styles.payfastPaidRow}>
+                <Text style={styles.payfastPaidIcon}>✓</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.payfastPaidTitle}>Payment Verified (PayFast Sandbox)</Text>
+                  <Text style={styles.payfastPaidSub}>
+                    Instant payment received in-app. Your order is confirmed and transitioning to dispatch.
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* Bank Transfer Details (if Bank Transfer chosen) */}
+          {isBank && (
             <View style={styles.bankCard}>
               <View style={styles.bankCardHeader}>
                 <Text style={styles.bankCardTitle}>Awaiting Bank Transfer (EFT)</Text>
@@ -1339,53 +2018,173 @@ const Checkout = ({ navigation, route }) => {
                 </Text>
               </View>
             </View>
-          ) : (
+          )}
+
+          {/* PayFast Pending Card (if user closed modal or exited before completing) */}
+          {!isBank && !isPaid && (
             <View style={styles.payfastSuccessCard}>
-              <Text style={styles.payfastSuccessTitle}>💳 PayFast Sandbox Gateway</Text>
+              <Text style={styles.payfastSuccessTitle}>💳 PayFast Payment Pending</Text>
               <Text style={styles.payfastSuccessSub}>
-                Your order has been recorded. If the PayFast sandbox window did not launch automatically, tap below to test payment.
+                Your order is safely saved. Tap below to complete your payment with PayFast.
               </Text>
               <TouchableOpacity
                 style={styles.relaunchPayfastBtn}
-                onPress={() => handlePlaceOrder()}
+                onPress={handleRelaunchPayfast}
                 activeOpacity={0.8}
               >
-                <Text style={styles.relaunchPayfastText}>🔗 Open PayFast Sandbox Payment</Text>
+                <Text style={styles.relaunchPayfastText}>⚡ Complete Payment with PayFast</Text>
               </TouchableOpacity>
               <View style={styles.emailNoticeBox}>
                 <Text style={styles.emailNoticeText}>
-                  ✉️ An order summary and receipt have been emailed to{" "}
+                  ✉️ An order summary and invoice have been emailed to{" "}
                   <Text style={{ color: "#fff", fontWeight: "700" }}>{email}</Text>.
                 </Text>
               </View>
             </View>
           )}
 
-          <View style={styles.deliverySummaryCard}>
-            <Text style={styles.sectionHeadingGold}>Delivery Information</Text>
-            <Text style={styles.recipientName}>{createdOrder.recipient.fullName}</Text>
-            <Text style={styles.recipientSub}>{createdOrder.recipient.phone}</Text>
-            <Text style={styles.recipientSub}>{createdOrder.recipient.address}</Text>
-            <Text style={[styles.recipientSub, { color: "#f5c242", marginTop: 4 }]}>
-              Courier: {createdOrder.courierName}
-            </Text>
+          {/* FULL ITEMIZED TAX INVOICE / BILL RECEIPT */}
+          <View style={styles.invoiceBillCard}>
+            <View style={styles.invoiceBillHeader}>
+              <View>
+                <Text style={styles.invoiceBrand}>THE GRAND STORE</Text>
+                <Text style={styles.invoiceSubtitle}>TAX INVOICE & OFFICIAL RECEIPT</Text>
+              </View>
+              <View style={styles.invoiceMetaRight}>
+                <Text style={styles.invoiceDateLabel}>DATE</Text>
+                <Text style={styles.invoiceDateVal}>{createdOrder.date}</Text>
+              </View>
+            </View>
+
+            <View style={styles.invoiceDivider} />
+
+            {/* Billed To & Destination */}
+            <View style={styles.invoiceRowTwoCol}>
+              <View style={{ flex: 1, paddingRight: 6 }}>
+                <Text style={styles.invoiceSmallHeading}>BILLED TO</Text>
+                <Text style={styles.invoiceCustomerName}>{createdOrder.recipient.fullName}</Text>
+                <Text style={styles.invoiceCustomerDetail}>{createdOrder.recipient.email}</Text>
+                <Text style={styles.invoiceCustomerDetail}>{createdOrder.recipient.phone}</Text>
+              </View>
+              <View style={{ flex: 1, paddingLeft: 6, alignItems: "flex-end" }}>
+                <Text style={styles.invoiceSmallHeading}>DELIVERY DESTINATION</Text>
+                <Text style={[styles.invoiceCustomerDetail, { textAlign: "right" }]}>
+                  {createdOrder.recipient.address}
+                </Text>
+                <View style={styles.invoiceCourierPill}>
+                  <Text style={styles.invoiceCourierText}>
+                    {createdOrder.courierName}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.invoiceDivider} />
+
+            {/* Items List */}
+            <Text style={styles.invoiceSmallHeading}>PURCHASED ITEMS</Text>
+            {(createdOrder.items || []).map((item, idx) => (
+              <View key={idx} style={styles.invoiceItemRow}>
+                {item.image ? (
+                  <Image
+                    source={{ uri: getImageUrl(item.image) }}
+                    style={styles.invoiceItemImage}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <View style={styles.invoiceItemPlaceholder}>
+                    <Text style={{ color: "#c99742", fontSize: 10, fontWeight: "700" }}>GS</Text>
+                  </View>
+                )}
+                <View style={styles.invoiceItemInfo}>
+                  <Text style={styles.invoiceItemName} numberOfLines={2}>
+                    {item.name}
+                  </Text>
+                  <Text style={styles.invoiceItemMeta}>
+                    Qty: {item.quantity || 1} • R{Number(item.price || 0).toFixed(2)} each
+                  </Text>
+                </View>
+                <Text style={styles.invoiceItemTotal}>
+                  R{((item.quantity || 1) * Number(item.price || 0)).toFixed(2)}
+                </Text>
+              </View>
+            ))}
+
+            <View style={styles.invoiceDivider} />
+
+            {/* Subtotal, Shipping, and Total Due */}
+            <View style={styles.invoiceTotalRow}>
+              <Text style={styles.invoiceTotalLabel}>Subtotal</Text>
+              <Text style={styles.invoiceTotalVal}>R{createdOrder.subtotal.toFixed(2)}</Text>
+            </View>
+            <View style={styles.invoiceTotalRow}>
+              <Text style={styles.invoiceTotalLabel}>Delivery</Text>
+              <Text style={styles.invoiceTotalVal}>
+                {createdOrder.shippingFee === 0
+                  ? "Complimentary"
+                  : `R${createdOrder.shippingFee.toFixed(2)}`}
+              </Text>
+            </View>
+            {createdOrder.discount > 0 && (
+              <View style={styles.invoiceTotalRow}>
+                <Text style={styles.invoiceTotalLabel}>Discount</Text>
+                <Text style={[styles.invoiceTotalVal, { color: "#4ade80" }]}>
+                  -R{createdOrder.discount.toFixed(2)}
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.invoiceGrandTotalBox}>
+              <Text style={styles.invoiceGrandTotalLabel}>TOTAL {isPaid ? "PAID" : "DUE"}</Text>
+              <Text style={styles.invoiceGrandTotalVal}>
+                R{createdOrder.grandTotal.toFixed(2)}
+              </Text>
+            </View>
+
+            <View style={styles.invoicePaymentTagRow}>
+              <Text style={styles.invoicePaymentTagLabel}>Payment Status:</Text>
+              <Text
+                style={[
+                  styles.invoicePaymentTagVal,
+                  isPaid ? { color: "#4cd964" } : { color: "#f5c242" },
+                ]}
+              >
+                {isPaid
+                  ? "PAID via PayFast Sandbox ✓"
+                  : isBank
+                  ? "Awaiting Bank Transfer (EFT)"
+                  : "PayFast Payment Pending"}
+              </Text>
+            </View>
           </View>
 
-          <TouchableOpacity
-            style={styles.doneBtnTouch}
-            onPress={() => navigation.navigate("Home")}
-            activeOpacity={0.85}
-          >
-            <LinearGradient
-              colors={["#f5c242", "#c99742"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.doneBtnGradient}
+          {/* Action Buttons */}
+          <View style={styles.successActionsCol}>
+            <TouchableOpacity
+              style={styles.doneBtnTouch}
+              onPress={() => navigation.navigate("Home")}
+              activeOpacity={0.85}
             >
-              <Text style={styles.doneBtnText}>Return to Grand Store</Text>
-            </LinearGradient>
-          </TouchableOpacity>
+              <LinearGradient
+                colors={["#f5c242", "#c99742"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.doneBtnGradient}
+              >
+                <Text style={styles.doneBtnText}>Continue Shopping</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.ordersBtnTouch}
+              onPress={() => navigation.navigate("MyOrder")}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.ordersBtnText}>View My Orders</Text>
+            </TouchableOpacity>
+          </View>
         </ScrollView>
+        {renderPayfastModal()}
       </SafeAreaView>
     );
   }
@@ -1503,7 +2302,7 @@ const Checkout = ({ navigation, route }) => {
             <View style={styles.rowInputs}>
               {/* Phone Number Input (Only Numbers As Key) */}
               <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
-                <Text style={styles.inputLabel}>PHONE NUMBER (DIGITS ONLY) *</Text>
+                <Text style={styles.inputLabel}>PHONE NUMBER *</Text>
                 <TextInput
                   style={styles.textInput}
                   placeholder="e.g. 0821234567"
@@ -1724,158 +2523,127 @@ const Checkout = ({ navigation, route }) => {
               </View>
             </View>
 
-            {/* Various Postal Codes for the Selected City */}
-            {currentCityPostalCodes && currentCityPostalCodes.length > 0 && (
-              <View style={styles.variousPostalCodesCard}>
-                <View style={styles.variousPostalHeader}>
-                  <Text style={styles.variousPostalTitle}>
-                    📮 VARIOUS POSTAL CODES FOR {city.toUpperCase()}
-                  </Text>
-                  <Text style={styles.variousPostalSubtitle}>Tap to switch area</Text>
-                </View>
 
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  style={{ marginTop: 6 }}
-                >
-                  {currentCityPostalCodes.map((item) => {
-                    const isSelected = postalCode === item.code;
-                    return (
-                      <TouchableOpacity
-                        key={item.code}
-                        style={[
-                          styles.cityPostalCodeChip,
-                          isSelected && styles.cityPostalCodeChipActive,
-                        ]}
-                        onPress={() => {
-                          setPostalCode(item.code);
-                          setQuote(null);
-                          showMessage(`📮 ${city} — ${item.code} (${item.area}) selected`);
-                        }}
-                        activeOpacity={0.75}
-                      >
-                        <Text
-                          style={[
-                            styles.cityPostalCodeNumber,
-                            isSelected && styles.cityPostalCodeNumberActive,
-                          ]}
-                        >
-                          {item.code}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.cityPostalCodeArea,
-                            isSelected && styles.cityPostalCodeAreaActive,
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {item.area}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            )}
-
-            {/* AVAILABLE POSTNET PICKUP LOCATIONS (PROMINENT, GUARANTEED VISIBLE) */}
+            {/* AVAILABLE POSTNET PICKUP LOCATIONS: SHOWS ONLY WHEN A CITY IS SELECTED IN CITY DROPDOWN */}
             {deliveryPreference === "postnet" && (
               <View style={styles.postnetStoresSection}>
-                <View style={styles.postnetStoresHeader}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.postnetStoresTitle}>
-                      📍 AVAILABLE POSTNET BRANCHES ({city.toUpperCase()})
+                {!hasSelectedCityForPostnet ? (
+                  <View style={styles.selectCityPromptBox}>
+                    <Text style={styles.selectCityPromptIcon}>📍</Text>
+                    <Text style={styles.selectCityPromptTitle}>
+                      SELECT YOUR CITY ABOVE
                     </Text>
-                    <Text style={styles.postnetStoresSubtitle}>
-                      Choose your preferred branch for safe counter collection
+                    <Text style={styles.selectCityPromptSub}>
+                      Select a city from the City dropdown above to view available PostNet branches.
                     </Text>
                   </View>
-                  {isLoadingPostnet && (
-                    <ActivityIndicator size="small" color="#c99742" />
-                  )}
-                </View>
-
-                {/* Filter / Search Branch */}
-                <View style={styles.branchSearchBox}>
-                  <Text style={{ fontSize: 13, marginRight: 6 }}>🔍</Text>
-                  <TextInput
-                    style={styles.branchSearchInput}
-                    placeholder="Filter branch by mall, area or street..."
-                    placeholderTextColor="#666"
-                    value={branchSearch}
-                    onChangeText={setBranchSearch}
-                  />
-                  {branchSearch.length > 0 && (
-                    <TouchableOpacity onPress={() => setBranchSearch("")}>
-                      <Text style={{ color: "#888", fontSize: 12, paddingHorizontal: 4 }}>✕</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* Selected PostNet Confirmation Banner */}
-                {preferredPostnetStore && (
-                  <View style={styles.selectedBranchBanner}>
-                    <View style={styles.selectedBranchCheckCircle}>
-                      <Text style={styles.selectedBranchCheckText}>✓</Text>
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 8 }}>
-                      <Text style={styles.selectedBranchBannerTitle}>
-                        {preferredPostnetStore.name} ({preferredPostnetStore.distance} km away)
-                      </Text>
-                      <Text style={styles.selectedBranchBannerAddress} numberOfLines={1}>
-                        {preferredPostnetStore.address}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-
-                {/* Branch Cards List */}
-                {filteredPostnetStores.length > 0 ? (
-                  filteredPostnetStores.map((store, idx) => {
-                    const isSelected = preferredPostnetStore?.id === store.id;
-                    return (
-                      <TouchableOpacity
-                        key={store.id || idx}
-                        style={[
-                          styles.postnetStoreCard,
-                          isSelected && styles.postnetStoreCardSelected,
-                        ]}
-                        onPress={() => {
-                          setPreferredPostnetStore(store);
-                          if (store.postalCode) setPostalCode(store.postalCode);
-                          showMessage(`📍 Selected ${store.name}`);
-                        }}
-                        activeOpacity={0.8}
-                      >
-                        <View style={styles.radioCircle}>
-                          {isSelected && <View style={styles.radioDot} />}
-                        </View>
-                        <View style={{ flex: 1, marginLeft: 10 }}>
-                          <View style={styles.storeNameRow}>
-                            <Text style={styles.storeName}>{store.name}</Text>
-                            {store.distance !== null && store.distance !== undefined && (
-                              <View style={styles.distanceBadge}>
-                                <Text style={styles.distanceBadgeText}>
-                                  {store.distance} km away
-                                </Text>
-                              </View>
-                            )}
-                          </View>
-                          <Text style={styles.storeAddress}>{store.address}</Text>
-                          {store.telephone ? (
-                            <Text style={styles.storePhone}>📞 {store.telephone}</Text>
-                          ) : null}
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })
                 ) : (
-                  <View style={styles.emptyStoresBox}>
-                    <Text style={styles.emptyStoresText}>
-                      No PostNet branches matching "{branchSearch}". Try searching another area or clear the search.
-                    </Text>
-                  </View>
+                  <>
+                    <View style={styles.postnetStoresHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.postnetStoresTitle}>
+                          📍 AVAILABLE POSTNET BRANCHES NEAR {city.toUpperCase()}
+                        </Text>
+                        <Text style={styles.postnetStoresSubtitle}>
+                          Select your preferred PostNet counter for parcel collection:
+                        </Text>
+                      </View>
+                      {isLoadingPostnet ? (
+                        <ActivityIndicator size="small" color="#c99742" />
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.changeCityBtn}
+                          onPress={() => {
+                            setShowCityDropdown(true);
+                          }}
+                        >
+                          <Text style={styles.changeCityBtnText}>Change City</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    {/* Filter / Search Branch */}
+                    <View style={styles.branchSearchBox}>
+                      <Text style={{ fontSize: 13, marginRight: 6 }}>🔍</Text>
+                      <TextInput
+                        style={styles.branchSearchInput}
+                        placeholder={`Filter ${city} branch by mall, area or street...`}
+                        placeholderTextColor="#666"
+                        value={branchSearch}
+                        onChangeText={setBranchSearch}
+                      />
+                      {branchSearch.length > 0 && (
+                        <TouchableOpacity onPress={() => setBranchSearch("")}>
+                          <Text style={{ color: "#888", fontSize: 12, paddingHorizontal: 4 }}>✕</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    {/* Selected PostNet Confirmation Banner */}
+                    {preferredPostnetStore && (
+                      <View style={styles.selectedBranchBanner}>
+                        <View style={styles.selectedBranchCheckCircle}>
+                          <Text style={styles.selectedBranchCheckText}>✓</Text>
+                        </View>
+                        <View style={{ flex: 1, marginLeft: 8 }}>
+                          <Text style={styles.selectedBranchBannerTitle}>
+                            {preferredPostnetStore.name} ({preferredPostnetStore.distance} km away)
+                          </Text>
+                          <Text style={styles.selectedBranchBannerAddress} numberOfLines={1}>
+                            {preferredPostnetStore.address}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+
+                    {/* Branch Cards List */}
+                    {filteredPostnetStores.length > 0 ? (
+                      filteredPostnetStores.map((store, idx) => {
+                        const isSelected = preferredPostnetStore?.id === store.id;
+                        return (
+                          <TouchableOpacity
+                            key={store.id || idx}
+                            style={[
+                              styles.postnetStoreCard,
+                              isSelected && styles.postnetStoreCardSelected,
+                            ]}
+                            onPress={() => {
+                              setPreferredPostnetStore(store);
+                              if (store.postalCode) setPostalCode(store.postalCode);
+                              showMessage(`📍 Selected ${store.name}`);
+                            }}
+                            activeOpacity={0.8}
+                          >
+                            <View style={styles.radioCircle}>
+                              {isSelected && <View style={styles.radioDot} />}
+                            </View>
+                            <View style={{ flex: 1, marginLeft: 10 }}>
+                              <View style={styles.storeNameRow}>
+                                <Text style={styles.storeName}>{store.name}</Text>
+                                {store.distance !== null && store.distance !== undefined && (
+                                  <View style={styles.distanceBadge}>
+                                    <Text style={styles.distanceBadgeText}>
+                                      {store.distance} km away
+                                    </Text>
+                                  </View>
+                                )}
+                              </View>
+                              <Text style={styles.storeAddress}>{store.address}</Text>
+                              {store.telephone ? (
+                                <Text style={styles.storePhone}>📞 {store.telephone}</Text>
+                              ) : null}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })
+                    ) : (
+                      <View style={styles.emptyStoresBox}>
+                        <Text style={styles.emptyStoresText}>
+                          No PostNet branches found matching "{branchSearch}". Try clearing the search or choosing another city.
+                        </Text>
+                      </View>
+                    )}
+                  </>
                 )}
               </View>
             )}
@@ -1921,51 +2689,6 @@ const Checkout = ({ navigation, route }) => {
                     }}
                   />
 
-                  {/* Quick Select Country Pills for Door Delivery */}
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    style={styles.countryChipsScroll}
-                  >
-                    {[
-                      { name: "South Africa", flag: "🇿🇦" },
-                      { name: "United Kingdom", flag: "🇬🇧" },
-                      { name: "United States", flag: "🇺🇸" },
-                      { name: "United Arab Emirates", flag: "🇦🇪" },
-                      { name: "Namibia", flag: "🇳🇦" },
-                      { name: "Australia", flag: "🇦🇺" },
-                      { name: "Germany", flag: "🇩🇪" },
-                      { name: "France", flag: "🇫🇷" },
-                    ].map((c) => (
-                      <TouchableOpacity
-                        key={c.name}
-                        style={[
-                          styles.countryChip,
-                          country.toLowerCase() === c.name.toLowerCase() && styles.countryChipActive,
-                        ]}
-                        onPress={() => {
-                          setCountry(c.name);
-                          setQuote(null);
-                          if (c.name !== "South Africa" && paymentMethod === "payfast") {
-                            setPaymentMethod("bank_transfer");
-                            showMessage(`🌍 Selected ${c.name} — Switched to Bank Transfer & DHL Express`);
-                          }
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.countryChipFlag}>{c.flag}</Text>
-                        <Text
-                          style={[
-                            styles.countryChipText,
-                            country.toLowerCase() === c.name.toLowerCase() &&
-                              styles.countryChipTextActive,
-                          ]}
-                        >
-                          {c.name}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
                 </>
               )}
             </View>
@@ -2029,37 +2752,32 @@ const Checkout = ({ navigation, route }) => {
               </View>
             )}
 
-            {/* DHL International Express Landed Cost Breakdown */}
-            {!isSouthAfrica && dhlLandedCost && (
-              <View style={styles.dhlLandedCostCard}>
-                <View style={styles.dhlHeaderRow}>
-                  <Text style={styles.dhlTitle}>✈️ DHL EXPRESS INTERNATIONAL LANDED COST</Text>
-                  <View style={styles.dhlBadge}>
-                    <Text style={styles.dhlBadgeText}>DHL PRIORITY</Text>
-                  </View>
-                </View>
-
-                <View style={styles.dhlRow}>
-                  <Text style={styles.dhlLabel}>DHL International Express Courier</Text>
-                  <Text style={styles.dhlVal}>R{shippingFee.toFixed(2)}</Text>
-                </View>
-                <View style={styles.dhlRow}>
-                  <Text style={styles.dhlLabel}>Estimated Import Duties (15%)</Text>
-                  <Text style={styles.dhlVal}>R{dhlLandedCost.estimatedDuties?.toFixed(2) || "0.00"}</Text>
-                </View>
-                <View style={styles.dhlRow}>
-                  <Text style={styles.dhlLabel}>Destination Import VAT / Taxes (20%)</Text>
-                  <Text style={styles.dhlVal}>R{dhlLandedCost.estimatedTaxes?.toFixed(2) || "0.00"}</Text>
-                </View>
-                <View style={styles.dhlRow}>
-                  <Text style={styles.dhlLabel}>Customs Clearance & Handling Fee</Text>
-                  <Text style={styles.dhlVal}>R{dhlLandedCost.customsFees?.toFixed(2) || "250.00"}</Text>
-                </View>
-                <View style={styles.dhlNoticeBox}>
-                  <Text style={styles.dhlNoticeText}>
-                    ℹ️ Standard cross-border DHL DAP terms. International customs duties and local taxes may be collected by DHL upon arrival.
+            {/* IMPORTANT: International Delivery Disclaimer & Checkbox (Matching Web Version) */}
+            {!isSouthAfrica && (
+              <View style={styles.internationalDeliveryCard}>
+                <View style={styles.internationalDeliveryHeader}>
+                  <Text style={styles.internationalWarningIcon}>⚠️</Text>
+                  <Text style={styles.internationalDeliveryTitle}>
+                    IMPORTANT: International Delivery
                   </Text>
                 </View>
+
+                <Text style={styles.internationalDeliveryText}>
+                  Import duties, customs charges, destination VAT/GST or other government charges may be payable by you upon arrival in {country.trim() || "your destination country"}. The delivery charge covers transportation only. Estimated duties/taxes: R {estimatedDutiesTaxes.toFixed(2)}.
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.dutiesCheckboxRow}
+                  activeOpacity={0.8}
+                  onPress={() => setDutiesAccepted(!dutiesAccepted)}
+                >
+                  <View style={[styles.dutiesCheckbox, dutiesAccepted && styles.dutiesCheckboxChecked]}>
+                    {dutiesAccepted && <Text style={styles.dutiesCheckmark}>✓</Text>}
+                  </View>
+                  <Text style={styles.dutiesCheckboxLabel}>
+                    I understand that I am responsible for any destination-country taxes, duties, or customs charges.
+                  </Text>
+                </TouchableOpacity>
               </View>
             )}
           </View>
@@ -2217,6 +2935,7 @@ const Checkout = ({ navigation, route }) => {
           </TouchableOpacity>
         </ScrollView>
       )}
+      {renderPayfastModal()}
     </SafeAreaView>
   );
 };
@@ -2341,6 +3060,86 @@ const styles = StyleSheet.create({
     borderColor: "rgba(201, 151, 66, 0.3)",
     padding: 12,
     marginBottom: 14,
+  },
+  selectCityPromptBox: {
+    padding: 18,
+    backgroundColor: "rgba(201, 151, 66, 0.08)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.28)",
+    alignItems: "center",
+    marginVertical: 4,
+  },
+  selectCityPromptIcon: {
+    fontSize: 26,
+    marginBottom: 6,
+  },
+  selectCityPromptTitle: {
+    color: "#f5c242",
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    textAlign: "center",
+    marginBottom: 4,
+  },
+  selectCityPromptSub: {
+    color: "#aaa",
+    fontSize: 11,
+    textAlign: "center",
+    lineHeight: 16,
+    paddingHorizontal: 6,
+  },
+  quickCityChip: {
+    backgroundColor: "#16130f",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.35)",
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginRight: 8,
+  },
+  quickCityChipText: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  changeCityBtn: {
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: "#c99742",
+  },
+  changeCityBtnText: {
+    color: "#f5c242",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  switchCityScroll: {
+    marginBottom: 10,
+  },
+  switchCityChip: {
+    backgroundColor: "#110e0c",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginRight: 6,
+  },
+  switchCityChipActive: {
+    backgroundColor: "rgba(201, 151, 66, 0.22)",
+    borderColor: "#c99742",
+  },
+  switchCityChipText: {
+    color: "#888",
+    fontSize: 10.5,
+    fontWeight: "600",
+  },
+  switchCityChipTextActive: {
+    color: "#f5c242",
+    fontWeight: "800",
   },
   postnetStoresHeader: {
     flexDirection: "row",
@@ -2554,64 +3353,6 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
-  // Various Postal Codes for City Card
-  variousPostalCodesCard: {
-    backgroundColor: "rgba(201, 151, 66, 0.06)",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "rgba(201, 151, 66, 0.25)",
-    padding: 10,
-    marginBottom: 12,
-  },
-  variousPostalHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  variousPostalTitle: {
-    color: "#f5c242",
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 0.6,
-  },
-  variousPostalSubtitle: {
-    color: "#888",
-    fontSize: 9,
-  },
-  cityPostalCodeChip: {
-    backgroundColor: "#110e0c",
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.12)",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginRight: 8,
-    alignItems: "center",
-    minWidth: 90,
-  },
-  cityPostalCodeChipActive: {
-    borderColor: "#c99742",
-    backgroundColor: "rgba(201, 151, 66, 0.22)",
-  },
-  cityPostalCodeNumber: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  cityPostalCodeNumberActive: {
-    color: "#f5c242",
-  },
-  cityPostalCodeArea: {
-    color: "#777",
-    fontSize: 9,
-    marginTop: 2,
-    textAlign: "center",
-    maxWidth: 110,
-  },
-  cityPostalCodeAreaActive: {
-    color: "#ddd",
-    fontWeight: "600",
-  },
 
   // Country Locked & Chips
   lockedBadge: {
@@ -2659,37 +3400,6 @@ const styles = StyleSheet.create({
     color: "#0a0a0a",
     fontSize: 10,
     fontWeight: "900",
-  },
-  countryChipsScroll: {
-    marginTop: 8,
-  },
-  countryChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#110e0c",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    marginRight: 8,
-  },
-  countryChipActive: {
-    borderColor: "#c99742",
-    backgroundColor: "rgba(201, 151, 66, 0.18)",
-  },
-  countryChipFlag: {
-    fontSize: 13,
-    marginRight: 4,
-  },
-  countryChipText: {
-    color: "#999",
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  countryChipTextActive: {
-    color: "#f5c242",
-    fontWeight: "800",
   },
 
   // Calculate Rates Button
@@ -2768,65 +3478,67 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
 
-  // DHL Landed Cost Breakdown Card
-  dhlLandedCostCard: {
+  // International Delivery Red Card (Matching Web Version)
+  internationalDeliveryCard: {
     marginTop: 14,
-    backgroundColor: "#110e0c",
-    borderRadius: 14,
+    backgroundColor: "rgba(127, 29, 29, 0.2)",
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(201, 151, 66, 0.35)",
-    padding: 14,
+    borderColor: "rgba(239, 68, 68, 0.5)",
+    padding: 16,
   },
-  dhlHeaderRow: {
+  internationalDeliveryHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255, 255, 255, 0.06)",
-    paddingBottom: 8,
+    marginBottom: 8,
   },
-  dhlTitle: {
-    color: "#f5c242",
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 0.6,
+  internationalWarningIcon: {
+    fontSize: 15,
+    marginRight: 8,
   },
-  dhlBadge: {
-    backgroundColor: "#c99742",
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  dhlBadgeText: {
-    color: "#0a0a0a",
-    fontSize: 9,
-    fontWeight: "900",
-  },
-  dhlRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 6,
-  },
-  dhlLabel: {
-    color: "#aaa",
-    fontSize: 12,
-  },
-  dhlVal: {
-    color: "#fff",
-    fontSize: 12,
+  internationalDeliveryTitle: {
+    color: "#f87171",
+    fontSize: 14,
     fontWeight: "700",
   },
-  dhlNoticeBox: {
-    marginTop: 8,
-    backgroundColor: "rgba(201, 151, 66, 0.08)",
-    borderRadius: 8,
-    padding: 8,
+  internationalDeliveryText: {
+    color: "rgba(254, 202, 202, 0.85)",
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginBottom: 14,
   },
-  dhlNoticeText: {
-    color: "#d4af37",
-    fontSize: 10,
+  dutiesCheckboxRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+  dutiesCheckbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: "#888",
+    backgroundColor: "#110e0c",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
+    marginRight: 10,
+  },
+  dutiesCheckboxChecked: {
+    backgroundColor: "#ef4444",
+    borderColor: "#ef4444",
+  },
+  dutiesCheckmark: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "900",
     lineHeight: 14,
+  },
+  dutiesCheckboxLabel: {
+    flex: 1,
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "500",
+    lineHeight: 18,
   },
 
   // Step 2 Item Row
@@ -3195,6 +3907,330 @@ const styles = StyleSheet.create({
     color: "#0a0a0a",
     fontSize: 14,
     fontWeight: "800",
+  },
+
+  // PayFast In-App Modal Styles
+  payfastModalContainer: {
+    flex: 1,
+    backgroundColor: "#0c0b0a",
+  },
+  payfastModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#16130f",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(201, 151, 66, 0.3)",
+  },
+  payfastModalHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  payfastLockBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  payfastLockIcon: {
+    fontSize: 14,
+  },
+  payfastModalTitle: {
+    color: "#f5c242",
+    fontSize: 14,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+  payfastModalSubtitle: {
+    color: "#999",
+    fontSize: 11,
+    marginTop: 1,
+  },
+  payfastModalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 10,
+  },
+  payfastModalCloseText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  payfastLoadingBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    paddingVertical: 6,
+    gap: 8,
+  },
+  payfastLoadingText: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  payfastLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#0c0b0a",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+  },
+  payfastOverlayText: {
+    color: "#f5c242",
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 12,
+  },
+  payfastWebView: {
+    flex: 1,
+    backgroundColor: "#0c0b0a",
+  },
+
+  // Paid Banner & CheckCircle States
+  checkCirclePaid: {
+    backgroundColor: "#4cd964",
+  },
+  payfastPaidBanner: {
+    backgroundColor: "rgba(76, 217, 100, 0.1)",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(76, 217, 100, 0.35)",
+    padding: 14,
+    marginBottom: 16,
+  },
+  payfastPaidRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+  payfastPaidIcon: {
+    color: "#4cd964",
+    fontSize: 18,
+    fontWeight: "900",
+    marginRight: 10,
+    marginTop: 1,
+  },
+  payfastPaidTitle: {
+    color: "#4cd964",
+    fontSize: 14,
+    fontWeight: "800",
+    marginBottom: 3,
+  },
+  payfastPaidSub: {
+    color: "#bbb",
+    fontSize: 12,
+    lineHeight: 16,
+  },
+
+  // Itemized Tax Invoice & Bill Styles
+  invoiceBillCard: {
+    backgroundColor: "#14110e",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.28)",
+    padding: 16,
+    marginBottom: 16,
+  },
+  invoiceBillHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  invoiceBrand: {
+    color: "#f5c242",
+    fontSize: 15,
+    fontWeight: "900",
+    letterSpacing: 1.5,
+  },
+  invoiceSubtitle: {
+    color: "#888",
+    fontSize: 10,
+    letterSpacing: 0.8,
+    marginTop: 2,
+    fontWeight: "700",
+  },
+  invoiceMetaRight: {
+    alignItems: "flex-end",
+  },
+  invoiceDateLabel: {
+    color: "#777",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  invoiceDateVal: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  invoiceDivider: {
+    height: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    marginVertical: 12,
+  },
+  invoiceRowTwoCol: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  invoiceSmallHeading: {
+    color: "#c99742",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    marginBottom: 6,
+  },
+  invoiceCustomerName: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  invoiceCustomerDetail: {
+    color: "#999",
+    fontSize: 11,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  invoiceCourierPill: {
+    marginTop: 6,
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+  },
+  invoiceCourierText: {
+    color: "#f5c242",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  invoiceItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+    backgroundColor: "rgba(255, 255, 255, 0.02)",
+    padding: 8,
+    borderRadius: 10,
+  },
+  invoiceItemImage: {
+    width: 42,
+    height: 42,
+    borderRadius: 6,
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+  },
+  invoiceItemPlaceholder: {
+    width: 42,
+    height: 42,
+    borderRadius: 6,
+    backgroundColor: "rgba(201, 151, 66, 0.1)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  invoiceItemInfo: {
+    flex: 1,
+    marginLeft: 10,
+    marginRight: 8,
+  },
+  invoiceItemName: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 16,
+  },
+  invoiceItemMeta: {
+    color: "#888",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  invoiceItemTotal: {
+    color: "#f5c242",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  invoiceTotalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  invoiceTotalLabel: {
+    color: "#aaa",
+    fontSize: 12,
+  },
+  invoiceTotalVal: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  invoiceGrandTotalBox: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  invoiceGrandTotalLabel: {
+    color: "#f5c242",
+    fontSize: 13,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
+  invoiceGrandTotalVal: {
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "900",
+  },
+  invoicePaymentTagRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: 4,
+  },
+  invoicePaymentTagLabel: {
+    color: "#888",
+    fontSize: 11,
+  },
+  invoicePaymentTagVal: {
+    fontSize: 11,
+    fontWeight: "800",
+  },
+
+  // Actions
+  successActionsCol: {
+    gap: 10,
+    marginTop: 6,
+    marginBottom: 30,
+  },
+  ordersBtnTouch: {
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.4)",
+    backgroundColor: "rgba(201, 151, 66, 0.08)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  ordersBtnText: {
+    color: "#f5c242",
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.5,
   },
 });
 

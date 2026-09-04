@@ -77,3 +77,4 @@ Gemfile.lock
 
 # Temporary files
 *.log
+screen_*.png

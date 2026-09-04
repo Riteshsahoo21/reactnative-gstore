@@ -35,7 +35,7 @@ const DEFAULT_CATEGORIES = [
   { id: 9, name: "Scotch", slug: "scotch" },
 ];
 
-const Categories = ({ navigation }) => {
+const Categories = ({ navigation, onBack }) => {
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -97,7 +97,7 @@ const Categories = ({ navigation }) => {
         backIconColor="black"
         logoImage={null}
         navigation={navigation}
-        onBack={() => navigation.navigate("Home")}
+        onBack={onBack || (() => navigation.navigate("Home"))}
       />
       <SearchBar query={searchQuery} setQuery={setSearchQuery} placeholder="Search categories..." />
 

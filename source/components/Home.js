@@ -54,6 +54,8 @@ import Colors from "../resources/colors/Colors";
 import Wishlist from "./Wishlist";
 import Offers from "./Offers";
 import Shop from "./Shop";
+import EventsHub from "./events/EventsHub";
+import CustomerDashboard from "./CustomerDashboard";
 import { API_BASE } from "../resources/data/Constants";
 
 
@@ -244,7 +246,15 @@ const HeaderWishlistIcon = React.memo(({ navigation }) => {
 
 const Home = ({ navigation, route }) => {
   const [userName, setUserName] = useState(null);
-  const [navigationIndex, setNavigationIndex] = useState(0);
+  const [navigationIndex, setNavigationIndex] = useState(
+    typeof route?.params?.tabIndex === "number" ? route.params.tabIndex : 0
+  );
+
+  useEffect(() => {
+    if (typeof route?.params?.tabIndex === "number") {
+      setNavigationIndex(route.params.tabIndex);
+    }
+  }, [route?.params?.tabIndex]);
   const [openDrawer, setOpenDrawer] = useState(false);
   const [confirmationVisibility, setConfirmationVisibility] = useState(false);
   const [confirmationMessage, setConfirmationMessage] = useState("Are you sure?");
@@ -257,10 +267,10 @@ const Home = ({ navigation, route }) => {
   const helpSheetRef = useRef();
 
   // Dynamic sizes
-  const headerHeight = height * 0.09;
-  const footerHeight = height * 0.075;
-  const bottomMenuIconSize = height * 0.035;
-  const bottomMenuIconSizeSelected = height * 0.04;
+  const headerHeight = Platform.OS === "android" ? 68 : 72;
+  const footerHeight = Platform.OS === "android" ? 70 : 76;
+  const bottomMenuIconSize = 28;
+  const bottomMenuIconSizeSelected = 32;
   const showMessage = (msg) => {
   if (Platform.OS === "android") ToastAndroid.show(msg, ToastAndroid.SHORT);
   else Alert.alert("", msg);
@@ -320,10 +330,14 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
   useEffect(() => {
     fetchUserName();
     const backAction = () => {
-      if (navigation.state?.routeName === "Home") {
-        BackHandler.exitApp();
-      } else {
+      if (navigationIndex !== 0) {
+        setNavigationIndex(0);
+        return true;
+      }
+      if (navigation.canGoBack && navigation.canGoBack()) {
         navigation.goBack();
+      } else {
+        BackHandler.exitApp();
       }
       return true;
     };
@@ -332,7 +346,7 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
       backAction
     );
     return () => backHandler.remove();
-  }, []);
+  }, [navigation, navigationIndex]);
 
   const fetchUserName = async () => {
     try {
@@ -344,7 +358,13 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
   };
 
   useEffect(() => {
-    if (route?.params?.showPopup) setShowPopup(true);
+    AsyncStorage.getItem("isAgeVerified").then((val) => {
+      if (val !== "true" && route?.params?.showPopup) {
+        setShowPopup(true);
+      }
+    }).catch(() => {
+      if (route?.params?.showPopup) setShowPopup(true);
+    });
   }, [route?.params]);
 
   const renderHomeScreenHeader = () => (
@@ -376,20 +396,20 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
   );
 
   const homeScreenMemo = useMemo(() => <HomeScreen navigation={navigation} />, [navigation]);
-  const whiskyScreenMemo = useMemo(() => <WhiskyBrands navigation={navigation} />, [navigation]);
-  const categoriesScreenMemo = useMemo(() => <RegisterPatients navigation={navigation} />, [navigation]);
-  const searchScreenMemo = useMemo(() => <Search navigation={navigation} />, [navigation]);
+  const shopScreenMemo = useMemo(() => <Shop navigation={navigation} onBack={() => setNavigationIndex(0)} />, [navigation]);
+  const categoriesScreenMemo = useMemo(() => <RegisterPatients navigation={navigation} onBack={() => setNavigationIndex(0)} />, [navigation]);
+  const customerDashboardMemo = useMemo(() => <CustomerDashboard navigation={navigation} onBack={() => setNavigationIndex(0)} />, [navigation]);
 
   const renderScreen = () => {
     switch (navigationIndex) {
       case 0:
         return homeScreenMemo;
       case 1:
-        return whiskyScreenMemo;
+        return shopScreenMemo;
       case 2:
         return categoriesScreenMemo;
       case 3:
-        return searchScreenMemo;
+        return customerDashboardMemo;
       default:
         return null;
     }
@@ -399,45 +419,42 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
     <SafeAreaView style={styles.safeArea}>
       {navigationIndex === 0 && renderHomeScreenHeader()}
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{
-          paddingBottom: footerHeight * 1.6,
-          minHeight: height - headerHeight - footerHeight,
-        }}
-      >
+      <View style={{ flex: 1 }}>
         {renderScreen()}
-      </ScrollView>
+      </View>
 
       {/* Footer Tabs */}
       <View style={[styles.footer, { height: footerHeight }]}>
         {[
-          { id: 0, icon: HOME_ICON, selected: HOME_ICON_SELECTED },
-          { id: 1, icon: FILLER_ICON, selected: FILLER_ICON_SELECTED },
-          { id: 2, icon: EVENT_ICON, selected: EVENT_ICON_SELECTED },
-          { id: 3, icon: IMAGES_ICON, selected: IMAGES_ICON_SELECTED },
-        ].map((tab) => (
-          <TouchableOpacity
-            key={tab.id}
-            style={styles.tab}
-            onPress={() => setNavigationIndex(tab.id)}
-          >
-            <Image
-              source={navigationIndex === tab.id ? tab.selected : tab.icon}
-              style={{
-                width:
-                  navigationIndex === tab.id
-                    ? bottomMenuIconSizeSelected
-                    : bottomMenuIconSize,
-                height:
-                  navigationIndex === tab.id
-                    ? bottomMenuIconSizeSelected
-                    : bottomMenuIconSize,
-              }}
-              resizeMode="contain"
-            />
-          </TouchableOpacity>
-        ))}
+          { id: 0, label: "Home", icon: HOME_ICON, selected: HOME_ICON_SELECTED },
+          { id: 1, label: "Shop", icon: require("../resources/images/store.png"), selected: require("../resources/images/store.png"), isTintable: true },
+          { id: 2, label: "Categories", icon: FILLER_ICON, selected: FILLER_ICON_SELECTED },
+          { id: 3, label: "Dashboard", icon: require("../resources/images/group.png"), selected: require("../resources/images/group.png"), isTintable: true },
+        ].map((tab) => {
+          const isSelected = navigationIndex === tab.id;
+          return (
+            <TouchableOpacity
+              key={tab.id}
+              style={styles.tab}
+              onPress={() => setNavigationIndex(tab.id)}
+              activeOpacity={0.75}
+            >
+              <Image
+                source={isSelected ? tab.selected : tab.icon}
+                style={[
+                  {
+                    width: isSelected ? bottomMenuIconSizeSelected : bottomMenuIconSize,
+                    height: isSelected ? bottomMenuIconSizeSelected : bottomMenuIconSize,
+                  },
+                  tab.isTintable && {
+                    tintColor: isSelected ? "#f5c242" : "#777777",
+                  },
+                ]}
+                resizeMode="contain"
+              />
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {/* Drawer */}
@@ -474,12 +491,17 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
           <View style={styles.drawerTabs}>
             {[
               { label: "Home", icon: HOME_ICON, onPress: () => setNavigationIndex(0) },
-              { label: "Shop", icon: require("../resources/images/store.png"), onPress: () => navigation.navigate(Shop) },
-              { label: "Wine", icon: FILLER_ICON, onPress: () => setNavigationIndex(1) },
-              { label: "Offer", icon: require("../resources/images/offer.png"), onPress: () => navigation.navigate(Offers) },
-              { label: "Contact", icon: require("../resources/images/phone.png"), onPress: () => navigation.navigate("ContactUs") },
+              { label: "Shop", icon: require("../resources/images/store.png"), onPress: () => setNavigationIndex(1) },
+              { label: "Categories", icon: FILLER_ICON, onPress: () => setNavigationIndex(2) },
+              { label: "Customer Dashboard", icon: require("../resources/images/group.png"), onPress: () => setNavigationIndex(3) },
+              { label: "Live Auctions 🏛️", icon: require("../resources/images/event.png"), onPress: () => navigation.navigate("AuctionsHub") },
+              { label: "My Bids & Won Lots 🏆", icon: require("../resources/images/Order.png"), onPress: () => navigation.navigate("MyBids") },
+              { label: "Events & Tastings 🎟️", icon: EVENT_ICON, onPress: () => navigation.navigate("EventsHub") },
+              { label: "My Passes 🎟️", icon: require("../resources/images/event.png"), onPress: () => navigation.navigate("EventTicketPass") },
+              { label: "Offers", icon: require("../resources/images/offer.png"), onPress: () => navigation.navigate(Offers) },
+              { label: "My Orders", icon: require("../resources/images/Order.png"), onPress: () => navigation.navigate("MyOrders") },
+              { label: "Contact Us", icon: require("../resources/images/phone.png"), onPress: () => navigation.navigate("ContactUs") },
               { label: "About Us", icon: require("../resources/images/group.png"), onPress: () => navigation.navigate("AboutUs") },
-              { label: "My Order", icon: require("../resources/images/Order.png"), onPress: () => navigation.navigate("MyOrders") },
               { label: "Logout", icon: require("../resources/images/logout_icon.png"), onPress: handleLogout },
             ].map((item, i) => (
               <TouchableOpacity
@@ -528,7 +550,10 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
             <View style={styles.buttonContainer}>
               <TouchableOpacity
                 style={[styles.button, styles.yesButton]}
-                onPress={() => setShowPopup(false)}
+                onPress={() => {
+                  setShowPopup(false);
+                  AsyncStorage.setItem("isAgeVerified", "true").catch(() => {});
+                }}
               >
                 <Text style={styles.buttonText}>Yes</Text>
               </TouchableOpacity>
@@ -560,12 +585,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#0d0d0d",
-    paddingHorizontal: width * 0.03,
+    paddingHorizontal: 16,
+    justifyContent: "space-between",
   },
   sideContainer: { flexDirection: "row", alignItems: "center" },
-  centerContainer: { flex: 1, alignItems: "center" },
-  headerLogo: { width: width * 0.45, resizeMode: "contain" },
-  headerIcon: { width: 26, height: 26, resizeMode: "contain", marginHorizontal: 5 },
+  centerContainer: { flex: 1, alignItems: "center", justifyContent: "center" },
+  headerLogo: { width: width * 0.48, height: 44, resizeMode: "contain" },
+  headerIcon: { width: 28, height: 28, resizeMode: "contain", marginHorizontal: 6 },
+  menuBtn: { padding: 4 },
   wishlistHeaderTouch: {
     position: "relative",
     padding: 3,
@@ -592,12 +619,15 @@ const styles = StyleSheet.create({
   },
   footer: {
     width: "100%",
-    backgroundColor: "#1a1a1a",
+    backgroundColor: "#141414",
     flexDirection: "row",
     justifyContent: "space-around",
     alignItems: "center",
     position: "absolute",
     bottom: 0,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.08)",
+    paddingBottom: Platform.OS === "android" ? 4 : 8,
   },
   tab: { flex: 1, alignItems: "center", justifyContent: "center" },
   drawerModal: { margin: 0 },
