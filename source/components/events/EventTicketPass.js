@@ -282,9 +282,15 @@ export default function EventTicketPass({ route, navigation }) {
         quantity: b.quantity,
       });
 
-      const qrImageUri =
-        b.qrCodeData ||
-        `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(qrPayload)}`;
+      // Generate clean public web image URL for QR code (never dump base64 strings into text)
+      const qrWebLink = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(b.ticketId || qrPayload)}`;
+
+      const targetId = b._id || b.ticketId;
+      let host = typeof getActiveServerHost === "function" ? getActiveServerHost() : "https://api.grandstoreglobal.com";
+      if (!host || host.includes("127.0.0.1") || host.includes("localhost")) {
+        host = "https://api.grandstoreglobal.com";
+      }
+      const pdfPassUrl = `${host}/api/events/bookings/${targetId}/ticket-pdf`;
 
       const shareMessage =
         `🏆 THE GRAND STORE • VIP CELLAR PASS\n\n` +
@@ -294,7 +300,8 @@ export default function EventTicketPass({ route, navigation }) {
         `Ticket ID: ${b.ticketId}\n` +
         `Tier: ${b.ticketType} (${b.quantity} ${b.quantity === 1 ? "Guest" : "Guests"})\n` +
         `Booking Ref: ${b.gsReference || "N/A"}\n\n` +
-        `Official Scannable Pass Verification:\n${qrImageUri}\n\n` +
+        `🎟️ Scannable QR Pass:\n${qrWebLink}\n\n` +
+        `📄 Printable VIP Pass (PDF):\n${pdfPassUrl}\n\n` +
         `Present this pass at reception for VIP cellar admission.`;
 
       await Share.share({
