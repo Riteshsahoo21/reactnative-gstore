@@ -25,6 +25,7 @@ import {
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import RNShare from "react-native-share";
 import AppHeader from "../../widgets/AppHeader";
 import BidderVerificationModal from "./BidderVerificationModal";
 import {
@@ -343,33 +344,128 @@ export default function AuctionLotDetails({ route, navigation }) {
     setShowCelebrationModal(false);
   }, [lot?._id, lotId]);
 
-  const handleDownloadCertificate = useCallback(() => {
-    if (!lot?._id) return;
+  const fetchCertificateBase64 = useCallback(async (targetId) => {
+    const candidates = getLotApiCandidates();
+    for (const base of candidates) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4500);
+        const cleanBase = base.replace(/\/$/, "");
+        const url = `${cleanBase}/auction/${targetId}/certificate?format=base64`;
+        const res = await fetch(url, { method: "GET", signal: controller.signal });
+        clearTimeout(timer);
+        if (res && res.ok) {
+          const json = await res.json();
+          if (json && json.pdfBase64) {
+            return json;
+          }
+        }
+      } catch (e) {}
+    }
+    return null;
+  }, []);
+
+  const handleDownloadCertificate = useCallback(async () => {
+    const targetId = lot?._id || lotId;
+    if (!targetId) return;
+
     setDownloadingCert(true);
-    const host = getActiveServerHost();
-    const downloadUrl = `${host}/api/auction/${lot._id}/certificate?download=1`;
-    Linking.openURL(downloadUrl).catch((err) => {
+    const safeLotNum = lot?.lotNumber || String(targetId).slice(-6).toUpperCase();
+    const filename = `TheGrandStore_Certificate_Lot_${safeLotNum}`;
+
+    try {
+      // 1. Fetch official high-res PDF as Base64 data URL via app's direct network stack
+      const certData = await fetchCertificateBase64(targetId);
+      const pdfDataUrl = certData?.pdfBase64;
+
+      if (pdfDataUrl) {
+        // 2. Open native system Share/Save dialog (allows Save to Downloads, Save to Device, Open in PDF Reader, Drive, WhatsApp, etc.)
+        await RNShare.open({
+          title: `Certificate of Acquisition - Lot #${safeLotNum}`,
+          subject: `Official Certificate of Acquisition • ${lot?.title || "Masterpiece"}`,
+          url: pdfDataUrl,
+          filename: filename,
+          type: "application/pdf",
+          useInternalStorage: true,
+          saveToFiles: true,
+          failOnCancel: false,
+        });
+        setDownloadingCert(false);
+        return;
+      }
+    } catch (shareErr) {
+      console.log("RNShare prompt dismissed or failed:", shareErr);
+    }
+
+    // 3. Fallback: If base64 sharing failed or wasn't supported, probe candidate hosts and open direct browser download URL
+    try {
+      const candidates = getLotApiCandidates();
+      let workingHost = "http://127.0.0.1:5000";
+      for (const base of candidates) {
+        try {
+          const host = base.replace(/\/api\/?$/, "");
+          const checkUrl = `${host}/api/auction/${targetId}/certificate?download=1`;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 2000);
+          const res = await fetch(checkUrl, { method: "HEAD", signal: controller.signal });
+          clearTimeout(timer);
+          if (res && res.status === 200) {
+            workingHost = host;
+            break;
+          }
+        } catch (e) {}
+      }
+      const downloadUrl = `${workingHost}/api/auction/${targetId}/certificate?download=1`;
+      await Linking.openURL(downloadUrl);
+    } catch (err) {
       console.warn("Could not open certificate URL:", err);
-      Alert.alert("Download Notice", "Opening certificate in browser...");
-    }).finally(() => {
-      setTimeout(() => setDownloadingCert(false), 2000);
-    });
-  }, [lot?._id]);
+      Alert.alert(
+        "Download Certificate",
+        "Could not open browser download. Please ensure you are connected to the network or share via the Share button."
+      );
+    } finally {
+      setDownloadingCert(false);
+    }
+  }, [lot, lotId, fetchCertificateBase64]);
 
   const handleShareCertificate = useCallback(async () => {
-    if (!lot) return;
-    const certUrl = `https://grandstoreglobal.com/auction/${lot._id}`;
-    const safeLotNum = lot.lotNumber || (lot._id && lot._id.slice(-6).toUpperCase()) || "GS-LOT";
+    const targetId = lot?._id || lotId;
+    if (!targetId) return;
+    const safeLotNum = lot?.lotNumber || String(targetId).slice(-6).toUpperCase();
+    const filename = `TheGrandStore_Certificate_Lot_${safeLotNum}`;
+
+    try {
+      const certData = await fetchCertificateBase64(targetId);
+      const pdfDataUrl = certData?.pdfBase64;
+      if (pdfDataUrl) {
+        await RNShare.open({
+          title: `Certificate of Acquisition - Lot #${safeLotNum}`,
+          subject: `Official Certificate of Acquisition • ${lot?.title || "Masterpiece"}`,
+          url: pdfDataUrl,
+          filename: filename,
+          type: "application/pdf",
+          message: `🏆 Official Certificate of Acquisition awarded for Lot #${safeLotNum}: ${lot?.title || "Masterpiece"}\n\nThe Grand Store Private Vault Provenance.`,
+          useInternalStorage: true,
+          failOnCancel: false,
+        });
+        return;
+      }
+    } catch (e) {
+      console.log("RNShare share error:", e);
+    }
+
+    // Standard Share fallback
+    const certUrl = `https://grandstoreglobal.com/auction/${targetId}`;
     try {
       await Share.share({
-        title: `The Grand Store Certificate of Acquisition - ${lot.title}`,
-        message: `🏆 Official Certificate of Acquisition awarded for Lot #${safeLotNum}: ${lot.title}\n\nVerify provenance:\n${certUrl}`,
+        title: `The Grand Store Certificate of Acquisition - ${lot?.title}`,
+        message: `🏆 Official Certificate of Acquisition awarded for Lot #${safeLotNum}: ${lot?.title}\n\nVerify provenance:\n${certUrl}`,
         url: certUrl,
       });
     } catch (e) {
       console.log("Error sharing certificate:", e);
     }
-  }, [lot]);
+  }, [lot, lotId, fetchCertificateBase64]);
 
   // 1-second precision anti-sniping clock ticker
   useEffect(() => {
