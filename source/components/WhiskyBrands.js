@@ -252,15 +252,17 @@ const WhiskyBrands = ({ navigation }) => {
       <AppHeader
         title={"Whisky Category"}
         isGradient={false}
-        backgroundColor={"#c99742"}
+        backgroundColor={"#0c0a08"}
+        statusBarColor={"#0c0a08"}
+        statusBarStyle={"light-content"}
         rightButtons={rightButtons}
         height={headerHeight}
-        titleStyle={tmh_styles.header_title_tmb}
-        isShowShadow={true}
+        titleStyle={{ color: "#FFFFFF", fontSize: 18, fontWeight: "700" }}
+        isShowShadow={false}
         navigation={navigation}
         isBack={true}
         backButtonStyle={{ width: 35, height: 25, alignItems: "center" }}
-        backIconColor={"black"}
+        backIconColor={"white"}
         logoImage={null}
       />
 

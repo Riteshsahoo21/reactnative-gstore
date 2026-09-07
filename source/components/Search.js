@@ -56,14 +56,16 @@ const Search = ({ navigation }) => {
     <View style={{ flex: 1, backgroundColor: "#0d0d0d" }}>
      <AppHeader title={"Search"} 
         isGradient={false} 
-        backgroundColor={"#c99742"} 
+        backgroundColor={"#0c0a08"} 
+        statusBarColor={"#0c0a08"}
+        statusBarStyle={"light-content"}
         rightButtons={rightButtons}
         height={headerHeight} 
-        titleStyle={tmh_styles.header_title_tmb} 
+        titleStyle={{ color: "#FFFFFF", fontSize: 18, fontWeight: "700" }} 
         isShowShadow={false} 
         navigation={navigation} 
         isBack={true}
-        backButtonStyle={{ width: 35, height: 25, alignItems: "center" }} backIconColor={"black"} logoImage={null}
+        backButtonStyle={{ width: 35, height: 25, alignItems: "center" }} backIconColor={"white"} logoImage={null}
         onBackPress={() => navigation.navigate("Home")} />
       <SearchBar query={query} setQuery={handleSearch} />
 

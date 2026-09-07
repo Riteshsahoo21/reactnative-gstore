@@ -223,7 +223,11 @@ export default function AuctionCheckout({ route, navigation }) {
   };
 
   const handleCopyReference = () => {
-    Clipboard.setString(paymentReference);
+    try {
+      if (Clipboard && typeof Clipboard.setString === "function") {
+        Clipboard.setString(paymentReference);
+      }
+    } catch (e) {}
     Alert.alert("Copied", `Reference ${paymentReference} copied to clipboard.`);
   };
 

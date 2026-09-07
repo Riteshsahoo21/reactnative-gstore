@@ -27,17 +27,19 @@ const ContactUs = ({navigation}) => {
   return (
     <ScrollView style={{ backgroundColor: "#1c1c1c" }}>
        <AppHeader
-           title="Contact Us"
-           isGradient={false}
-           backgroundColor="#c99742"
-           titleStyle={tmh_styles.header_title_tmb}
-           isShowShadow={true}
-           isBack={true}
-           backButtonStyle={{ width: 35, height: 25, alignItems: "center" }}
-           backIconColor="black"
-           logoImage={null}
-           navigation={navigation}
-               />
+            title="Contact Us"
+            isGradient={false}
+            backgroundColor="#0c0a08"
+            statusBarColor="#0c0a08"
+            statusBarStyle="light-content"
+            titleStyle={{ color: "#FFFFFF", fontSize: 18, fontWeight: "700" }}
+            isShowShadow={false}
+            isBack={true}
+            backButtonStyle={{ width: 35, height: 25, alignItems: "center" }}
+            backIconColor="white"
+            logoImage={null}
+            navigation={navigation}
+       />
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.container}>
           <Text style={styles.pageTitle}>Contact Us</Text>

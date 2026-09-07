@@ -254,6 +254,42 @@ const Home = ({ navigation, route }) => {
     typeof route?.params?.tabIndex === "number" ? route.params.tabIndex : 0
   );
 
+  const [authKey, setAuthKey] = useState(Date.now());
+
+  const refreshAuthStatus = useCallback(async () => {
+    try {
+      const storedName = await AsyncStorage.getItem("userName");
+      const storedUserInfo = await AsyncStorage.getItem("userInfo");
+      const user = storedUserInfo ? JSON.parse(storedUserInfo) : null;
+      setUserName(storedName || user?.name || null);
+      setUserRole(user?.role || null);
+      setAuthKey(Date.now());
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    refreshAuthStatus();
+
+    const subLogin = DeviceEventEmitter.addListener("userLoggedIn", (data) => {
+      console.log("[Home] userLoggedIn received, refreshing auth state...", data?.name);
+      setUserName(data?.name || null);
+      setUserRole(data?.role || null);
+      setAuthKey(Date.now());
+    });
+
+    const subLogout = DeviceEventEmitter.addListener("userLoggedOut", () => {
+      console.log("[Home] userLoggedOut received, resetting auth state...");
+      setUserName(null);
+      setUserRole(null);
+      setAuthKey(Date.now());
+    });
+
+    return () => {
+      subLogin.remove();
+      subLogout.remove();
+    };
+  }, [refreshAuthStatus]);
+
   useEffect(() => {
     if (typeof route?.params?.tabIndex === "number") {
       setNavigationIndex(route.params.tabIndex);
@@ -347,44 +383,51 @@ const handleLogout = async () => {
     const token = await AsyncStorage.getItem("userToken");
     const userInfo = await AsyncStorage.getItem("userInfo");
     const user = userInfo ? JSON.parse(userInfo) : null;
-    const uid = user?.id || user?.uid;
+    const uid = user?.id || user?.uid || user?._id;
 
-    if (!uid) {
-      showMessage("User ID not found.");
-      return;
+    if (token) {
+      try {
+        await fetch(`${API_BASE}/auth/logout`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ uid: uid || "" }),
+        });
+      } catch (apiErr) {
+        console.warn("Logout API notice:", apiErr?.message);
+      }
     }
 
-    // 🔹 Call Logout API
-    const response = await fetch(`${API_BASE}/customer-logout`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ uid }),
+    try {
+      const { GoogleSignin } = require("@react-native-google-signin/google-signin");
+      await GoogleSignin.signOut();
+    } catch (gErr) {}
+
+    await AsyncStorage.multiRemove([
+      "userToken",
+      "userInfo",
+      "userName",
+      "userEmail",
+      "userPhone",
+      "customerBankDetails",
+      "userOrders",
+      "wishlistItemIds",
+      "cartItems",
+    ]);
+
+    DeviceEventEmitter.emit("userLoggedOut");
+    setUserName(null);
+    setUserRole(null);
+    setOpenDrawer(false);
+    showMessage("Logout successful");
+
+    navigation.reset({
+      index: 0,
+      routes: [{ name: "LoginScreen" }],
     });
-
-    const data = await response.json();
-    console.log("Logout API Response:", data);
-
-    if (data.status === 1 || data.message?.includes("Logout successful")) {
-      // 🧹 Clear AsyncStorage
-      await AsyncStorage.clear(); // or use multiRemove([...]) if preferred
-await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
-
-      setUserName(null);
-      setOpenDrawer(false);
-      showMessage("Logout successful");
-
-      // 🚪 Navigate to Login
-      navigation.reset({
-        index: 0,
-        routes: [{ name: "LoginScreen" }],
-      });
-    } else {
-      showMessage("Logout failed. Please try again.");
-    }
   } catch (error) {
     console.error("Logout error:", error);
     showMessage("An error occurred while logging out.");
@@ -472,10 +515,29 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
     </View>
   );
 
-  const homeScreenMemo = useMemo(() => <HomeScreen navigation={navigation} />, [navigation]);
-  const shopScreenMemo = useMemo(() => <Shop navigation={navigation} onBack={() => setNavigationIndex(0)} />, [navigation]);
-  const categoriesScreenMemo = useMemo(() => <RegisterPatients navigation={navigation} onBack={() => setNavigationIndex(0)} />, [navigation]);
-  const customerDashboardMemo = useMemo(() => <CustomerDashboard navigation={navigation} onBack={() => setNavigationIndex(0)} />, [navigation]);
+  const homeScreenMemo = useMemo(
+    () => <HomeScreen key={`home-${authKey}`} navigation={navigation} />,
+    [navigation, authKey]
+  );
+  const shopScreenMemo = useMemo(
+    () => <Shop navigation={navigation} onBack={() => setNavigationIndex(0)} />,
+    [navigation]
+  );
+  const categoriesScreenMemo = useMemo(
+    () => <RegisterPatients navigation={navigation} onBack={() => setNavigationIndex(0)} />,
+    [navigation]
+  );
+  const customerDashboardMemo = useMemo(
+    () => (
+      <CustomerDashboard
+        key={`customer-dash-${authKey}`}
+        navigation={navigation}
+        isActive={navigationIndex === 3}
+        onBack={() => setNavigationIndex(0)}
+      />
+    ),
+    [navigation, authKey, navigationIndex === 3]
+  );
 
   const renderScreen = () => {
     switch (navigationIndex) {

@@ -698,9 +698,9 @@ const Shop = ({ navigation, onBack, route }) => {
 
   return (
     <View style={styles.container}>
-      <StatusBar backgroundColor="#c99742" barStyle="dark-content" />
+      <StatusBar backgroundColor="#0c0a08" barStyle="light-content" />
 
-      {/* Luxury Gold Header with Back Arrow and Category Title */}
+      {/* Clean Luxury Dark Header with Back Arrow and Category Title */}
       <View style={styles.goldHeader}>
         <TouchableOpacity
           style={styles.backTouch}
@@ -715,16 +715,21 @@ const Shop = ({ navigation, onBack, route }) => {
           }}
           activeOpacity={0.7}
         >
-          <Image
-            source={require("../resources/images/back_icon.png")}
-            style={styles.backArrowIcon}
-            resizeMode="contain"
-          />
+          <View style={styles.backButtonCircle}>
+            <Image
+              source={require("../resources/images/back_icon.png")}
+              style={styles.backArrowIcon}
+              resizeMode="contain"
+            />
+          </View>
         </TouchableOpacity>
 
-        <Text style={styles.headerTitleText} numberOfLines={1}>
-          {headerTitle}
-        </Text>
+        <View style={styles.headerTextWrap}>
+          <Text style={styles.headerTitleText} numberOfLines={1}>
+            {headerTitle}
+          </Text>
+          <Text style={styles.headerSubtitleText}>Curated Cellar & Spirits</Text>
+        </View>
       </View>
 
       {/* Real-time Search Input */}
@@ -1500,35 +1505,59 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#080808",
   },
-  // Luxury Gold Header
+  // Clean Luxury Dark Header
   goldHeader: {
-    backgroundColor: "#c99742",
+    backgroundColor: "#0c0a08",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
-    height: Platform.OS === "android" ? 58 : 62,
-    elevation: 4,
+    height: Platform.OS === "android" ? 64 : 68,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.08)",
+    elevation: 3,
     shadowColor: "#000",
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
   },
   backTouch: {
-    paddingVertical: 8,
+    paddingVertical: 6,
     paddingRight: 12,
     justifyContent: "center",
     alignItems: "center",
   },
+  backButtonCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   backArrowIcon: {
-    width: 24,
-    height: 20,
-    tintColor: "#000000",
+    width: 18,
+    height: 18,
+    tintColor: "#FFFFFF",
+  },
+  headerTextWrap: {
+    flex: 1,
+    justifyContent: "center",
   },
   headerTitleText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "700",
-    color: "#000000",
+    color: "#FFFFFF",
     letterSpacing: 0.3,
+  },
+  headerSubtitleText: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#c99742",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginTop: 1,
   },
 
   // Search Container matching screenshot

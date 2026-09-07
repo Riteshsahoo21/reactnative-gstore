@@ -16,17 +16,19 @@ export default function AboutUs({navigation}) {
   return (
     <SafeAreaView style={styles.safeArea}>
     <AppHeader
-      title="AboutUs"
+      title="About Us"
       isGradient={false}
-      backgroundColor="#c99742"
-      titleStyle={tmh_styles.header_title_tmb}
-      isShowShadow={true}
+      backgroundColor="#0c0a08"
+      statusBarColor="#0c0a08"
+      statusBarStyle="light-content"
+      titleStyle={{ color: "#FFFFFF", fontSize: 18, fontWeight: "700" }}
+      isShowShadow={false}
       isBack={true}
       backButtonStyle={{ width: 35, height: 25, alignItems: "center" }}
-      backIconColor="black"
+      backIconColor="white"
       logoImage={null}
       navigation={navigation}
-          />
+    />
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={aboutcss.mainboxabout}>
           {/* About Us Section */}

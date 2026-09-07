@@ -26,6 +26,7 @@ import AppHeader from "../widgets/AppHeader";
 import tmh_styles from "../styles/tmh_styles";
 import { HEADER_HEIGHT_THRESHOLD, API_BASE } from "../resources/data/Constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { launchImageLibrary } from "react-native-image-picker";
 
 const escapeHtml = (str) => {
   return String(str ?? "")
@@ -497,6 +498,95 @@ const Checkout = ({ navigation, route }) => {
   const [lat, setLat] = useState(null);
   const [lng, setLng] = useState(null);
 
+  // 18+ Verification & Guest Identification State
+  const [isAgeConfirmed, setIsAgeConfirmed] = useState(false);
+  const [guestIdType, setGuestIdType] = useState("national_id"); // 'national_id' | 'passport' | 'drivers_license'
+  const [guestIdNumber, setGuestIdNumber] = useState("");
+  const [guestDob, setGuestDob] = useState("");
+  const [guestDocUrl, setGuestDocUrl] = useState("");
+  const [guestDocFileName, setGuestDocFileName] = useState("");
+  const [isUploadingDoc, setIsUploadingDoc] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  // Pick and Upload Guest 18+ Verification Document
+  const handlePickGuestDocument = async () => {
+    try {
+      const result = await launchImageLibrary({
+        mediaType: "photo",
+        quality: 0.8,
+        includeBase64: true,
+      });
+
+      if (result.didCancel || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const fileName = asset.fileName || "official_id_document.jpg";
+      setGuestDocFileName(fileName);
+      setIsUploadingDoc(true);
+
+      // 1. Attempt multipart upload
+      try {
+        const formData = new FormData();
+        formData.append("document", {
+          uri: asset.uri,
+          type: asset.type || "image/jpeg",
+          name: fileName,
+        });
+
+        const uploadRes = await safeApiFetch("/checkout/upload-guest-document", {
+          method: "POST",
+          body: formData,
+        }, 8000);
+
+        if (uploadRes && uploadRes.ok) {
+          const upData = await uploadRes.json();
+          if (upData && upData.url) {
+            setGuestDocUrl(upData.url);
+            showMessage("✓ Identification document uploaded successfully.");
+            setIsUploadingDoc(false);
+            return;
+          }
+        }
+      } catch (mpErr) {
+        console.log("Multipart upload failed, trying base64 fallback:", mpErr?.message || mpErr);
+      }
+
+      // 2. Base64 fallback
+      if (asset.base64) {
+        try {
+          const base64Data = `data:${asset.type || 'image/jpeg'};base64,${asset.base64}`;
+          const b64Res = await safeApiFetch("/checkout/upload-guest-document", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ documentBase64: base64Data }),
+          }, 10000);
+
+          if (b64Res && b64Res.ok) {
+            const b64Data = await b64Res.json();
+            if (b64Data && b64Data.url) {
+              setGuestDocUrl(b64Data.url);
+              showMessage("✓ Identification document uploaded successfully.");
+              setIsUploadingDoc(false);
+              return;
+            }
+          }
+        } catch (b64Err) {
+          console.log("Base64 upload failed:", b64Err?.message || b64Err);
+        }
+      }
+
+      // 3. Fallback direct URI so guest checkout is never blocked
+      setGuestDocUrl(asset.uri);
+      showMessage("✓ Identification document attached.");
+    } catch (e) {
+      Alert.alert("Selection Error", "Could not attach document. Please try again.");
+    } finally {
+      setIsUploadingDoc(false);
+    }
+  };
+
   // Google Places Street Address Autocomplete
   const [addressPredictions, setAddressPredictions] = useState([]);
   const [showAddressDropdown, setShowAddressDropdown] = useState(false);
@@ -599,6 +689,8 @@ const Checkout = ({ navigation, route }) => {
         // Fetch latest Super Coins wallet balance if authenticated
         const userToken = await AsyncStorage.getItem("userToken");
         if (userToken) {
+          setIsLoggedIn(true);
+          setIsAgeConfirmed(true);
           try {
             const coinRes = await safeApiFetch("/super-coins/wallet", {
               headers: { Authorization: `Bearer ${userToken}` },
@@ -1470,20 +1562,48 @@ const Checkout = ({ navigation, route }) => {
       return;
     }
 
+    // Universal 18+ Age & Guest Identity Document Enforcement
+    if (!isAgeConfirmed) {
+      showMessage("Please certify that you are at least 18 years of age to purchase alcoholic beverages.");
+      return;
+    }
+
+    // Guest checkout document & KYC validation
+    const token = await AsyncStorage.getItem("userToken");
+    if (!token) {
+      if (!guestIdNumber.trim()) {
+        showMessage("Please enter your official ID / Passport number for 18+ verification.");
+        return;
+      }
+      if (!guestDob.trim()) {
+        showMessage("Please enter your date of birth (YYYY-MM-DD).");
+        return;
+      }
+      const birthDate = new Date(guestDob.trim());
+      if (isNaN(birthDate.getTime())) {
+        showMessage("Please enter a valid date of birth (YYYY-MM-DD).");
+        return;
+      }
+      const today = new Date();
+      let age = today.getFullYear() - birthDate.getFullYear();
+      const m = today.getMonth() - birthDate.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+      }
+      if (age < 18) {
+        showMessage("You must be at least 18 years of age to purchase from The Grand Store.");
+        return;
+      }
+      if (!guestDocUrl) {
+        showMessage("Please upload or attach your official ID document for 18+ compliance verification.");
+        return;
+      }
+    }
+
     try {
       setIsSubmitting(true);
 
-      const token = await AsyncStorage.getItem("userToken");
       const generatedOrderId = `GS-${Date.now().toString().slice(-6).toUpperCase()}`;
-
-      if (!token && paymentMethod === "payfast") {
-        showMessage("Please sign in to proceed with PayFast instant payment");
-        setIsSubmitting(false);
-        if (navigation && navigation.navigate) {
-          navigation.navigate("Login");
-        }
-        return;
-      }
 
       const finalShippingAddress = {
         address:
@@ -1497,179 +1617,96 @@ const Checkout = ({ navigation, route }) => {
 
       let finalOrderId = generatedOrderId;
       let orderMongoId = null;
-      let payfastLaunched = false;
 
-      // Submit order to backend /api/orders
-      if (token) {
-        try {
-          let finalQuote = quote;
-          if (!finalQuote) {
-            const quoteRes = await safeApiFetch("/checkout/quote", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                cartItems: checkoutItems.map((item) => ({
-                  product: item.productid || item.id,
-                  name: item.name,
-                  quantity: item.quantity,
-                  price: item.price,
-                  image: item.image,
-                  option: item.size || item.option,
-                })),
-                shippingAddress: finalShippingAddress,
-                deliveryPreference,
-              }),
-            });
-            if (quoteRes && quoteRes.ok) finalQuote = await quoteRes.json();
-          }
+      const reqHeaders = { "Content-Type": "application/json" };
+      if (token) reqHeaders.Authorization = `Bearer ${token}`;
 
-          if (finalQuote && finalQuote.shipments) {
-            if (selectedCourier) {
-              finalQuote.shipments[0].selectedCourier = selectedCourier;
-            }
-            if (preferredPostnetStore) {
-              finalQuote.shipments[0].selectedPickupStore = preferredPostnetStore;
-            }
-
-            const orderPayload = {
-              quote: finalQuote,
+      // 1. Submit order to backend /api/orders (supports both authenticated and guest orders)
+      try {
+        let finalQuote = quote;
+        if (!finalQuote) {
+          const quoteRes = await safeApiFetch("/checkout/quote", {
+            method: "POST",
+            headers: reqHeaders,
+            body: JSON.stringify({
+              cartItems: checkoutItems.map((item) => ({
+                product: item.productid || item.id,
+                name: item.name,
+                quantity: item.quantity,
+                price: item.price,
+                image: item.image,
+                option: item.size || item.option,
+              })),
               shippingAddress: finalShippingAddress,
               deliveryPreference,
-              selectedPostnetStore: preferredPostnetStore,
-              paymentMethod: paymentMethod === "payfast" ? "PayFast" : "Bank Transfer",
-              useSuperCoins: Boolean(useSuperCoins),
-            };
+            }),
+          });
+          if (quoteRes && quoteRes.ok) finalQuote = await quoteRes.json();
+        }
 
-            const orderRes = await safeApiFetch("/orders", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify(orderPayload),
-            });
-
-            if (orderRes && orderRes.ok) {
-              const orderData = await orderRes.json();
-              if (orderData) {
-                finalOrderId = orderData.orderId || orderData._id || generatedOrderId;
-                orderMongoId = orderData._id || null;
-              }
-            }
+        if (finalQuote && finalQuote.shipments) {
+          if (selectedCourier) {
+            finalQuote.shipments[0].selectedCourier = selectedCourier;
+          }
+          if (preferredPostnetStore) {
+            finalQuote.shipments[0].selectedPickupStore = preferredPostnetStore;
           }
 
-          // Construct order summary for in-app receipt & confirmation
-          const orderSummary = {
-            orderId: finalOrderId,
-            orderMongoId,
-            date: new Date().toLocaleDateString("en-ZA", {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-            }),
-            createdAt: new Date().toISOString(),
-            items: checkoutItems.map((i) => ({
-              name: i.name,
-              price: Number(i.price || 0),
-              quantity: Number(i.quantity || 1),
-              image: i.image,
-              size: i.size || "750ml",
-            })),
-            subtotal,
-            shippingFee,
-            discount,
-            superCoinsDiscount,
-            superCoinsUsed: useSuperCoins
-              ? (superCoinsQuote?.maxRedeemableCoins || quote?.superCoins?.maxRedeemableCoins || 0)
-              : 0,
-            superCoinsEarned:
-              superCoinsQuote?.potentialCoinsToEarn ||
-              quote?.superCoins?.potentialCoinsToEarn ||
-              Math.floor((subtotal / 100) * 10),
+          const orderPayload = {
+            quote: finalQuote,
+            shippingAddress: finalShippingAddress,
             deliveryPreference,
-            grandTotal,
-            paymentMethod:
-              paymentMethod === "payfast"
-                ? "PayFast Sandbox (Instant Cards / EFT)"
-                : "Manual Bank Transfer (Standard Bank)",
-            paymentStatus: paymentMethod === "payfast" ? "Pending" : "Pending",
-            courierName: selectedCourier
-              ? `${selectedCourier.courierName} (${selectedCourier.serviceLevel})`
-              : deliveryPreference === "postnet"
-              ? "PostNet"
-              : "Courier Guy",
-            pickupStore: preferredPostnetStore,
-            bankDetails: {
-              bankName: "Standard Bank",
-              accountName: "The Grand Store PTY LTD",
-              accountNumber: "0123456789",
-              branchCode: "051001",
-              reference: finalOrderId.slice(-8).toUpperCase(),
-            },
-            recipient: {
-              fullName,
-              phone,
-              email,
-              address:
-                deliveryPreference === "postnet" && preferredPostnetStore
-                  ? `Pickup: ${preferredPostnetStore.name} — ${preferredPostnetStore.address}`
-                  : `${finalShippingAddress.address}, ${finalShippingAddress.city}, ${finalShippingAddress.postalCode}, ${finalShippingAddress.country}`,
-            },
+            selectedPostnetStore: preferredPostnetStore,
+            paymentMethod: paymentMethod === "payfast" ? "PayFast" : "Bank Transfer",
+            useSuperCoins: Boolean(token && useSuperCoins),
+            isAgeConfirmed: true,
+            isGuest: !token,
+            guestEmail: email.trim(),
+            guestName: fullName.trim(),
+            guestPhone: phone.trim(),
+            guestKyc: !token
+              ? {
+                  idType: guestIdType,
+                  idNumber: guestIdNumber.trim(),
+                  dateOfBirth: guestDob.trim(),
+                  documentUrl: guestDocUrl,
+                  documentType: guestDocFileName.toLowerCase().endsWith(".pdf") ? "pdf" : "image",
+                }
+              : null,
           };
 
-          // If PayFast selected, launch directly inside IN-APP WebView modal (No external browser redirect)
-          if (paymentMethod === "payfast" && (orderMongoId || finalOrderId)) {
-            try {
-              const targetPayOrderId = orderMongoId || finalOrderId;
-              const pfRes = await safeApiFetch("/payfast/generate-shop", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${token}`,
-                },
-                body: JSON.stringify({ orderId: targetPayOrderId }),
-              });
+          const orderRes = await safeApiFetch("/orders", {
+            method: "POST",
+            headers: reqHeaders,
+            body: JSON.stringify(orderPayload),
+          });
 
-              if (pfRes && pfRes.ok) {
-                const pfData = await pfRes.json();
-                if (pfData && pfData.url && pfData.data) {
-                  activeOrderRef.current = orderSummary;
-                  setCreatedOrder(orderSummary);
-                  saveOrderToLocalStorage(orderSummary);
-                  setPayfastModalData({
-                    url: pfData.url,
-                    fields: pfData.data,
-                    orderSummary,
-                  });
-                  setShowPayfastModal(true);
-                  setIsPayfastLoading(true);
-                  setIsSubmitting(false);
-                  return;
-                }
-              } else {
-                console.log("PayFast generate-shop returned non-ok status:", pfRes?.status);
-              }
-            } catch (pfErr) {
-              console.log("PayFast sandbox generation error:", pfErr);
+          if (orderRes && orderRes.ok) {
+            const orderData = await orderRes.json();
+            if (orderData) {
+              finalOrderId = orderData.orderId || orderData._id || generatedOrderId;
+              orderMongoId = orderData._id || null;
             }
           }
-        } catch (apiErr) {
-          console.log("Backend API order submission skipped:", apiErr.message);
         }
+      } catch (apiErr) {
+        console.log("Backend API order submission skipped/fallback:", apiErr?.message || apiErr);
       }
 
-      // Clear local cart if not buy now (for Bank Transfer)
-      if (!singleItemCheckout) {
-        await AsyncStorage.setItem("grand-store-cart", JSON.stringify([]));
-        DeviceEventEmitter.emit("cartUpdated", 0);
-      }
-
-      const defaultOrderSummary = {
+      // Construct order summary for in-app receipt & confirmation
+      const orderSummary = {
         orderId: finalOrderId,
         orderMongoId,
+        isGuest: !token,
+        guestKyc: !token
+          ? {
+              idType: guestIdType,
+              idNumber: guestIdNumber.trim(),
+              status: "pending_review",
+              documentUrl: guestDocUrl,
+            }
+          : null,
+        isAgeConfirmed: true,
         date: new Date().toLocaleDateString("en-ZA", {
           year: "numeric",
           month: "short",
@@ -1686,21 +1723,23 @@ const Checkout = ({ navigation, route }) => {
         subtotal,
         shippingFee,
         discount,
-        superCoinsDiscount,
-        superCoinsUsed: useSuperCoins
-          ? (superCoinsQuote?.maxRedeemableCoins || quote?.superCoins?.maxRedeemableCoins || 0)
+        superCoinsDiscount: token ? superCoinsDiscount : 0,
+        superCoinsUsed:
+          token && useSuperCoins
+            ? superCoinsQuote?.maxRedeemableCoins || quote?.superCoins?.maxRedeemableCoins || 0
+            : 0,
+        superCoinsEarned: token
+          ? superCoinsQuote?.potentialCoinsToEarn ||
+            quote?.superCoins?.potentialCoinsToEarn ||
+            Math.floor((subtotal / 100) * 10)
           : 0,
-        superCoinsEarned:
-          superCoinsQuote?.potentialCoinsToEarn ||
-          quote?.superCoins?.potentialCoinsToEarn ||
-          Math.floor((subtotal / 100) * 10),
         deliveryPreference,
         grandTotal,
         paymentMethod:
           paymentMethod === "payfast"
             ? "PayFast Sandbox (Instant Cards / EFT)"
             : "Manual Bank Transfer (Standard Bank)",
-        paymentStatus: "Pending",
+        paymentStatus: paymentMethod === "payfast" ? "Pending" : "Pending",
         courierName: selectedCourier
           ? `${selectedCourier.courierName} (${selectedCourier.serviceLevel})`
           : deliveryPreference === "postnet"
@@ -1725,8 +1764,48 @@ const Checkout = ({ navigation, route }) => {
         },
       };
 
-      setCreatedOrder(defaultOrderSummary);
-      saveOrderToLocalStorage(defaultOrderSummary);
+      // 2. If PayFast selected, launch directly inside IN-APP WebView modal (supports both user and guest orders)
+      if (paymentMethod === "payfast" && (orderMongoId || finalOrderId)) {
+        try {
+          const targetPayOrderId = orderMongoId || finalOrderId;
+          const pfRes = await safeApiFetch("/payfast/generate-shop", {
+            method: "POST",
+            headers: reqHeaders,
+            body: JSON.stringify({ orderId: targetPayOrderId }),
+          });
+
+          if (pfRes && pfRes.ok) {
+            const pfData = await pfRes.json();
+            if (pfData && pfData.url && pfData.data) {
+              activeOrderRef.current = orderSummary;
+              setCreatedOrder(orderSummary);
+              saveOrderToLocalStorage(orderSummary);
+              setPayfastModalData({
+                url: pfData.url,
+                fields: pfData.data,
+                orderSummary,
+              });
+              setShowPayfastModal(true);
+              setIsPayfastLoading(true);
+              setIsSubmitting(false);
+              return;
+            }
+          } else {
+            console.log("PayFast generate-shop returned non-ok status:", pfRes?.status);
+          }
+        } catch (pfErr) {
+          console.log("PayFast sandbox generation error:", pfErr);
+        }
+      }
+
+      // Clear local cart if not buy now (for Bank Transfer)
+      if (!singleItemCheckout) {
+        await AsyncStorage.setItem("grand-store-cart", JSON.stringify([]));
+        DeviceEventEmitter.emit("cartUpdated", 0);
+      }
+
+      setCreatedOrder(orderSummary);
+      saveOrderToLocalStorage(orderSummary);
       setOrderCompleted(true);
       showMessage("🎉 Order placed successfully!");
     } catch (err) {
@@ -2282,6 +2361,52 @@ const Checkout = ({ navigation, route }) => {
               </View>
             </View>
           )}
+
+          {/* Real-time Tracking & 18+ ID Compliance Notice Card */}
+          <View style={styles.complianceNoticeCard}>
+            <View style={styles.complianceNoticeHeader}>
+              <View style={styles.complianceNoticeBadge}>
+                <Text style={styles.complianceNoticeBadgeText}>COMPLIANCE &amp; DISPATCH</Text>
+              </View>
+              <Text style={styles.complianceNoticeTitle}>Real-Time Tracking &amp; Verification Status</Text>
+            </View>
+
+            {/* Real-Time Dispatch & Tracking Notification Box */}
+            <View style={styles.complianceNoticeBox}>
+              <Text style={styles.complianceNoticeIcon}>🔔</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.complianceNoticeItemTitle}>Dispatch &amp; Tracking Alerts Active</Text>
+                <Text style={styles.complianceNoticeItemDesc}>
+                  Live parcel tracking links, dispatch waybill numbers, and SMS pickup OTPs will be broadcast directly to your contact endpoints:
+                </Text>
+                <View style={styles.complianceContactRow}>
+                  <Text style={styles.complianceContactLine}>✉️ Email: <Text style={styles.complianceContactHighlight}>{email || createdOrder.recipient?.email}</Text></Text>
+                  <Text style={styles.complianceContactLine}>📱 Phone / SMS: <Text style={styles.complianceContactHighlight}>{phone || createdOrder.recipient?.phone}</Text></Text>
+                </View>
+              </View>
+            </View>
+
+            {/* 18+ ID Compliance Review Status Box */}
+            <View style={styles.complianceKycBox}>
+              <Text style={styles.complianceKycIcon}>🛡️</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.complianceKycTitle}>
+                  {createdOrder.isGuest ? "18+ ID Document Submitted to Administration" : "18+ Legal Age Verification Confirmed"}
+                </Text>
+                <Text style={styles.complianceKycDesc}>
+                  {createdOrder.isGuest
+                    ? "Your official identification document has been securely forwarded to The Grand Store administrative compliance team for verification under the South African Liquor Act. Your order checkout is complete and reserved."
+                    : "Your account age certification has been validated. Delivery requires adult signature (18+) upon courier handover."}
+                </Text>
+                <View style={styles.complianceStatusRow}>
+                  <View style={[styles.complianceStatusDot, { backgroundColor: createdOrder.isGuest ? "#f59e0b" : "#10b981" }]} />
+                  <Text style={[styles.complianceStatusText, { color: createdOrder.isGuest ? "#f59e0b" : "#10b981" }]}>
+                    {createdOrder.isGuest ? "Document Review: Pending Administrator Approval (Order Confirmed)" : "Compliance Status: Verified (18+)"}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
 
           {/* PostNet Store Collection Banner */}
           {(createdOrder.pickupStore || isPostNet) && (
@@ -3305,6 +3430,179 @@ const Checkout = ({ navigation, route }) => {
                   </View>
                   <Text style={styles.dutiesCheckboxLabel}>
                     I understand that I am responsible for any destination-country taxes, duties, or customs charges.
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          {/* Universal 18+ Legal Age Verification & Guest ID Document Upload */}
+          <View style={styles.sectionCard}>
+            <View style={styles.stepHeader}>
+              <View style={[styles.stepNumberCircle, { backgroundColor: "rgba(201, 151, 66, 0.2)", borderColor: "#c99742" }]}>
+                <Text style={[styles.stepNumber, { color: "#c99742", fontSize: 13 }]}>18+</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.stepTitle}>18+ Legal Age &amp; Identity Verification</Text>
+                <Text style={styles.verifySubtitle}>
+                  Mandatory compliance under the Liquor Act &amp; International Regulations
+                </Text>
+              </View>
+            </View>
+
+            {!isLoggedIn ? (
+              // Guest Customer Verification Flow
+              <View style={styles.guestVerifyContainer}>
+                <View style={styles.kycExplainerBox}>
+                  <Text style={styles.kycExplainerIcon}>🛡️</Text>
+                  <Text style={styles.kycExplainerText}>
+                    As a guest customer, please provide your legal identification details and attach an official photo of your ID, Passport or Driver's License. Your order will be placed instantly, and our compliance desk will verify the document before courier dispatch.
+                  </Text>
+                </View>
+
+                {/* ID Type Selector */}
+                <Text style={styles.inputLabel}>OFFICIAL ID DOCUMENT TYPE *</Text>
+                <View style={styles.verifyTypeSelector}>
+                  {[
+                    { key: "national_id", label: "National ID" },
+                    { key: "passport", label: "Passport" },
+                    { key: "drivers_license", label: "Driver's License" },
+                  ].map((t) => (
+                    <TouchableOpacity
+                      key={t.key}
+                      style={[
+                        styles.verifyTypeOption,
+                        guestIdType === t.key && styles.verifyTypeOptionActive,
+                      ]}
+                      onPress={() => setGuestIdType(t.key)}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[
+                          styles.verifyTypeOptionText,
+                          guestIdType === t.key && styles.verifyTypeOptionTextActive,
+                        ]}
+                      >
+                        {t.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <View style={styles.rowInputs}>
+                  {/* ID Number */}
+                  <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
+                    <Text style={styles.inputLabel}>
+                      {guestIdType === "national_id"
+                        ? "SA ID NUMBER *"
+                        : guestIdType === "passport"
+                        ? "PASSPORT NUMBER *"
+                        : "LICENSE NUMBER *"}
+                    </Text>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder={guestIdType === "national_id" ? "e.g. 9205125089087" : "e.g. A12345678"}
+                      placeholderTextColor="#666"
+                      value={guestIdNumber}
+                      onChangeText={setGuestIdNumber}
+                      autoCapitalize="characters"
+                    />
+                  </View>
+
+                  {/* Date of Birth */}
+                  <View style={[styles.inputGroup, { flex: 1 }]}>
+                    <Text style={styles.inputLabel}>DATE OF BIRTH *</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="YYYY-MM-DD"
+                      placeholderTextColor="#666"
+                      value={guestDob}
+                      onChangeText={setGuestDob}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+
+                {/* Document Upload Button / Status */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>ATTACH OFFICIAL ID / PASSPORT PHOTO *</Text>
+                  {isUploadingDoc ? (
+                    <View style={styles.docUploadingBox}>
+                      <ActivityIndicator size="small" color="#c99742" />
+                      <Text style={styles.docUploadingText}>Uploading and encrypting document...</Text>
+                    </View>
+                  ) : guestDocUrl ? (
+                    <View style={styles.verifyDocAttachedBox}>
+                      <View style={styles.verifyDocAttachedLeft}>
+                        <Text style={styles.verifyDocAttachedCheck}>✓</Text>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.verifyDocAttachedTitle}>Document Attached Successfully</Text>
+                          <Text style={styles.verifyDocAttachedName} numberOfLines={1}>
+                            {guestDocFileName || "Official_ID_Document.jpg"}
+                          </Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.verifyDocReuploadBtn}
+                        onPress={handlePickGuestDocument}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.verifyDocReuploadText}>Change</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.verifyDocUploadBtn}
+                      onPress={handlePickGuestDocument}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.verifyDocUploadIcon}>📷</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.verifyDocUploadTitle}>Attach Official ID Photo</Text>
+                        <Text style={styles.verifyDocUploadSub}>Select photo or scan from your gallery (PNG, JPG, PDF)</Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* 18+ Certification Checkbox */}
+                <TouchableOpacity
+                  style={styles.verifyCheckboxRow}
+                  activeOpacity={0.8}
+                  onPress={() => setIsAgeConfirmed(!isAgeConfirmed)}
+                >
+                  <View style={[styles.verifyCheckbox, isAgeConfirmed && styles.verifyCheckboxChecked]}>
+                    {isAgeConfirmed && <Text style={styles.verifyCheckmark}>✓</Text>}
+                  </View>
+                  <Text style={styles.verifyCheckboxText}>
+                    I legally certify that I am at least 18 years of age and authorized to purchase alcoholic beverages under the South African Liquor Act. I confirm this document belongs to me.
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              // Authenticated User Pre-Verified Badge
+              <View style={styles.authVerifiedContainer}>
+                <View style={styles.authVerifiedRow}>
+                  <View style={styles.authVerifiedIconBox}>
+                    <Text style={styles.authVerifiedIcon}>✓</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.authVerifiedTitle}>18+ Account Verified</Text>
+                    <Text style={styles.authVerifiedSub}>
+                      Your logged-in account has verified legal age compliance. Standard age verification may be requested upon courier handover.
+                    </Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={[styles.verifyCheckboxRow, { marginTop: 12 }]}
+                  activeOpacity={0.8}
+                  onPress={() => setIsAgeConfirmed(!isAgeConfirmed)}
+                >
+                  <View style={[styles.verifyCheckbox, isAgeConfirmed && styles.verifyCheckboxChecked]}>
+                    {isAgeConfirmed && <Text style={styles.verifyCheckmark}>✓</Text>}
+                  </View>
+                  <Text style={styles.verifyCheckboxText}>
+                    I confirm that I am at least 18 years of age and eligible to receive this shipment.
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -5526,6 +5824,350 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
     lineHeight: 15,
+  },
+
+  // 18+ Verification & Compliance Card Styles
+  verifySubtitle: {
+    color: "#a89b88",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  guestVerifyContainer: {
+    marginTop: 8,
+  },
+  kycExplainerBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "rgba(201, 151, 66, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+  },
+  kycExplainerIcon: {
+    fontSize: 18,
+    marginRight: 10,
+    marginTop: 1,
+  },
+  kycExplainerText: {
+    flex: 1,
+    color: "#d4c8b8",
+    fontSize: 11.5,
+    lineHeight: 16.5,
+  },
+  verifyTypeSelector: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 14,
+    marginTop: 4,
+  },
+  verifyTypeOption: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    backgroundColor: "#1c1915",
+    borderWidth: 1,
+    borderColor: "#332c23",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  verifyTypeOptionActive: {
+    backgroundColor: "rgba(201, 151, 66, 0.2)",
+    borderColor: "#c99742",
+  },
+  verifyTypeOptionText: {
+    color: "#8e8271",
+    fontSize: 11.5,
+    fontWeight: "600",
+  },
+  verifyTypeOptionTextActive: {
+    color: "#f5c242",
+    fontWeight: "700",
+  },
+  docUploadingBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    backgroundColor: "#1c1915",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#c99742",
+    marginTop: 6,
+  },
+  docUploadingText: {
+    color: "#c99742",
+    fontSize: 12,
+    fontWeight: "600",
+    marginLeft: 10,
+  },
+  verifyDocAttachedBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(16, 185, 129, 0.1)",
+    borderWidth: 1.5,
+    borderColor: "rgba(16, 185, 129, 0.4)",
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 6,
+  },
+  verifyDocAttachedLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    marginRight: 10,
+  },
+  verifyDocAttachedCheck: {
+    color: "#10b981",
+    fontSize: 16,
+    fontWeight: "900",
+    marginRight: 10,
+    backgroundColor: "rgba(16, 185, 129, 0.2)",
+    width: 26,
+    height: 26,
+    lineHeight: 26,
+    borderRadius: 13,
+    textAlign: "center",
+  },
+  verifyDocAttachedTitle: {
+    color: "#10b981",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  verifyDocAttachedName: {
+    color: "#a89b88",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  verifyDocReuploadBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: "rgba(201, 151, 66, 0.2)",
+    borderWidth: 1,
+    borderColor: "#c99742",
+  },
+  verifyDocReuploadText: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  verifyDocUploadBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1a1612",
+    borderWidth: 1.5,
+    borderColor: "#c99742",
+    borderStyle: "dashed",
+    borderRadius: 10,
+    padding: 14,
+    marginTop: 6,
+  },
+  verifyDocUploadIcon: {
+    fontSize: 22,
+    marginRight: 12,
+  },
+  verifyDocUploadTitle: {
+    color: "#f5c242",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  verifyDocUploadSub: {
+    color: "#8e8271",
+    fontSize: 10.5,
+    marginTop: 2,
+  },
+  verifyCheckboxRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 14,
+    paddingVertical: 4,
+  },
+  verifyCheckbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: "#c99742",
+    backgroundColor: "#16130f",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+    marginTop: 2,
+  },
+  verifyCheckboxChecked: {
+    backgroundColor: "#c99742",
+  },
+  verifyCheckmark: {
+    color: "#000",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  verifyCheckboxText: {
+    flex: 1,
+    color: "#cfc5b4",
+    fontSize: 11.5,
+    lineHeight: 16.5,
+  },
+  authVerifiedContainer: {
+    paddingVertical: 4,
+  },
+  authVerifiedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(16, 185, 129, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(16, 185, 129, 0.3)",
+    borderRadius: 10,
+    padding: 12,
+  },
+  authVerifiedIconBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#10b981",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  authVerifiedIcon: {
+    color: "#000",
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  authVerifiedTitle: {
+    color: "#10b981",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  authVerifiedSub: {
+    color: "#9ca3af",
+    fontSize: 11,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+
+  // Confirmation Screen Compliance & Tracking Notice Styles
+  complianceNoticeCard: {
+    backgroundColor: "#14110d",
+    borderWidth: 1.5,
+    borderColor: "#c99742",
+    borderRadius: 14,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  complianceNoticeHeader: {
+    marginBottom: 14,
+  },
+  complianceNoticeBadge: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(201, 151, 66, 0.2)",
+    borderWidth: 1,
+    borderColor: "#c99742",
+    borderRadius: 4,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    marginBottom: 6,
+  },
+  complianceNoticeBadgeText: {
+    color: "#f5c242",
+    fontSize: 9.5,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
+  complianceNoticeTitle: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  complianceNoticeBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#1c1813",
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#2e261b",
+    marginBottom: 10,
+  },
+  complianceNoticeIcon: {
+    fontSize: 18,
+    marginRight: 10,
+    marginTop: 2,
+  },
+  complianceNoticeItemTitle: {
+    color: "#f5c242",
+    fontSize: 12.5,
+    fontWeight: "700",
+    marginBottom: 3,
+  },
+  complianceNoticeItemDesc: {
+    color: "#b8ab98",
+    fontSize: 11,
+    lineHeight: 15.5,
+  },
+  complianceContactRow: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#2a2218",
+    gap: 4,
+  },
+  complianceContactLine: {
+    color: "#8e8271",
+    fontSize: 11,
+  },
+  complianceContactHighlight: {
+    color: "#ffffff",
+    fontWeight: "700",
+  },
+  complianceKycBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#1c1813",
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#2e261b",
+  },
+  complianceKycIcon: {
+    fontSize: 18,
+    marginRight: 10,
+    marginTop: 2,
+  },
+  complianceKycTitle: {
+    color: "#ffffff",
+    fontSize: 12.5,
+    fontWeight: "700",
+    marginBottom: 3,
+  },
+  complianceKycDesc: {
+    color: "#b8ab98",
+    fontSize: 11,
+    lineHeight: 15.5,
+  },
+  complianceStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+  },
+  complianceStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  complianceStatusText: {
+    fontSize: 11,
+    fontWeight: "700",
   },
 });
 

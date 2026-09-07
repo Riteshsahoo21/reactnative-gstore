@@ -242,11 +242,14 @@ const HomeScreen = ({ navigation }) => {
     ]).start();
   };
 
-  // === API Calls ===
   const fetchUserName = async () => {
     try {
       const name = await AsyncStorage.getItem("userName");
-      if (name) setUserName(name);
+      if (name) {
+        setUserName(name);
+      } else {
+        setUserName(null);
+      }
     } catch (err) {
       console.error("Error fetching user name:", err);
     }
@@ -634,22 +637,36 @@ const handleAddToCartInstant = async (product) => {
 //     }
 //   };
 
- useEffect(() => {
-  const initData = async () => {
-    const storedWishlist = await loadFromStorage("wishlistItemIds");
-    const storedCart = await loadFromStorage("cartItems");
+  useEffect(() => {
+    const initData = async () => {
+      const storedWishlist = await loadFromStorage("wishlistItemIds");
+      const storedCart = await loadFromStorage("cartItems");
 
-    if (storedWishlist.size > 0) setWishlistItemIds(storedWishlist);
-    if (storedCart.size > 0) setCartItems(storedCart);
+      if (storedWishlist.size > 0) setWishlistItemIds(storedWishlist);
+      if (storedCart.size > 0) setCartItems(storedCart);
 
-    await fetchUserName();
-    await fetchAllData();
-    await fetchWishlist();
-    await fetchCartItems();
-  };
+      await fetchUserName();
+      await fetchAllData();
+      await fetchWishlist();
+      await fetchCartItems();
+    };
 
-  initData();
-}, []);
+    initData();
+
+    const subLogin = DeviceEventEmitter.addListener("userLoggedIn", () => {
+      fetchUserName();
+      fetchAllData();
+    });
+
+    const subLogout = DeviceEventEmitter.addListener("userLoggedOut", () => {
+      setUserName(null);
+    });
+
+    return () => {
+      subLogin.remove();
+      subLogout.remove();
+    };
+  }, []);
 
 
   const getImageUrl = (imagePath) =>

@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "153305069501-dq01kr7b6ingdl3f3qk5r9790hebvbv7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.grandstore.android",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
           "client_id": "153305069501-nrfrhnj4l2427g5dbnn1ubpajocf578a.apps.googleusercontent.com",
           "client_type": 3
         }

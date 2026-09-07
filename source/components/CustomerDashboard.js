@@ -35,7 +35,7 @@ const showMessage = (msg) => {
   }
 };
 
-const CustomerDashboard = ({ navigation, onBack }) => {
+const CustomerDashboard = ({ navigation, onBack, isActive }) => {
   const [user, setUser] = useState({
     name: "Collector",
     email: "customer@thegrandstore.co.za",
@@ -146,31 +146,49 @@ const CustomerDashboard = ({ navigation, onBack }) => {
       setLoadingCoins(true);
       const token = tokenArg || userToken || (await AsyncStorage.getItem("userToken"));
       if (token) {
-        const res = await axios.get(`${API_BASE}/super-coins/wallet`, {
-          headers: { Authorization: `Bearer ${token}` },
-          timeout: 8000,
-        });
-        if (res.data) {
+        const candidates = [
+          API_BASE,
+          "http://127.0.0.1:5000/api",
+          "http://localhost:5000/api",
+          "http://10.0.2.2:5000/api",
+        ];
+        let fetchedData = null;
+        for (const base of [...new Set(candidates.filter(Boolean))]) {
+          try {
+            const res = await axios.get(`${base}/super-coins/wallet`, {
+              headers: { Authorization: `Bearer ${token}` },
+              timeout: 4000,
+            });
+            if (res && res.data) {
+              fetchedData = res.data;
+              break;
+            }
+          } catch (e) {
+            // try next candidate
+          }
+        }
+
+        if (fetchedData) {
           setSuperCoinsWallet((prev) => ({
             ...prev,
-            availableCoins: res.data.availableCoins ?? prev.availableCoins,
+            availableCoins: fetchedData.availableCoins ?? prev.availableCoins,
             availableRandValue:
-              res.data.availableRandValue ??
-              ((res.data.availableCoins ?? prev.availableCoins) * 0.1),
-            pendingCoins: res.data.pendingCoins ?? prev.pendingCoins,
+              fetchedData.availableRandValue ??
+              ((fetchedData.availableCoins ?? prev.availableCoins) * 0.1),
+            pendingCoins: fetchedData.pendingCoins ?? prev.pendingCoins,
             pendingRandValue:
-              res.data.pendingRandValue ??
-              ((res.data.pendingCoins ?? prev.pendingCoins) * 0.1),
-            expiringSoonCoins: res.data.expiringSoonCoins ?? prev.expiringSoonCoins,
+              fetchedData.pendingRandValue ??
+              ((fetchedData.pendingCoins ?? prev.pendingCoins) * 0.1),
+            expiringSoonCoins: fetchedData.expiringSoonCoins ?? prev.expiringSoonCoins,
             transactions:
-              res.data.transactions && res.data.transactions.length > 0
-                ? res.data.transactions
+              fetchedData.transactions && fetchedData.transactions.length > 0
+                ? fetchedData.transactions
                 : prev.transactions,
           }));
         }
       }
     } catch (err) {
-      console.log("Error fetching super coins wallet:", err?.message || err);
+      // Graceful fallback without unhandled exception
     } finally {
       setLoadingCoins(false);
     }
@@ -295,9 +313,9 @@ const CustomerDashboard = ({ navigation, onBack }) => {
         } catch (e) {}
       }
 
-      const name = storedName || parsedUser?.name || parsedUser?.userName || "Collector User";
-      const email = storedEmail || parsedUser?.email || "customer@thegrandstore.co.za";
-      const phone = storedPhone || parsedUser?.phone || parsedUser?.phoneNumber || "+27 82 912 3456";
+      const name = parsedUser?.name || parsedUser?.userName || storedName || "Collector User";
+      const email = parsedUser?.email || storedEmail || "customer@thegrandstore.co.za";
+      const phone = parsedUser?.phone || parsedUser?.phoneNumber || storedPhone || "+27 82 912 3456";
       const referralCode = parsedUser?.referralCode || "GRANDVIP88";
       const rewardBalance = parsedUser?.rewardBalance ?? 500;
 
@@ -327,6 +345,7 @@ const CustomerDashboard = ({ navigation, onBack }) => {
             setEditPhone(p.phone || p.phoneNumber || phone);
             await AsyncStorage.setItem("userInfo", JSON.stringify(p));
             if (p.name) await AsyncStorage.setItem("userName", p.name);
+            if (p.email) await AsyncStorage.setItem("userEmail", p.email);
             if (p.phone || p.phoneNumber) {
               await AsyncStorage.setItem("userPhone", p.phone || p.phoneNumber);
             }
@@ -383,10 +402,36 @@ const CustomerDashboard = ({ navigation, onBack }) => {
       if (typeof cnt === "number") setWishlistCount(cnt);
     });
 
+    const subUserLogin = DeviceEventEmitter.addListener("userLoggedIn", (newUserData) => {
+      console.log("[CustomerDashboard] userLoggedIn event received! Reloading fresh data...", newUserData?.name);
+      loadUserData();
+    });
+
+    const subUserLogout = DeviceEventEmitter.addListener("userLoggedOut", () => {
+      console.log("[CustomerDashboard] userLoggedOut event received! Resetting dashboard...");
+      setUserToken(null);
+      setUser({
+        name: "Collector",
+        email: "customer@thegrandstore.co.za",
+        phone: "+27 82 000 0000",
+        referralCode: "GRANDVIP88",
+        rewardBalance: 0,
+      });
+      loadUserData();
+    });
+
     return () => {
       subWishlist.remove();
+      subUserLogin.remove();
+      subUserLogout.remove();
     };
   }, [loadUserData]);
+
+  useEffect(() => {
+    if (isActive) {
+      loadUserData();
+    }
+  }, [isActive, loadUserData]);
 
   const handleSaveProfile = async () => {
     if (!editName.trim()) {
@@ -598,14 +643,22 @@ const CustomerDashboard = ({ navigation, onBack }) => {
   const programWelcomeDiscount = referralSummary?.program?.welcomeDiscount ?? 250;
 
   const handleCopyLink = () => {
-    Clipboard.setString(referralLink);
+    try {
+      if (Clipboard && typeof Clipboard.setString === "function") {
+        Clipboard.setString(referralLink);
+      }
+    } catch (e) {}
     setCopiedLink(true);
     showMessage("Referral link copied to clipboard!");
     setTimeout(() => setCopiedLink(false), 2500);
   };
 
   const handleCopyCode = () => {
-    Clipboard.setString(activeReferralCode);
+    try {
+      if (Clipboard && typeof Clipboard.setString === "function") {
+        Clipboard.setString(activeReferralCode);
+      }
+    } catch (e) {}
     setCopiedCode(true);
     showMessage(`Referral code ${activeReferralCode} copied!`);
     setTimeout(() => setCopiedCode(false), 2500);
@@ -659,7 +712,21 @@ const CustomerDashboard = ({ navigation, onBack }) => {
           style: "destructive",
           onPress: async () => {
             try {
-              await AsyncStorage.multiRemove(["userToken", "userInfo", "userName"]);
+              try {
+                const { GoogleSignin } = require("@react-native-google-signin/google-signin");
+                await GoogleSignin.signOut();
+              } catch (gErr) {}
+
+              await AsyncStorage.multiRemove([
+                "userToken",
+                "userInfo",
+                "userName",
+                "userEmail",
+                "userPhone",
+                "customerBankDetails",
+                "userOrders"
+              ]);
+              DeviceEventEmitter.emit("userLoggedOut");
               showMessage("Logged out successfully");
               navigation.navigate("LoginScreen");
             } catch (err) {
@@ -1751,7 +1818,11 @@ const CustomerDashboard = ({ navigation, onBack }) => {
                   <TouchableOpacity
                     style={styles.copyWireBtn}
                     onPress={() => {
-                      Clipboard.setString(storeBankDetails.accountNumber || "0123456789");
+                      try {
+                        if (Clipboard && typeof Clipboard.setString === "function") {
+                          Clipboard.setString(storeBankDetails.accountNumber || "0123456789");
+                        }
+                      } catch (e) {}
                       showMessage("Bank Account Number copied to clipboard!");
                     }}
                     activeOpacity={0.8}
@@ -2684,7 +2755,7 @@ const CustomerDashboard = ({ navigation, onBack }) => {
                     <View style={styles.simSellingPriceCard}>
                       <Text style={styles.simSellingPriceLabel}>FINAL SHELF SELLING PRICE</Text>
                       <Text style={styles.simSellingPriceVal}>
-                        R{sellingPrice.toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        R{Number(sellingPrice || 0).toFixed(2)}
                       </Text>
                       <Text style={styles.simSellingPriceSub}>Price displayed to collectors on storefront</Text>
                     </View>

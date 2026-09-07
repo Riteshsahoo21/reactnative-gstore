@@ -1,14 +1,33 @@
 import {
+  BASE_URL,
+  API_BASE,
+  SERVER_BASE,
+  ENDPOINTS,
+  getApiUrl,
+  getServerUrl,
+  buildUrl,
+} from '../../api/endpoints';
+import {
   getActiveApiBase,
   getActiveServerHost,
   getCandidateBases,
   setActiveApiBase,
 } from '../../helpers/networkConfig';
 
-// Default base URL; dynamic interceptor in networkConfig will auto-resolve & retry across all candidates
-export const API_BASE = 'http://localhost:5000/api';
-export const SERVER_BASE = 'http://localhost:5000';
-export { getActiveApiBase, getActiveServerHost, getCandidateBases, setActiveApiBase };
+// Re-export base URL & endpoints registry
+export {
+  BASE_URL,
+  API_BASE,
+  SERVER_BASE,
+  ENDPOINTS,
+  getApiUrl,
+  getServerUrl,
+  buildUrl,
+  getActiveApiBase,
+  getActiveServerHost,
+  getCandidateBases,
+  setActiveApiBase,
+};
 export const FAQ_URL = ''
 export const CONTACT_US_URL = ''
 export const PRIVACY_URL = ''

@@ -350,13 +350,15 @@ const Cart = ({ navigation }) => {
       <SafeAreaView style={styles.container}>
         <AppHeader
           title="Cart"
-          backgroundColor="#c99742"
+          backgroundColor="#0c0a08"
+          statusBarColor="#0c0a08"
+          statusBarStyle="light-content"
           height={(HEADER_HEIGHT_THRESHOLD * height) / 100}
           rightButtons={[]}
-          titleStyle={tmh_styles.header_title_tmb}
+          titleStyle={{ color: "#FFFFFF", fontSize: 18, fontWeight: "700" }}
           navigation={navigation}
           isBack
-          backIconColor="black"
+          backIconColor="white"
         />
         <View style={styles.loadingCenter}>
           <ActivityIndicator size="large" color="#c99742" />
@@ -369,13 +371,15 @@ const Cart = ({ navigation }) => {
     <SafeAreaView style={styles.container}>
       <AppHeader
         title="Cellar Cart"
-        backgroundColor="#c99742"
+        backgroundColor="#0c0a08"
+        statusBarColor="#0c0a08"
+        statusBarStyle="light-content"
         height={(HEADER_HEIGHT_THRESHOLD * height) / 100}
         rightButtons={[]}
-        titleStyle={tmh_styles.header_title_tmb}
+        titleStyle={{ color: "#FFFFFF", fontSize: 18, fontWeight: "700" }}
         navigation={navigation}
         isBack
-        backIconColor="black"
+        backIconColor="white"
       />
 
       {cartItems.length === 0 ? (

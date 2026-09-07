@@ -19,7 +19,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import AppHeader from '../widgets/AppHeader';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import { API_BASE, HEADER_HEIGHT_THRESHOLD } from '../resources/data/Constants';
+import { API_BASE, HEADER_HEIGHT_THRESHOLD, getActiveApiBase, setActiveApiBase } from '../resources/data/Constants';
 import tmh_styles from '../styles/tmh_styles';
 
 // Graceful Google Sign-In import
@@ -87,25 +87,28 @@ const LoginScreen = ({ navigation, route }) => {
 
   // Multi-host candidate runner to support USB ADB reverse (localhost), emulator (10.0.2.2), and LAN
   const postAuthEndpoint = async (path, payload) => {
+    const currentBase = getActiveApiBase();
     const candidates = [
+      `${currentBase}${path}`,
       `${API_BASE}${path}`,
       `http://localhost:5000/api${path}`,
       `http://127.0.0.1:5000/api${path}`,
-      `http://10.0.2.2:5000/api${path}`,
       `http://192.168.1.9:5000/api${path}`,
+      `http://10.0.2.2:5000/api${path}`,
     ];
     const uniqueCandidates = [...new Set(candidates)];
     let lastError = null;
 
     for (const url of uniqueCandidates) {
       try {
+        console.log('[postAuthEndpoint] Trying:', url);
         const res = await axios.post(url, payload, {
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          timeout: 3500,
+          timeout: 10000,
           _skipRewrite: true,
         });
         if (res && res.data) {
-          // Sync working base URL
+          console.log('[postAuthEndpoint] Success from:', url);
           const matchedBase = url.replace(new RegExp(`${path}$`), '');
           if (matchedBase) {
             setActiveApiBase(matchedBase);
@@ -113,22 +116,37 @@ const LoginScreen = ({ navigation, route }) => {
           return res.data;
         }
       } catch (err) {
+        console.log('[postAuthEndpoint] Error for', url, ':', err.message, err.code, err.response?.status, err.response?.data);
         lastError = err;
         if (err.response?.data?.message) {
           throw new Error(err.response.data.message);
         }
       }
     }
-    throw new Error(lastError?.message || 'Unable to connect to authentication server. Please check backend connection.');
+    throw new Error(lastError?.response?.data?.message || lastError?.message || 'Unable to connect to authentication server. Please check backend connection.');
   };
 
   // Persist session to AsyncStorage
   const handleAuthSuccess = async (data, welcomeMessage) => {
     try {
       if (data.token) {
+        // Clear previous user-specific cached data to prevent cross-account contamination
+        await AsyncStorage.multiRemove([
+          'customerBankDetails',
+          'userOrders',
+          'userEmail',
+          'userPhone',
+        ]).catch(() => {});
+
         await AsyncStorage.setItem('userToken', data.token);
         const displayName = data.name || data.email?.split('@')[0] || data.phone || 'Valued Patron';
         await AsyncStorage.setItem('userName', displayName);
+        if (data.email) {
+          await AsyncStorage.setItem('userEmail', data.email);
+        }
+        if (data.phone || data.phoneNumber) {
+          await AsyncStorage.setItem('userPhone', data.phone || data.phoneNumber);
+        }
         await AsyncStorage.setItem(
           'userInfo',
           JSON.stringify({
@@ -255,18 +273,32 @@ const LoginScreen = ({ navigation, route }) => {
 
     setSocialLoading(true);
     try {
+      console.log('[handleGoogleLogin] Step 1: Checking Play Services...');
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+
+      // Clear any cached session so Google Play Services ALWAYS shows the account/mail selection sheet
+      try {
+        await GoogleSignin.signOut();
+      } catch (signOutErr) {
+        // Safe to ignore if no account was previously signed in
+      }
+
+      console.log('[handleGoogleLogin] Step 2: Calling GoogleSignin.signIn()...');
       const userInfo = await GoogleSignin.signIn();
+      console.log('[handleGoogleLogin] Step 3: GoogleSignin.signIn() succeeded for:', userInfo?.user?.email);
       const idToken = userInfo?.idToken || (await GoogleSignin.getTokens())?.idToken;
+      console.log('[handleGoogleLogin] Step 4: idToken received, length:', idToken ? idToken.length : 0);
 
       if (idToken) {
+        console.log('[handleGoogleLogin] Step 5: Posting idToken to backend /auth/google...');
         const data = await postAuthEndpoint('/auth/google', { token: idToken });
+        console.log('[handleGoogleLogin] Step 6: Backend auth success:', data?.email || data?.name);
         await handleAuthSuccess(data, `Signed in with Google as ${data.name || 'Patron'}.`);
       } else {
         throw new Error('No Google token received from Google Play Services.');
       }
     } catch (error) {
-      console.log('Google Sign-In Error:', error, JSON.stringify(error));
+      console.log('Google Sign-In Error:', error, 'code:', error?.code, 'message:', error?.message);
       if (statusCodes && error.code === statusCodes.SIGN_IN_CANCELLED) {
         // User voluntarily dismissed dialog
       } else if (statusCodes && error.code === statusCodes.IN_PROGRESS) {
@@ -279,8 +311,8 @@ const LoginScreen = ({ navigation, route }) => {
 
         if (isShaMismatch) {
           Alert.alert(
-            'Google Sign-In: SHA-1 Setup Needed',
-            'To enable Google 1-tap sign-in on this device, ensure your SHA-1 fingerprint is registered in Firebase Console (grand-store-65d7c):\n\nSHA-1:\n84:F4:6A:B1:29:55:3D:FF:1A:06:3A:4E:FE:BD:18:99:81:71:36:3F\n\nPackage: com.grandstore.android\n\nYou can also sign in right now using Email & Password or Mobile OTP (+27).',
+            'Google Sign-In: SHA-1 Registration Needed',
+            'Google Play Services requires your device APK SHA-1 to be added in Firebase Console (grand-store-65d7c) -> Project Settings -> Your Android App:\n\nActive APK SHA-1:\n5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25\n\nPackage: com.grandstore.android\n\nYou can also sign in right now using Email & Password or Mobile OTP (+27).',
             [
               {
                 text: 'Sign in with Email',
