@@ -105,6 +105,7 @@ const CustomerDashboard = ({ navigation, onBack }) => {
   const [referralSummary, setReferralSummary] = useState(null);
   const [loadingReferrals, setLoadingReferrals] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   // Super Coins Loyalty State (Matches Super Coins.docx & Web SuperCoinsWallet.jsx)
   const [isSuperCoinsModalVisible, setIsSuperCoinsModalVisible] = useState(false);
   const [superCoinsWallet, setSuperCoinsWallet] = useState({
