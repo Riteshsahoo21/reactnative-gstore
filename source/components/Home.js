@@ -414,6 +414,8 @@ const handleLogout = async () => {
       "userOrders",
       "wishlistItemIds",
       "cartItems",
+      "isAgeVerified",
+      "grand-store-age-verified",
     ]);
 
     DeviceEventEmitter.emit("userLoggedOut");

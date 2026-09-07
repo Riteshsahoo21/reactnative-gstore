@@ -24,6 +24,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { APP_FONT } from "../resources/data/Fonts";
 import { API_BASE } from "../resources/data/Constants";
+import BidderVerificationModal from "./auction/BidderVerificationModal";
 
 const { width } = Dimensions.get("window");
 
@@ -79,6 +80,8 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
   const [savingBank, setSavingBank] = useState(false);
   const [bankModalTab, setBankModalTab] = useState("my_payout"); // 'my_payout' | 'store_wire'
   const [bidderProfile, setBidderProfile] = useState(null);
+  const [isVerificationModalVisible, setIsVerificationModalVisible] = useState(false);
+  const [kycSettings, setKycSettings] = useState(null);
   const [storeBankDetails, setStoreBankDetails] = useState({
     bankName: "Standard Bank",
     accountName: "The Grand Store PTY LTD",
@@ -316,7 +319,17 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
         const referralCode = parsedUser?.referralCode || "";
         const rewardBalance = parsedUser?.rewardBalance ?? 0;
 
-        setUser({ name, email, phone, referralCode, rewardBalance });
+        setUser({
+          ...parsedUser,
+          name,
+          email,
+          phone,
+          referralCode,
+          rewardBalance,
+          isAgeVerified: Boolean(parsedUser?.isAgeVerified),
+          bidderApprovalStatus: parsedUser?.bidderApprovalStatus || "unregistered",
+          bidderLevel: parsedUser?.bidderLevel || "level_1_registered",
+        });
         setEditName(name);
         setEditEmail(email);
         setEditPhone(phone);
@@ -330,11 +343,15 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
             const p = profileRes.data;
             setUser((prev) => ({
               ...prev,
+              ...p,
               name: p.name || prev?.name || name,
               email: p.email || prev?.email || email,
               phone: p.phone || p.phoneNumber || prev?.phone || phone,
               referralCode: p.referralCode || prev?.referralCode || referralCode,
               rewardBalance: p.rewardBalance ?? prev?.rewardBalance ?? rewardBalance,
+              isAgeVerified: Boolean(p.isAgeVerified),
+              bidderApprovalStatus: p.bidderApprovalStatus || prev?.bidderApprovalStatus || "unregistered",
+              bidderLevel: p.bidderLevel || prev?.bidderLevel || "level_1_registered",
             }));
             setEditName(p.name || name);
             setEditEmail(p.email || email);
@@ -393,6 +410,20 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
         } catch (oErr) {
           // fallback to cached orders
         }
+        // Fetch dynamic admin settings from /settings/public
+        try {
+          const setRes = await axios.get(`${API_BASE}/settings/public`, { timeout: 5000 });
+          if (setRes.data) setKycSettings(setRes.data);
+        } catch (sErr) {}
+
+        // Fetch fresh bidder status
+        try {
+          const bidderRes = await axios.get(`${API_BASE}/auction/bidder/status`, {
+            headers: { Authorization: `Bearer ${storedToken}` },
+            timeout: 5000,
+          });
+          if (bidderRes.data) setBidderProfile(bidderRes.data);
+        } catch (bdErr) {}
       } else {
         // GUEST: Clear all user state and counts
         setUser(null);
@@ -470,10 +501,16 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
       loadUserData();
     });
 
+    const subUserAgeVerified = DeviceEventEmitter.addListener("userAgeVerified", (data) => {
+      console.log("[CustomerDashboard] userAgeVerified event received! Refreshing...", data);
+      loadUserData();
+    });
+
     return () => {
       subWishlist.remove();
       subUserLogin.remove();
       subUserLogout.remove();
+      subUserAgeVerified.remove();
     };
   }, [loadUserData]);
 
@@ -774,7 +811,9 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
                 "userEmail",
                 "userPhone",
                 "customerBankDetails",
-                "userOrders"
+                "userOrders",
+                "isAgeVerified",
+                "grand-store-age-verified",
               ]);
               DeviceEventEmitter.emit("userLoggedOut");
               showMessage("Logged out successfully");
@@ -1095,6 +1134,28 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
     );
   }
 
+  const isKycPending = Boolean(
+    user?.bidderApprovalStatus === "pending_approval" ||
+    bidderProfile?.bidderApprovalStatus === "pending_approval" ||
+    bidderProfile?.isPending === true
+  );
+  const isKycVerified = !isKycPending && Boolean(
+    user?.bidderApprovalStatus === "approved" ||
+    bidderProfile?.bidderApprovalStatus === "approved" ||
+    bidderProfile?.isVerified === true ||
+    (user?.isAgeVerified === true && user?.bidderApprovalStatus !== "pending_approval" && user?.bidderApprovalStatus !== "rejected") ||
+    (["level_2_verified", "level_3_enhanced", "level_4_vip"].includes(user?.bidderLevel)) ||
+    (["level_2_verified", "level_3_enhanced", "level_4_vip"].includes(bidderProfile?.bidderLevel))
+  );
+  const isKycRejected = Boolean(
+    !isKycVerified &&
+    !isKycPending &&
+    (bidderProfile?.bidderApprovalStatus === "rejected" ||
+      user?.bidderApprovalStatus === "rejected")
+  );
+  const isKycUnregistered = !isKycVerified && !isKycPending && !isKycRejected;
+  const minKycAge = kycSettings?.bidderKycMinAge || 18;
+
   return (
     <View style={styles.container}>
       {/* Fixed Luxury Header */}
@@ -1163,18 +1224,240 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
           </View>
         </LinearGradient>
 
-        {/* 18+ Age & CPA Verified Strip */}
-        <View style={styles.trustBanner}>
-          <Text style={styles.trustBannerIcon}>⚖️</Text>
-          <View style={{ flex: 1, marginLeft: 10 }}>
-            <Text style={styles.trustBannerTitle}>18+ Age & Bidder Verified</Text>
-            <Text style={styles.trustBannerSub}>
-              CPA Escrow Protection • Authorized Live Auction Bidder
-            </Text>
+        {/* 18+ Legal Age & Identity Verification (KYC) Card */}
+        <View style={styles.kycCardContainer}>
+          {/* Card Header */}
+          <View style={styles.kycHeaderRow}>
+            <View style={styles.kycHeaderLeft}>
+              <View
+                style={[
+                  styles.kycHeaderBadge,
+                  isKycVerified
+                    ? styles.kycHeaderBadgeVerified
+                    : isKycPending
+                    ? styles.kycHeaderBadgePending
+                    : isKycRejected
+                    ? styles.kycHeaderBadgeRejected
+                    : styles.kycHeaderBadgeUnverified,
+                ]}
+              >
+                <Text style={styles.kycHeaderBadgeIcon}>
+                  {isKycVerified ? "👑" : isKycPending ? "⏱" : isKycRejected ? "✕" : "⚖️"}
+                </Text>
+              </View>
+              <View style={{ flex: 1, marginLeft: 10 }}>
+                <Text style={styles.kycHeaderTitle}>
+                  {minKycAge}+ Legal Age & Identity Verification
+                </Text>
+                <Text style={styles.kycHeaderSubtitle}>
+                  Dual Compliance for Store Wine/Spirits and Live Auctions
+                </Text>
+              </View>
+            </View>
+
+            {/* Status Tag Pill */}
+            <View
+              style={[
+                styles.kycStatusTag,
+                isKycVerified
+                  ? styles.kycStatusTagVerified
+                  : isKycPending
+                  ? styles.kycStatusTagPending
+                  : isKycRejected
+                  ? styles.kycStatusTagRejected
+                  : styles.kycStatusTagUnverified,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.kycStatusTagText,
+                  isKycVerified
+                    ? styles.kycStatusTagTextVerified
+                    : isKycPending
+                    ? styles.kycStatusTagTextPending
+                    : isKycRejected
+                    ? styles.kycStatusTagTextRejected
+                    : styles.kycStatusTagTextUnverified,
+                ]}
+              >
+                {isKycVerified
+                  ? `✓ ${minKycAge}+ Verified`
+                  : isKycPending
+                  ? "⏱ Under Review"
+                  : isKycRejected
+                  ? "✕ Rejected"
+                  : `Not Verified (${minKycAge}+)`}
+              </Text>
+            </View>
           </View>
-          <View style={styles.verifiedTag}>
-            <Text style={styles.verifiedTagText}>Active</Text>
-          </View>
+
+          {/* STATE 1: UNREGISTERED / NOT VERIFIED */}
+          {isKycUnregistered && (
+            <View style={styles.kycUnregisteredWrap}>
+              <Text style={styles.kycExplainerText}>
+                Under South African liquor legislation (National Liquor Act) and auction compliance regulations, complete your legal adult age ({minKycAge}+) verification once. This unlocks pre-cleared store product purchases across all fine wines & spirits, and qualifies your account for live auctions.
+              </Text>
+
+              <View style={styles.kycBenefitsGrid}>
+                {/* Store Purchases Benefit */}
+                <View style={styles.kycBenefitCard}>
+                  <View style={styles.kycBenefitTitleRow}>
+                    <Text style={styles.kycBenefitIcon}>🍷</Text>
+                    <Text style={styles.kycBenefitTitle}>Store Product Purchases</Text>
+                  </View>
+                  <Text style={styles.kycBenefitDesc}>
+                    Clears 18+ liquor compliance. Enjoy 1-click checkout with no document requests.
+                  </Text>
+                  <Text style={styles.kycBenefitBadge}>✓ Required for Fine Spirits</Text>
+                </View>
+
+                {/* Auction Bidding Benefit */}
+                <View style={styles.kycBenefitCard}>
+                  <View style={styles.kycBenefitTitleRow}>
+                    <Text style={styles.kycBenefitIcon}>🏛️</Text>
+                    <Text style={styles.kycBenefitTitle}>Live Auction Bidding</Text>
+                  </View>
+                  <Text style={styles.kycBenefitDesc}>
+                    Assigns your official Public Bidder Number with verified standard limit.
+                  </Text>
+                  <Text style={[styles.kycBenefitBadge, { color: "#c99742" }]}>✓ Bidding Included</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={styles.kycVerifyBtn}
+                onPress={() => setIsVerificationModalVisible(true)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.kycVerifyBtnText}>
+                  Verify {minKycAge}+ Identity (Store & Auctions) →
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* STATE 2: PENDING COMPLIANCE REVIEW */}
+          {isKycPending && (
+            <View style={styles.kycPendingBox}>
+              <View style={styles.kycPendingHeader}>
+                <Text style={styles.kycPendingIcon}>⏱</Text>
+                <Text style={styles.kycPendingTitle}>18+ Identity Verification Under Review</Text>
+              </View>
+              <Text style={styles.kycPendingDesc}>
+                Your official identification document has been securely submitted and is undergoing review by compliance officers. Once approved, your account will be permanently pre-cleared for instant store wine & spirits checkout and live auction bidding.
+              </Text>
+              {(bidderProfile?.bidderNumber || user?.bidderNumber) && (
+                <View style={styles.kycBidderNumberRow}>
+                  <Text style={styles.kycBidderNumberLabel}>Assigned Bidder Number:</Text>
+                  <Text style={styles.kycBidderNumberValue}>
+                    {bidderProfile?.bidderNumber || user?.bidderNumber}
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* STATE 3: REJECTED */}
+          {isKycRejected && (
+            <View style={styles.kycRejectedBox}>
+              <View style={styles.kycRejectedHeader}>
+                <Text style={styles.kycRejectedIcon}>✕</Text>
+                <Text style={styles.kycRejectedTitle}>18+ Verification Application Rejected</Text>
+              </View>
+              <Text style={styles.kycRejectedDesc}>
+                {bidderProfile?.bidderRejectionReason ||
+                  user?.bidderRejectionReason ||
+                  "Your submitted identification documents could not be validated."}
+              </Text>
+              <TouchableOpacity
+                style={styles.kycResubmitBtn}
+                onPress={() => setIsVerificationModalVisible(true)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.kycResubmitBtnText}>
+                  Re-submit 18+ Verification Documents →
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* STATE 4: APPROVED / VERIFIED */}
+          {isKycVerified && (
+            <View style={styles.kycVerifiedGrid}>
+              <View style={styles.kycMetricCard}>
+                <Text style={styles.kycMetricLabel}>STORE ORDERS</Text>
+                <Text style={styles.kycMetricValueSuccess}>✓ 18+ Pre-Cleared</Text>
+                <Text style={styles.kycMetricSub}>Instant Spirit Checkout</Text>
+              </View>
+              <View style={styles.kycMetricCard}>
+                <Text style={styles.kycMetricLabel}>BIDDER NUMBER</Text>
+                <Text style={styles.kycMetricValueGold}>
+                  {bidderProfile?.bidderNumber || user?.bidderNumber || "GS-B1088"}
+                </Text>
+                <Text style={styles.kycMetricSub}>Live Auctions Active</Text>
+              </View>
+              <View style={styles.kycMetricCard}>
+                <Text style={styles.kycMetricLabel}>AUCTION TIER</Text>
+                <Text style={styles.kycMetricValue}>
+                  {bidderProfile?.bidderLevel
+                    ? bidderProfile.bidderLevel.replace(/_/g, " ").toUpperCase()
+                    : "STANDARD VERIFIED"}
+                </Text>
+                <Text style={styles.kycMetricSub}>
+                  Limit: R{Number(bidderProfile?.biddingLimit || 50000).toLocaleString()}
+                </Text>
+              </View>
+              <View style={styles.kycMetricCard}>
+                <Text style={styles.kycMetricLabel}>DEPOSIT STATUS</Text>
+                <Text
+                  style={[
+                    styles.kycMetricValue,
+                    bidderProfile?.bidderDepositStatus === "paid" && { color: "#34d399" },
+                  ]}
+                >
+                  {bidderProfile?.bidderDepositStatus === "paid"
+                    ? `R${Number(bidderProfile.bidderDepositAmount || 5000).toLocaleString()} (Paid)`
+                    : bidderProfile?.bidderDepositStatus === "pending"
+                    ? "Under Review"
+                    : "None Required"}
+                </Text>
+                <Text style={styles.kycMetricSub}>100% Escrow Protected</Text>
+              </View>
+            </View>
+          )}
+
+          {/* VIP Escrow Upgrade CTA */}
+          <TouchableOpacity
+            style={styles.kycVipUpgradeBtn}
+            onPress={() => navigation.navigate("AuctionVipCheckout", { user })}
+            activeOpacity={0.88}
+          >
+            <LinearGradient
+              colors={["#2b1f09", "#1a1306", "#0f0c05"]}
+              style={styles.kycVipUpgradeGrad}
+            >
+              <View style={styles.kycVipUpgradeLeft}>
+                <Text style={styles.kycVipUpgradeCrown}>👑</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.kycVipUpgradeTitle}>
+                    {bidderProfile?.bidderDepositStatus === "paid"
+                      ? "VIP Escrow Guarantee Active (R5,000)"
+                      : "VIP Bidding Privilege • R5,000 Refundable Escrow"}
+                  </Text>
+                  <Text style={styles.kycVipUpgradeSub}>
+                    {bidderProfile?.bidderDepositStatus === "paid"
+                      ? "Escrow deposit held securely. R250,000+ certified bidding limit unlocked."
+                      : "Deposit R5,000 into escrow to unlock unlimited auction lots. 100% refundable."}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.kycVipUpgradePill}>
+                <Text style={styles.kycVipUpgradePillText}>
+                  {bidderProfile?.bidderDepositStatus === "paid" ? "VIEW ESCROW" : "DEPOSIT →"}
+                </Text>
+              </View>
+            </LinearGradient>
+          </TouchableOpacity>
         </View>
 
         {/* Super Coins Loyalty Quick Card */}
@@ -3016,6 +3299,19 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
           </View>
         </View>
       </Modal>
+
+      {/* 18+ Legal Age & Identity Verification Modal (Admin-Configured Fields) */}
+      <BidderVerificationModal
+        visible={isVerificationModalVisible}
+        onClose={() => setIsVerificationModalVisible(false)}
+        onSuccess={() => {
+          setIsVerificationModalVisible(false);
+          loadUserData();
+        }}
+        user={user}
+        token={userToken}
+        bidderProfile={bidderProfile}
+      />
     </View>
   );
 };
@@ -3128,39 +3424,312 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
-  trustBanner: {
+  kycCardContainer: {
+    backgroundColor: "#110f0c",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.35)",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 18,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  kycHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(16, 185, 129, 0.08)",
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.08)",
+    paddingBottom: 12,
+    marginBottom: 12,
+  },
+  kycHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  kycHeaderBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  kycHeaderBadgeVerified: {
+    backgroundColor: "rgba(16, 185, 129, 0.15)",
     borderWidth: 1,
-    borderColor: "rgba(16, 185, 129, 0.3)",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 16,
+    borderColor: "rgba(16, 185, 129, 0.4)",
   },
-  trustBannerIcon: {
-    fontSize: 20,
+  kycHeaderBadgePending: {
+    backgroundColor: "rgba(245, 158, 11, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.4)",
   },
-  trustBannerTitle: {
-    color: "#34d399",
-    fontSize: 12,
-    fontWeight: "800",
+  kycHeaderBadgeRejected: {
+    backgroundColor: "rgba(239, 68, 68, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.4)",
   },
-  trustBannerSub: {
-    color: "#9ca3af",
-    fontSize: 11,
+  kycHeaderBadgeUnverified: {
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
+  },
+  kycHeaderBadgeIcon: {
+    fontSize: 18,
+  },
+  kycHeaderTitle: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  kycHeaderSubtitle: {
+    color: "#888",
+    fontSize: 10.5,
     marginTop: 2,
   },
-  verifiedTag: {
-    backgroundColor: "rgba(16, 185, 129, 0.2)",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4,
+  kycStatusTag: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginLeft: 8,
   },
-  verifiedTagText: {
-    color: "#34d399",
-    fontSize: 10,
+  kycStatusTagVerified: {
+    backgroundColor: "rgba(16, 185, 129, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(16, 185, 129, 0.35)",
+  },
+  kycStatusTagPending: {
+    backgroundColor: "rgba(245, 158, 11, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.35)",
+  },
+  kycStatusTagRejected: {
+    backgroundColor: "rgba(239, 68, 68, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.35)",
+  },
+  kycStatusTagUnverified: {
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
+  },
+  kycStatusTagText: {
+    fontSize: 10.5,
     fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  kycStatusTagTextVerified: {
+    color: "#34d399",
+  },
+  kycStatusTagTextPending: {
+    color: "#fbbf24",
+  },
+  kycStatusTagTextRejected: {
+    color: "#f87171",
+  },
+  kycStatusTagTextUnverified: {
+    color: "#aaa",
+  },
+  kycUnregisteredWrap: {
+    paddingTop: 2,
+  },
+  kycExplainerText: {
+    color: "rgba(255, 255, 255, 0.7)",
+    fontSize: 11.5,
+    lineHeight: 16,
+    marginBottom: 12,
+  },
+  kycBenefitsGrid: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 14,
+  },
+  kycBenefitCard: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    borderRadius: 12,
+    padding: 10,
+  },
+  kycBenefitTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  kycBenefitIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  kycBenefitTitle: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "700",
+    flex: 1,
+  },
+  kycBenefitDesc: {
+    color: "#888",
+    fontSize: 10,
+    lineHeight: 14,
+    marginBottom: 6,
+  },
+  kycBenefitBadge: {
+    color: "#34d399",
+    fontSize: 9.5,
+    fontWeight: "800",
+  },
+  kycVerifyBtn: {
+    backgroundColor: "#c99742",
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#c99742",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  kycVerifyBtnText: {
+    color: "#000",
+    fontSize: 11.5,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+  },
+  kycPendingBox: {
+    backgroundColor: "rgba(245, 158, 11, 0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.2)",
+    borderRadius: 12,
+    padding: 12,
+  },
+  kycPendingHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  kycPendingIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  kycPendingTitle: {
+    color: "#fbbf24",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  kycPendingDesc: {
+    color: "rgba(255, 255, 255, 0.7)",
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  kycBidderNumberRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(245, 158, 11, 0.15)",
+  },
+  kycBidderNumberLabel: {
+    color: "#888",
+    fontSize: 10.5,
+    marginRight: 6,
+  },
+  kycBidderNumberValue: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "800",
+    fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
+  },
+  kycRejectedBox: {
+    backgroundColor: "rgba(239, 68, 68, 0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.25)",
+    borderRadius: 12,
+    padding: 12,
+  },
+  kycRejectedHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  kycRejectedIcon: {
+    fontSize: 14,
+    marginRight: 6,
+    color: "#f87171",
+  },
+  kycRejectedTitle: {
+    color: "#f87171",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  kycRejectedDesc: {
+    color: "rgba(255, 255, 255, 0.7)",
+    fontSize: 11,
+    lineHeight: 15,
+    marginBottom: 10,
+  },
+  kycResubmitBtn: {
+    backgroundColor: "rgba(239, 68, 68, 0.2)",
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.4)",
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  kycResubmitBtnText: {
+    color: "#f87171",
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  kycVerifiedGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  kycMetricCard: {
+    width: "48.5%",
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+    borderRadius: 10,
+    padding: 10,
+  },
+  kycMetricLabel: {
+    color: "#777",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    marginBottom: 3,
+  },
+  kycMetricValue: {
+    color: "#fff",
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+  kycMetricValueSuccess: {
+    color: "#34d399",
+    fontSize: 11.5,
+    fontWeight: "800",
+  },
+  kycMetricValueGold: {
+    color: "#f5c242",
+    fontSize: 12,
+    fontWeight: "800",
+    fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
+  },
+  kycMetricSub: {
+    color: "#666",
+    fontSize: 9.5,
+    marginTop: 2,
   },
   kpiGrid: {
     flexDirection: "row",
@@ -4998,6 +5567,52 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: "rgba(255, 255, 255, 0.06)",
     marginVertical: 14,
+  },
+  kycVipUpgradeBtn: {
+    marginTop: 12,
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(212, 175, 55, 0.35)",
+  },
+  kycVipUpgradeGrad: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 12,
+  },
+  kycVipUpgradeLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    gap: 8,
+  },
+  kycVipUpgradeCrown: {
+    fontSize: 20,
+  },
+  kycVipUpgradeTitle: {
+    color: "#ffd700",
+    fontSize: 11.5,
+    fontWeight: "bold",
+  },
+  kycVipUpgradeSub: {
+    color: "rgba(255, 255, 255, 0.65)",
+    fontSize: 9.5,
+    marginTop: 2,
+    lineHeight: 13,
+  },
+  kycVipUpgradePill: {
+    backgroundColor: "#d4af37",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginLeft: 8,
+  },
+  kycVipUpgradePillText: {
+    color: "#000",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.8,
   },
 });
 

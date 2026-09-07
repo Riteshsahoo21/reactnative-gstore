@@ -20,10 +20,12 @@ import {
   Linking,
   Platform,
   Easing,
+  DeviceEventEmitter,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import AppHeader from "../../widgets/AppHeader";
+import BidderVerificationModal from "./BidderVerificationModal";
 import {
   API_BASE,
   getActiveServerHost,
@@ -327,16 +329,6 @@ export default function AuctionLotDetails({ route, navigation }) {
   const [verificationModalOpen, setVerificationModalOpen] = useState(false);
   const [showCalendarFullSpecs, setShowCalendarFullSpecs] = useState(false);
 
-  // Verification Form Inputs
-  const [verifyForm, setVerifyForm] = useState({
-    legalName: "",
-    idType: "national_id",
-    idNumber: "",
-    dob: "",
-    phone: "",
-  });
-  const [verifying, setVerifying] = useState(false);
-
   // 1-second precision anti-sniping clock ticker
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -373,9 +365,6 @@ export default function AuctionLotDetails({ route, navigation }) {
       if (stored) {
         parsed = JSON.parse(stored);
         setUser(parsed);
-        if (parsed.name) {
-          setVerifyForm((prev) => ({ ...prev, legalName: parsed.name, phone: parsed.phone || "" }));
-        }
       }
 
       const activeToken = parsed?.token || storedToken || null;
@@ -383,19 +372,29 @@ export default function AuctionLotDetails({ route, navigation }) {
         setToken(activeToken);
       }
 
-      // If user is already approved as a bidder or 18+ age verified in database session,
-      // bootstrap bidderProfile so bidding works immediately without delay or false prompts.
-      const isApproved =
+      // Strict check: pending status must never be bypassed by local session
+      const isPending = Boolean(parsed?.bidderApprovalStatus === "pending_approval");
+      const isApproved = !isPending && Boolean(
         parsed?.bidderApprovalStatus === "approved" ||
-        parsed?.isAgeVerified === true ||
-        (parsed?.bidderLevel && parsed.bidderLevel !== "none");
+        (parsed?.isAgeVerified === true && parsed?.bidderApprovalStatus !== "pending_approval" && parsed?.bidderApprovalStatus !== "rejected") ||
+        (['level_2_verified', 'level_3_enhanced', 'level_4_vip'].includes(parsed?.bidderLevel))
+      );
 
       console.log('[AuctionLotDetails] loadStoredUser: parsed =', parsed ? { email: parsed.email, bidderApprovalStatus: parsed.bidderApprovalStatus, isAgeVerified: parsed.isAgeVerified, bidderLevel: parsed.bidderLevel } : 'NULL', 'storedToken =', storedToken ? 'YES' : 'NO');
 
-      if (isApproved) {
+      if (isPending) {
+        setBidderProfile((prev) => ({
+          ...(prev || {}),
+          isVerified: false,
+          isPending: true,
+          bidderApprovalStatus: "pending_approval",
+          biddingLimit: 0,
+        }));
+      } else if (isApproved) {
         setBidderProfile((prev) => ({
           ...(prev || {}),
           isVerified: true,
+          isPending: false,
           bidderApprovalStatus: parsed?.bidderApprovalStatus || "approved",
           biddingLimit: parsed?.biddingLimit || prev?.biddingLimit || 25000,
           bidderLevel: parsed?.bidderLevel || prev?.bidderLevel || "level_2_verified",
@@ -424,7 +423,7 @@ export default function AuctionLotDetails({ route, navigation }) {
         setBidderProfile(data);
 
         // Synchronize local session with fresh server verification data
-        if (data.isVerified) {
+        if (data.isVerified && data.bidderApprovalStatus !== "pending_approval") {
           AsyncStorage.setItem("isAgeVerified", "true").catch(() => {});
           AsyncStorage.setItem("grand-store-age-verified", "true").catch(() => {});
           try {
@@ -436,6 +435,21 @@ export default function AuctionLotDetails({ route, navigation }) {
               u.bidderLevel = data.bidderLevel || "level_2_verified";
               u.biddingLimit = data.biddingLimit || 50000;
               u.bidderNumber = data.bidderNumber;
+              await AsyncStorage.setItem("userInfo", JSON.stringify(u));
+              setUser(u);
+            }
+          } catch (storageErr) {}
+        } else {
+          AsyncStorage.removeItem("isAgeVerified").catch(() => {});
+          AsyncStorage.removeItem("grand-store-age-verified").catch(() => {});
+          try {
+            const raw = await AsyncStorage.getItem("userInfo");
+            if (raw) {
+              const u = JSON.parse(raw);
+              u.isAgeVerified = false;
+              if (data.bidderApprovalStatus) {
+                u.bidderApprovalStatus = data.bidderApprovalStatus;
+              }
               await AsyncStorage.setItem("userInfo", JSON.stringify(u));
               setUser(u);
             }
@@ -480,7 +494,20 @@ export default function AuctionLotDetails({ route, navigation }) {
 
   useEffect(() => {
     loadStoredUser();
-  }, []);
+
+    const sub = DeviceEventEmitter.addListener("userAgeVerified", () => {
+      loadStoredUser();
+      if (token) {
+        fetchBidderStatus(token);
+      }
+    });
+
+    return () => {
+      if (sub && typeof sub.remove === "function") {
+        sub.remove();
+      }
+    };
+  }, [token]);
 
   useEffect(() => {
     if (token) {
@@ -499,16 +526,19 @@ export default function AuctionLotDetails({ route, navigation }) {
     user && lot?.winner && user._id === (typeof lot.winner === "object" ? lot.winner._id : lot.winner)
   );
 
-  const isUserVerified = Boolean(
-    bidderProfile?.isVerified === true ||
-    user?.bidderApprovalStatus === "approved" ||
-    user?.isAgeVerified === true ||
-    (user?.bidderLevel && user.bidderLevel !== "none" && user.bidderLevel !== "unregistered")
-  );
-
   const isUserPending = Boolean(
     bidderProfile?.isPending === true ||
+    bidderProfile?.bidderApprovalStatus === "pending_approval" ||
     user?.bidderApprovalStatus === "pending_approval"
+  );
+
+  const isUserVerified = !isUserPending && Boolean(
+    bidderProfile?.isVerified === true ||
+    bidderProfile?.bidderApprovalStatus === "approved" ||
+    user?.bidderApprovalStatus === "approved" ||
+    (user?.isAgeVerified === true && user?.bidderApprovalStatus !== "pending_approval" && user?.bidderApprovalStatus !== "rejected") ||
+    (['level_2_verified', 'level_3_enhanced', 'level_4_vip'].includes(user?.bidderLevel)) ||
+    (['level_2_verified', 'level_3_enhanced', 'level_4_vip'].includes(bidderProfile?.bidderLevel))
   );
 
   const activeIncrement = lot?.bidIncrement || getDynamicIncrement(lot?.currentBid || 0);
@@ -556,25 +586,29 @@ export default function AuctionLotDetails({ route, navigation }) {
       return;
     }
 
-    // Check verification: profile status OR user status in session
-    const isVerified =
-      bidderProfile?.isVerified === true ||
-      user?.bidderApprovalStatus === "approved" ||
-      user?.isAgeVerified === true ||
-      (user?.bidderLevel && user.bidderLevel !== "none");
-
     const isPending =
       bidderProfile?.isPending === true ||
+      bidderProfile?.bidderApprovalStatus === "pending_approval" ||
       user?.bidderApprovalStatus === "pending_approval";
 
+    const isVerified = !isPending && Boolean(
+      bidderProfile?.isVerified === true ||
+      bidderProfile?.bidderApprovalStatus === "approved" ||
+      user?.bidderApprovalStatus === "approved" ||
+      (user?.isAgeVerified === true && user?.bidderApprovalStatus !== "pending_approval" && user?.bidderApprovalStatus !== "rejected") ||
+      (['level_2_verified', 'level_3_enhanced', 'level_4_vip'].includes(user?.bidderLevel)) ||
+      (['level_2_verified', 'level_3_enhanced', 'level_4_vip'].includes(bidderProfile?.bidderLevel))
+    );
+
+    if (isPending) {
+      Alert.alert(
+        "Verification Under Review",
+        "Your 18+ bidder verification application has been submitted and is currently undergoing compliance review by our verification team. You will be cleared to bid once approved."
+      );
+      return;
+    }
+
     if (!isVerified) {
-      if (isPending) {
-        Alert.alert(
-          "Verification Pending",
-          "Your 18+ bidder verification application is currently undergoing administrator review. You will be cleared to bid once approved."
-        );
-        return;
-      }
       setVerificationModalOpen(true);
       return;
     }
@@ -592,7 +626,14 @@ export default function AuctionLotDetails({ route, navigation }) {
     if (effectiveLimit > 0 && amt > effectiveLimit) {
       Alert.alert(
         "Bidding Limit Exceeded",
-        `Your bid of R${amt.toLocaleString()} exceeds your current certified limit of R${effectiveLimit.toLocaleString()}. Upgrade to VIP Bidding to lift this ceiling.`
+        `Your bid of R${amt.toLocaleString("en-ZA")} exceeds your current certified limit of R${effectiveLimit.toLocaleString("en-ZA")}. Upgrade to VIP Bidding with a refundable escrow deposit of R5,000 to unlock limits of R250,000+.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Upgrade to VIP",
+            onPress: () => navigation.navigate("AuctionVipCheckout", { user, returnScreen: "AuctionLotDetails" }),
+          },
+        ]
       );
       return;
     }
@@ -648,41 +689,6 @@ export default function AuctionLotDetails({ route, navigation }) {
       setConfirmModalOpen(false);
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const handleVerifySubmit = async () => {
-    if (!verifyForm.legalName || !verifyForm.idNumber) {
-      Alert.alert("Required Fields", "Please supply your legal full name and identity number.");
-      return;
-    }
-    setVerifying(true);
-    try {
-      const activeToken = token || (await AsyncStorage.getItem("userToken"));
-      const res = await safeFetch("/auction/bidder/verify", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${activeToken}`,
-        },
-        body: JSON.stringify(verifyForm),
-      });
-
-      if (res && res.ok) {
-        Alert.alert(
-          "Verification Submitted",
-          "Your 18+ legal bidder credentials have been submitted for compliance verification. You will receive an alert once verified."
-        );
-        setVerificationModalOpen(false);
-        fetchBidderStatus(activeToken);
-      } else {
-        const err = res ? await res.json().catch(() => ({})) : {};
-        Alert.alert("Submission Failed", err.message || "Could not submit verification.");
-      }
-    } catch (e) {
-      Alert.alert("Error", "Connection error. Please retry.");
-    } finally {
-      setVerifying(false);
     }
   };
 
@@ -976,7 +982,7 @@ export default function AuctionLotDetails({ route, navigation }) {
               <TouchableOpacity
                 style={styles.downloadCertBtn}
                 onPress={() => {
-                  const certUrl = `https://grandstoreglobal.com/api/auction/${lot._id}/certificate`;
+                  const certUrl = `https://api.grandstoreglobal.com/api/auction/${lot._id}/certificate`;
                   Linking.openURL(certUrl).catch(err => console.warn('Could not open certificate URL:', err));
                 }}
                 activeOpacity={0.8}
@@ -1031,24 +1037,54 @@ export default function AuctionLotDetails({ route, navigation }) {
             </View>
 
             {/* Bidder Profile Status Banner */}
-            {isUserVerified ? (
-              <View style={styles.verifiedBidderBox}>
-                <View style={styles.verifiedBidderHeader}>
-                  <Text style={styles.verifiedCheckmark}>✓</Text>
-                  <Text style={styles.verifiedTitle}>
-                    18+ Certified Bidder • Limit: R{(bidderProfile?.biddingLimit || user?.biddingLimit || 25000).toLocaleString("en-ZA")}
-                  </Text>
+            {isUserPending ? (
+              <View style={styles.pendingStatusBox}>
+                <View style={styles.pendingStatusHeaderRow}>
+                  <Text style={styles.pendingStatusIcon}>⏳</Text>
+                  <Text style={styles.pendingStatusTitle}>18+ Verification Under Review</Text>
                 </View>
-                <Text style={styles.verifiedDesc}>
-                  Your account is fully authenticated for live auction bidding.
+                <Text style={styles.pendingStatusDesc}>
+                  Your national ID / passport verification has been submitted and is currently undergoing compliance review. Live bidding will unlock as soon as administrator approval is granted.
                 </Text>
               </View>
-            ) : isUserPending ? (
-              <View style={styles.pendingStatusBox}>
-                <Text style={styles.pendingStatusTitle}>⏳ Application Pending Review</Text>
-                <Text style={styles.pendingStatusDesc}>
-                  Your 18+ verification is undergoing administrator compliance check.
-                </Text>
+            ) : isUserVerified ? (
+              <View>
+                <View style={styles.verifiedBidderBox}>
+                  <View style={styles.verifiedBidderHeader}>
+                    <Text style={styles.verifiedCheckmark}>✓</Text>
+                    <Text style={styles.verifiedTitle}>
+                      18+ Certified Bidder • Limit: R{(bidderProfile?.biddingLimit || user?.biddingLimit || 25000).toLocaleString("en-ZA")}
+                    </Text>
+                  </View>
+                  <Text style={styles.verifiedDesc}>
+                    Your account is fully authenticated for live auction bidding.
+                  </Text>
+                </View>
+
+                {/* VIP Tier Upgrade Banner (if not already VIP level 4) */}
+                {Boolean(
+                  bidderProfile?.bidderLevel !== "level_4_vip" &&
+                  user?.bidderLevel !== "level_4_vip"
+                ) && (
+                  <TouchableOpacity
+                    style={styles.vipUpgradeBanner}
+                    activeOpacity={0.88}
+                    onPress={() => navigation.navigate("AuctionVipCheckout", { user, returnScreen: "AuctionLotDetails" })}
+                  >
+                    <View style={styles.vipBannerLeft}>
+                      <Text style={styles.vipBannerCrown}>👑</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.vipBannerTitle}>Upgrade to VIP Bidding</Text>
+                        <Text style={styles.vipBannerSubtitle}>
+                          R5,000 Refundable Escrow Deposit • Unlock R250,000+ Limit
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.vipBannerCtaBadge}>
+                      <Text style={styles.vipBannerCtaText}>UPGRADE →</Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
               </View>
             ) : (
               <TouchableOpacity
@@ -1074,9 +1110,10 @@ export default function AuctionLotDetails({ route, navigation }) {
               {[500, 1000, 2500, 5000].map((inc) => (
                 <TouchableOpacity
                   key={inc}
-                  style={styles.quickChip}
-                  onPress={() => applyQuickIncrement(inc)}
-                  activeOpacity={0.7}
+                  style={[styles.quickChip, isUserPending && { opacity: 0.4 }]}
+                  onPress={() => !isUserPending && applyQuickIncrement(inc)}
+                  activeOpacity={isUserPending ? 1 : 0.7}
+                  disabled={isUserPending}
                 >
                   <Text style={styles.quickChipText}>+R{inc.toLocaleString()}</Text>
                 </TouchableOpacity>
@@ -1084,7 +1121,7 @@ export default function AuctionLotDetails({ route, navigation }) {
             </View>
 
             {/* Bid Input Box */}
-            <View style={styles.inputContainer}>
+            <View style={[styles.inputContainer, isUserPending && { opacity: 0.5 }]}>
               <Text style={styles.currencyPrefix}>ZAR (R)</Text>
               <TextInput
                 style={styles.bidInput}
@@ -1093,14 +1130,16 @@ export default function AuctionLotDetails({ route, navigation }) {
                 onChangeText={setBidAmount}
                 placeholder={`Min: ${nextMinimum.toLocaleString("en-ZA")}`}
                 placeholderTextColor="#555"
+                editable={!isUserPending}
               />
             </View>
 
             {/* Max Auto-Bid Toggle */}
             <TouchableOpacity
-              style={styles.maxBidRow}
-              onPress={() => setIsMaxBid(!isMaxBid)}
-              activeOpacity={0.8}
+              style={[styles.maxBidRow, isUserPending && { opacity: 0.5 }]}
+              onPress={() => !isUserPending && setIsMaxBid(!isMaxBid)}
+              activeOpacity={isUserPending ? 1 : 0.8}
+              disabled={isUserPending}
             >
               <View style={[styles.checkbox, isMaxBid && styles.checkboxActive]}>
                 {isMaxBid && <Text style={styles.checkmark}>✓</Text>}
@@ -1115,13 +1154,18 @@ export default function AuctionLotDetails({ route, navigation }) {
 
             {/* Submit Bid Button */}
             <TouchableOpacity
-              style={styles.submitBidBtn}
+              style={[styles.submitBidBtn, isUserPending && styles.submitBidBtnDisabled]}
               onPress={handleOpenBidConfirm}
-              activeOpacity={0.88}
+              activeOpacity={isUserPending ? 0.9 : 0.88}
             >
-              <LinearGradient colors={["#ffd700", "#d4af37", "#997520"]} style={styles.submitBidGradient}>
-                <Text style={styles.submitBidText}>
-                  SUBMIT BID • R{Number(bidAmount || nextMinimum).toLocaleString("en-ZA")} →
+              <LinearGradient
+                colors={isUserPending ? ["#2b2210", "#1e170b", "#141007"] : ["#ffd700", "#d4af37", "#997520"]}
+                style={styles.submitBidGradient}
+              >
+                <Text style={[styles.submitBidText, isUserPending && styles.submitBidTextDisabled]}>
+                  {isUserPending
+                    ? "⏳ 18+ VERIFICATION UNDER REVIEW • LOCKED"
+                    : `SUBMIT BID • R${Number(bidAmount || nextMinimum).toLocaleString("en-ZA")} →`}
                 </Text>
               </LinearGradient>
             </TouchableOpacity>
@@ -1324,74 +1368,20 @@ export default function AuctionLotDetails({ route, navigation }) {
         </View>
       </Modal>
 
-      {/* 18+ BIDDER VERIFICATION MODAL */}
-      <Modal visible={verificationModalOpen} transparent animationType="slide">
-        <View style={styles.modalBackdrop}>
-          <View style={styles.verificationModalCard}>
-            <Text style={styles.modalPre}>REGULATORY COMPLIANCE</Text>
-            <Text style={styles.modalTitle}>18+ Bidder Legal Qualification</Text>
-            <Text style={styles.modalDesc}>
-              South African CPA & liquor auction regulations require verified legal identification prior to participating in rare fine spirit auctions.
-            </Text>
-
-            <View style={styles.verifyInputGroup}>
-              <Text style={styles.verifyInputLabel}>FULL LEGAL NAME</Text>
-              <TextInput
-                style={styles.verifyTextInput}
-                value={verifyForm.legalName}
-                onChangeText={(text) => setVerifyForm((prev) => ({ ...prev, legalName: text }))}
-                placeholder="As shown on official ID"
-                placeholderTextColor="#666"
-              />
-            </View>
-
-            <View style={styles.verifyInputGroup}>
-              <Text style={styles.verifyInputLabel}>NATIONAL ID / PASSPORT NUMBER</Text>
-              <TextInput
-                style={styles.verifyTextInput}
-                value={verifyForm.idNumber}
-                onChangeText={(text) => setVerifyForm((prev) => ({ ...prev, idNumber: text }))}
-                placeholder="e.g. 9001015009087 or Passport Ref"
-                placeholderTextColor="#666"
-              />
-            </View>
-
-            <View style={styles.verifyInputGroup}>
-              <Text style={styles.verifyInputLabel}>DATE OF BIRTH (DD/MM/YYYY)</Text>
-              <TextInput
-                style={styles.verifyTextInput}
-                value={verifyForm.dob}
-                onChangeText={(text) => setVerifyForm((prev) => ({ ...prev, dob: text }))}
-                placeholder="Must be 18 or older"
-                placeholderTextColor="#666"
-              />
-            </View>
-
-            <View style={styles.modalActionsRow}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setVerificationModalOpen(false)}
-                disabled={verifying}
-              >
-                <Text style={styles.modalCancelText}>CLOSE</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.modalConfirmBtn}
-                onPress={handleVerifySubmit}
-                disabled={verifying}
-                activeOpacity={0.85}
-              >
-                {verifying ? (
-                  <ActivityIndicator color="#000" size="small" />
-                ) : (
-                  <Text style={styles.modalConfirmText}>SUBMIT VERIFICATION</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* 18+ DYNAMIC ADMIN BIDDER VERIFICATION MODAL */}
+      <BidderVerificationModal
+        visible={verificationModalOpen}
+        onClose={() => setVerificationModalOpen(false)}
+        onSuccess={(data) => {
+          setVerificationModalOpen(false);
+          const activeTok = token || data?.token;
+          if (activeTok) fetchBidderStatus(activeTok);
+          loadStoredUser();
+        }}
+        user={user}
+        token={token}
+        bidderProfile={bidderProfile}
+      />
 
       {/* AUCTION WINNER VICTORY CELEBRATION MODAL */}
       <Modal visible={showCelebrationModal} transparent animationType="fade">
@@ -2134,6 +2124,59 @@ const styles = StyleSheet.create({
     color: "rgba(251, 191, 36, 0.8)",
     fontSize: 10,
   },
+  pendingStatusHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 4,
+  },
+  pendingStatusIcon: {
+    fontSize: 14,
+  },
+  vipUpgradeBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(212, 175, 55, 0.12)",
+    borderColor: "rgba(212, 175, 55, 0.4)",
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  vipBannerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    gap: 8,
+  },
+  vipBannerCrown: {
+    fontSize: 18,
+  },
+  vipBannerTitle: {
+    color: "#ffd700",
+    fontSize: 11,
+    fontWeight: "bold",
+  },
+  vipBannerSubtitle: {
+    color: "rgba(255, 255, 255, 0.7)",
+    fontSize: 9.5,
+    marginTop: 2,
+  },
+  vipBannerCtaBadge: {
+    backgroundColor: "#d4af37",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    marginLeft: 8,
+  },
+  vipBannerCtaText: {
+    color: "#000",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+  },
   verificationPromptBox: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -2269,6 +2312,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "900",
     letterSpacing: 1.2,
+  },
+  submitBidBtnDisabled: {
+    borderColor: "rgba(245, 158, 11, 0.4)",
+    borderWidth: 1,
+  },
+  submitBidTextDisabled: {
+    color: "#fbbf24",
+    fontSize: 11,
+    fontWeight: "bold",
+    letterSpacing: 0.8,
   },
 
   // 6. Bottle Specifications Grid

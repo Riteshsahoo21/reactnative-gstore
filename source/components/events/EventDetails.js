@@ -547,6 +547,25 @@ export default function EventDetails({ route, navigation }) {
                 setShowPayfastModal(false);
                 setIsPayfastLoading(false);
                 const booked = payfastModalData?.booking;
+                const bookingTargetId = booked?._id || booked?.ticketId;
+                (async () => {
+                  try {
+                    const token = await AsyncStorage.getItem("userToken");
+                    if (bookingTargetId) {
+                      await safeFetch("/payfast/confirm-order", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        },
+                        body: JSON.stringify({ bookingId: bookingTargetId }),
+                      });
+                    }
+                  } catch (e) {
+                    console.log("Error confirming event in onShouldStartLoadWithRequest:", e);
+                  }
+                })();
+
                 Alert.alert(
                   "Payment Confirmed! 🥂",
                   "Your PayFast payment has been processed successfully. Your tasting pass is now confirmed.",

@@ -16,7 +16,8 @@ import LinearGradient from "react-native-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const { width } = Dimensions.get("window");
-export const AGE_VERIFIED_KEY = "grand-store-age-verified";
+export const AGE_VERIFIED_KEY = "grand-store-age-gate-passed";
+export const AGE_GATE_KEY = "grand-store-age-gate-passed";
 
 export default function GlobalAgeVerificationModal() {
   const [isVisible, setIsVisible] = useState(false);
@@ -26,30 +27,13 @@ export default function GlobalAgeVerificationModal() {
   useEffect(() => {
     const checkVerification = async () => {
       try {
-        const [storedWeb, storedLegacy, userToken, userInfoRaw] = await Promise.all([
-          AsyncStorage.getItem(AGE_VERIFIED_KEY),
-          AsyncStorage.getItem("isAgeVerified"),
+        const [gatePassed, userToken] = await Promise.all([
+          AsyncStorage.getItem(AGE_GATE_KEY),
           AsyncStorage.getItem("userToken"),
-          AsyncStorage.getItem("userInfo"),
         ]);
 
-        let isApprovedUser = false;
-        if (userInfoRaw) {
-          try {
-            const u = JSON.parse(userInfoRaw);
-            if (u && (u.isAgeVerified || u.bidderApprovalStatus === "approved" || u.token || userToken)) {
-              isApprovedUser = true;
-            }
-          } catch (err) {}
-        } else if (userToken) {
-          isApprovedUser = true;
-        }
-
-        if (storedWeb === "true" || storedLegacy === "true" || isApprovedUser) {
+        if (gatePassed === "true" || userToken) {
           setIsVisible(false);
-          // Keep both keys in sync
-          AsyncStorage.setItem(AGE_VERIFIED_KEY, "true").catch(() => {});
-          AsyncStorage.setItem("isAgeVerified", "true").catch(() => {});
         } else {
           setIsVisible(true);
         }
@@ -62,10 +46,9 @@ export default function GlobalAgeVerificationModal() {
 
     checkVerification();
 
-    const subLogin = DeviceEventEmitter.addListener("userLoggedIn", (data) => {
+    const subLogin = DeviceEventEmitter.addListener("userLoggedIn", () => {
       setIsVisible(false);
-      AsyncStorage.setItem(AGE_VERIFIED_KEY, "true").catch(() => {});
-      AsyncStorage.setItem("isAgeVerified", "true").catch(() => {});
+      AsyncStorage.setItem(AGE_GATE_KEY, "true").catch(() => {});
     });
 
     return () => {
@@ -75,8 +58,7 @@ export default function GlobalAgeVerificationModal() {
 
   const handleConfirmAge = async () => {
     try {
-      await AsyncStorage.setItem(AGE_VERIFIED_KEY, "true");
-      await AsyncStorage.setItem("isAgeVerified", "true");
+      await AsyncStorage.setItem(AGE_GATE_KEY, "true");
     } catch (e) {
       console.log("Error saving age verification:", e);
     }

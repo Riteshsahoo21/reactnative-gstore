@@ -129,14 +129,24 @@ export default function AuctionsHub({ navigation }) {
       if (userInfoRaw) {
         try {
           const u = JSON.parse(userInfoRaw);
-          const isApproved =
+          const isPending = Boolean(u?.bidderApprovalStatus === "pending_approval");
+          const isApproved = !isPending && Boolean(
             u?.bidderApprovalStatus === "approved" ||
-            u?.isAgeVerified === true ||
-            (u?.bidderLevel && u.bidderLevel !== "none");
+            (u?.isAgeVerified === true && u?.bidderApprovalStatus !== "pending_approval" && u?.bidderApprovalStatus !== "rejected") ||
+            (['level_2_verified', 'level_3_enhanced', 'level_4_vip'].includes(u?.bidderLevel))
+          );
 
-          if (isApproved) {
+          if (isPending) {
+            setBidderStatus({
+              isVerified: false,
+              isPending: true,
+              bidderApprovalStatus: "pending_approval",
+              biddingLimit: 0,
+            });
+          } else if (isApproved) {
             setBidderStatus((prev) => prev || {
               isVerified: true,
+              isPending: false,
               bidderApprovalStatus: u?.bidderApprovalStatus || "approved",
               biddingLimit: u?.biddingLimit || 25000,
               bidderLevel: u?.bidderLevel || "level_2_verified",
@@ -154,7 +164,20 @@ export default function AuctionsHub({ navigation }) {
       });
       if (res && res.ok) {
         const data = await res.json();
-        setBidderStatus(data);
+        const serverPending = Boolean(
+          data?.isPending === true ||
+          data?.bidderApprovalStatus === "pending_approval"
+        );
+        if (serverPending) {
+          setBidderStatus({
+            ...data,
+            isVerified: false,
+            isPending: true,
+            bidderApprovalStatus: "pending_approval",
+          });
+        } else {
+          setBidderStatus(data);
+        }
       }
     } catch (e) {
       // Ignore
@@ -431,20 +454,57 @@ export default function AuctionsHub({ navigation }) {
       {/* Bidder Verification Status Pill */}
       {bidderStatus && (
         <View style={styles.bidderStatusContainer}>
-          <View style={styles.bidderStatusPill}>
+          <View
+            style={[
+              styles.bidderStatusPill,
+              bidderStatus.isPending && styles.bidderStatusPillPending,
+              bidderStatus.isVerified && styles.bidderStatusPillVerified,
+            ]}
+          >
             <Text style={styles.bidderStatusIcon}>
-              {bidderStatus.isVerified ? "✓" : "⚡"}
+              {bidderStatus.isPending ? "⏳" : bidderStatus.isVerified ? "✓" : "⚡"}
             </Text>
-            <Text style={styles.bidderStatusText}>
-              {bidderStatus.isVerified
-                ? `Approved Bidder • ${bidderStatus.bidderNumber || "VIP"} (Limit: R${Number(bidderStatus.biddingLimit || 0).toLocaleString()})`
-                : bidderStatus.isPending
-                ? "Bidder Verification Pending Review"
+            <Text
+              style={[
+                styles.bidderStatusText,
+                bidderStatus.isPending && styles.bidderStatusTextPending,
+                bidderStatus.isVerified && styles.bidderStatusTextVerified,
+              ]}
+            >
+              {bidderStatus.isPending
+                ? "18+ Verification Under Review • Bidding Locked"
+                : bidderStatus.isVerified
+                ? `18+ Certified Bidder • ${bidderStatus.bidderNumber || "VIP"} (Limit: R${Number(bidderStatus.biddingLimit || 25000).toLocaleString("en-ZA")})`
                 : "18+ Bidder Verification Required to Bid"}
             </Text>
           </View>
         </View>
       )}
+
+      {/* VIP Bidding Escrow Deposit Banner */}
+      <TouchableOpacity
+        style={styles.vipEscrowBanner}
+        activeOpacity={0.88}
+        onPress={() => navigation.navigate("AuctionVipCheckout")}
+      >
+        <LinearGradient
+          colors={["#2b200d", "#1c1508", "#120d05"]}
+          style={styles.vipEscrowGradient}
+        >
+          <View style={styles.vipEscrowLeft}>
+            <Text style={styles.vipEscrowCrown}>👑</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.vipEscrowTitle}>VIP Bidding Privilege</Text>
+              <Text style={styles.vipEscrowSubtitle}>
+                R5,000 Refundable Escrow Deposit • Unlock R250,000+ Limit
+              </Text>
+            </View>
+          </View>
+          <View style={styles.vipEscrowBadge}>
+            <Text style={styles.vipEscrowBadgeText}>UPGRADE →</Text>
+          </View>
+        </LinearGradient>
+      </TouchableOpacity>
 
       {/* Catalogue Phase Tabs */}
       <View style={styles.phaseTabsContainer}>
@@ -632,6 +692,69 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: "700",
     flex: 1,
+  },
+  bidderStatusPillPending: {
+    backgroundColor: "rgba(245, 158, 11, 0.12)",
+    borderColor: "rgba(245, 158, 11, 0.35)",
+  },
+  bidderStatusTextPending: {
+    color: "#fbbf24",
+  },
+  bidderStatusPillVerified: {
+    backgroundColor: "rgba(16, 185, 129, 0.1)",
+    borderColor: "rgba(16, 185, 129, 0.3)",
+  },
+  bidderStatusTextVerified: {
+    color: "#34d399",
+  },
+
+  // VIP Escrow Banner
+  vipEscrowBanner: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(212, 175, 55, 0.4)",
+  },
+  vipEscrowGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  vipEscrowLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    gap: 8,
+  },
+  vipEscrowCrown: {
+    fontSize: 20,
+  },
+  vipEscrowTitle: {
+    color: "#ffd700",
+    fontSize: 11.5,
+    fontWeight: "bold",
+  },
+  vipEscrowSubtitle: {
+    color: "rgba(255, 255, 255, 0.7)",
+    fontSize: 9.5,
+    marginTop: 2,
+  },
+  vipEscrowBadge: {
+    backgroundColor: "#d4af37",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginLeft: 8,
+  },
+  vipEscrowBadgeText: {
+    color: "#000",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.8,
   },
 
   // Tabs

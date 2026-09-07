@@ -26,27 +26,32 @@ const metroHost = getMetroHost();
 export const getCandidateBases = () => {
   const list = [];
 
-  // 1. Primary Production Base URL
-  list.push('https://api.grandstoreglobal.com/api');
-
-  // 2. 127.0.0.1 & Localhost (works for physical Android device with ADB reverse & iOS simulator)
-  list.push('http://127.0.0.1:5000/api');
-  list.push('http://localhost:5000/api');
-
-  // 3. Android emulator host loopback
-  if (Platform.OS === 'android') {
-    list.push('http://10.0.2.2:5000/api');
+  if (activeApiBase) {
+    list.push(activeApiBase);
   }
 
-  // 4. Dynamic Metro host if loaded over LAN Wi-Fi
+  // Dynamic Metro host if loaded over LAN Wi-Fi
   if (metroHost) {
     list.push(`http://${metroHost}:5000/api`);
   }
 
-  // 5. Fallback PC LAN IP
+  // Local PC Wi-Fi IPs
+  list.push('http://192.168.1.102:5000/api');
   list.push('http://192.168.1.9:5000/api');
 
-  return [...new Set(list)];
+  // 127.0.0.1 & Localhost (works for physical Android device with ADB reverse & iOS simulator)
+  list.push('http://127.0.0.1:5000/api');
+  list.push('http://localhost:5000/api');
+
+  // Android emulator host loopback
+  if (Platform.OS === 'android') {
+    list.push('http://10.0.2.2:5000/api');
+  }
+
+  // Production Base URL fallback
+  list.push('https://api.grandstoreglobal.com/api');
+
+  return [...new Set(list.filter(Boolean))];
 };
 
 let activeApiBase = 'https://api.grandstoreglobal.com/api';

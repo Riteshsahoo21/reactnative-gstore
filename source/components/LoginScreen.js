@@ -159,8 +159,18 @@ const LoginScreen = ({ navigation, route }) => {
             ...data,
           })
         );
-        await AsyncStorage.setItem('isAgeVerified', 'true');
-        await AsyncStorage.setItem('grand-store-age-verified', 'true');
+        const isActualVerified = Boolean(
+          data.isAgeVerified === true ||
+          data.bidderApprovalStatus === 'approved' ||
+          (data.bidderLevel && ['level_2_verified', 'level_3_enhanced', 'level_4_vip'].includes(data.bidderLevel))
+        );
+        if (isActualVerified) {
+          await AsyncStorage.setItem('isAgeVerified', 'true');
+          await AsyncStorage.setItem('grand-store-age-verified', 'true');
+        } else {
+          await AsyncStorage.removeItem('isAgeVerified').catch(() => {});
+          await AsyncStorage.removeItem('grand-store-age-verified').catch(() => {});
+        }
 
         DeviceEventEmitter.emit('userLoggedIn', data);
         DeviceEventEmitter.emit('cartUpdated', 0);
@@ -364,7 +374,9 @@ const LoginScreen = ({ navigation, route }) => {
 
   // Continue as Guest
   const handleGuestContinue = async () => {
-    await AsyncStorage.setItem('isAgeVerified', 'true');
+    await AsyncStorage.setItem('grand-store-age-gate-passed', 'true').catch(() => {});
+    await AsyncStorage.removeItem('isAgeVerified').catch(() => {});
+    await AsyncStorage.removeItem('grand-store-age-verified').catch(() => {});
     if (navigation.canGoBack()) {
       navigation.goBack();
     } else {

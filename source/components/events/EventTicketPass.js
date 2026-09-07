@@ -18,21 +18,36 @@ import {
   Dimensions,
   Platform,
   StatusBar,
+  Linking,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import AppHeader from "../../widgets/AppHeader";
-import { API_BASE } from "../../resources/data/Constants";
+import {
+  API_BASE,
+  getActiveServerHost,
+  getActiveApiBase,
+  getCandidateBases,
+} from "../../resources/data/Constants";
 
 const { width } = Dimensions.get("window");
 
-const API_CANDIDATES = [
-  API_BASE,
-  "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
-  "http://10.0.2.2:5000/api",
-];
+const getEventApiCandidates = () => {
+  const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : API_BASE;
+  const list = [active];
+  if (typeof getCandidateBases === "function") {
+    list.push(...getCandidateBases());
+  }
+  list.push(
+    API_BASE,
+    "http://127.0.0.1:5000/api",
+    "http://localhost:5000/api",
+    "http://10.0.2.2:5000/api",
+    "http://192.168.1.9:5000/api"
+  );
+  return [...new Set(list.filter(Boolean))];
+};
 
 const escapeHtml = (unsafe) => {
   return String(unsafe || "")
@@ -60,7 +75,8 @@ export default function EventTicketPass({ route, navigation }) {
   const [isPayfastLoading, setIsPayfastLoading] = useState(true);
 
   const safeFetch = async (endpoint, options = {}) => {
-    for (const base of API_CANDIDATES) {
+    const candidates = getEventApiCandidates();
+    for (const base of candidates) {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
@@ -148,22 +164,106 @@ export default function EventTicketPass({ route, navigation }) {
     }
   };
 
+  // Download PDF Ticket Pass
+  const handleDownloadPdf = async (b) => {
+    try {
+      const targetId = b._id || b.ticketId;
+      let host = typeof getActiveServerHost === "function" ? getActiveServerHost() : "https://api.grandstoreglobal.com";
+      if (!host || host === "https://grandstoreglobal.com" || host === "http://grandstoreglobal.com") {
+        host = "https://api.grandstoreglobal.com";
+      }
+      const downloadUrl = `${host}/api/events/bookings/${targetId}/ticket-pdf`;
+      await Linking.openURL(downloadUrl);
+    } catch (err) {
+      console.log("Error opening PDF download link:", err);
+      Alert.alert(
+        "Notice",
+        "Could not open download link directly. You can also view and download the PDF from your confirmation email."
+      );
+    }
+  };
+
+  // Resend Ticket Email with PDF Attachment
+  const handleResendEmail = async (b) => {
+    try {
+      const token = await AsyncStorage.getItem("userToken");
+      const targetId = b._id || b.ticketId;
+      Alert.alert(
+        "Email VIP Pass (PDF)",
+        `Send the printable VIP Pass PDF with scannable QR ticket directly to ${b.customerEmail || "your email address"}?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Send Now ✉️",
+            onPress: async () => {
+              const res = await safeFetch(`/events/bookings/${targetId}/resend-ticket`, {
+                method: "POST",
+                headers: {
+                  Authorization: token ? `Bearer ${token}` : undefined,
+                },
+              });
+              if (res && res.ok) {
+                Alert.alert(
+                  "Pass Dispatched! ✉️",
+                  `Your VIP Pass with scannable QR code and attached PDF has been sent to ${b.customerEmail || "your email address"}. Please check your Gmail Inbox.`
+                );
+              } else {
+                const data = await res?.json().catch(() => ({}));
+                Alert.alert("Notice", data?.message || "Could not resend email at this time.");
+              }
+            },
+          },
+        ]
+      );
+    } catch (e) {
+      Alert.alert("Error", "Could not dispatch ticket email.");
+    }
+  };
+
   // Share or Download Ticket Pass
   const handleShareOrDownloadTicket = async (b) => {
-    try {
-      const eventTitle = b.event?.title || "Private Cellar Tasting";
-      const dateStr = b.event?.date ? new Date(b.event.date).toLocaleDateString("en-ZA") : "";
-      const timeStr = b.event?.startTime || "18:00";
-      const venueStr = b.event?.location || "The Grand Store Private Vault";
-      const shareMsg = `🏆 THE GRAND STORE • VIP PASS\nEvent: ${eventTitle}\nDate: ${dateStr} at ${timeStr}\nVenue: ${venueStr}\nTicket ID: ${b.ticketId}\nBooking Ref: ${b.gsReference || "N/A"}\nTier: ${b.ticketType} (Qty: ${b.quantity})\n\nOfficial scannable QR ticket has also been delivered to your email. Present this pass at reception for cellar access.`;
-      
-      await Share.share({
-        title: `The Grand Store VIP Pass - ${b.ticketId}`,
-        message: shareMsg,
-      });
-    } catch (e) {
-      console.log("Error sharing pass:", e);
-    }
+    Alert.alert(
+      "VIP Access Pass Options",
+      `Ticket ID: ${b.ticketId}\nChoose an action:`,
+      [
+        {
+          text: "Download PDF Pass 📄",
+          onPress: () => handleDownloadPdf(b),
+        },
+        {
+          text: "Email PDF Pass to Gmail ✉️",
+          onPress: () => handleResendEmail(b),
+        },
+        {
+          text: "Share Pass Details 📲",
+          onPress: async () => {
+            try {
+              const eventTitle = b.event?.title || "Private Cellar Tasting";
+              const dateStr = b.event?.date ? new Date(b.event.date).toLocaleDateString("en-ZA") : "";
+              const timeStr = b.event?.startTime || "18:00";
+              const venueStr = b.event?.location || "The Grand Store Private Vault";
+              let host = typeof getActiveServerHost === "function" ? getActiveServerHost() : "https://api.grandstoreglobal.com";
+              if (!host || host === "https://grandstoreglobal.com" || host === "http://grandstoreglobal.com") {
+                host = "https://api.grandstoreglobal.com";
+              }
+              const qrVerificationUrl = `${host}/api/events/bookings/${b._id || b.ticketId}/ticket-pdf`;
+              const shareMsg = `🏆 THE GRAND STORE • VIP PASS\nEvent: ${eventTitle}\nDate: ${dateStr} at ${timeStr}\nVenue: ${venueStr}\nTicket ID: ${b.ticketId}\nBooking Ref: ${b.gsReference || "N/A"}\nTier: ${b.ticketType} (Qty: ${b.quantity})\n\nOfficial PDF Pass & QR Verification Link:\n${qrVerificationUrl}\n\nPresent this pass at reception for cellar access.`;
+
+              await Share.share({
+                title: `The Grand Store VIP Pass - ${b.ticketId}`,
+                message: shareMsg,
+              });
+            } catch (e) {
+              console.log("Error sharing pass:", e);
+            }
+          },
+        },
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+      ]
+    );
   };
 
   // Relaunch PayFast for a pending ticket
@@ -432,8 +532,27 @@ export default function EventTicketPass({ route, navigation }) {
               if (reqUrl.includes("mobile-return") && reqUrl.includes("status=success")) {
                 setShowPayfastModal(false);
                 setIsPayfastLoading(false);
-                Alert.alert("Payment Confirmed! 🥂", "Your ticket has been marked as PAID and your VIP pass is active.");
-                fetchMyTickets();
+                const booked = payfastModalData?.booking;
+                const targetBookingId = booked?._id || booked?.ticketId;
+                (async () => {
+                  try {
+                    const token = await AsyncStorage.getItem("userToken");
+                    if (targetBookingId) {
+                      await safeFetch("/payfast/confirm-order", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        },
+                        body: JSON.stringify({ bookingId: targetBookingId }),
+                      });
+                    }
+                  } catch (e) {
+                    console.log("Error confirming event order on intercept:", e);
+                  }
+                  Alert.alert("Payment Confirmed! 🥂", "Your ticket has been marked as PAID and your VIP pass is active.");
+                  fetchMyTickets();
+                })();
                 return false;
               }
               return true;
@@ -584,19 +703,35 @@ export default function EventTicketPass({ route, navigation }) {
             <Text style={styles.qrScanKicker}>OFFICIAL CELLAR VIP ADMISSION PASS</Text>
 
             {isPaid && (
-              <TouchableOpacity
-                style={styles.downloadTicketBtn}
-                onPress={() => handleShareOrDownloadTicket(b)}
-                activeOpacity={0.8}
-              >
-                <LinearGradient
-                  colors={["#2b2214", "#15120c"]}
-                  style={styles.downloadGradient}
+              <View style={{ width: "100%", gap: 8, marginTop: 14 }}>
+                <TouchableOpacity
+                  style={styles.downloadTicketBtn}
+                  onPress={() => handleShareOrDownloadTicket(b)}
+                  activeOpacity={0.8}
                 >
-                  <Text style={styles.downloadTicketIcon}>📥</Text>
-                  <Text style={styles.downloadTicketText}>DOWNLOAD / SHARE VIP PASS</Text>
-                </LinearGradient>
-              </TouchableOpacity>
+                  <LinearGradient
+                    colors={["#2b2214", "#15120c"]}
+                    style={styles.downloadGradient}
+                  >
+                    <Text style={styles.downloadTicketIcon}>📥</Text>
+                    <Text style={styles.downloadTicketText}>DOWNLOAD / SHARE VIP PASS</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.downloadTicketBtn, { borderColor: "rgba(16, 185, 129, 0.4)", marginTop: 0 }]}
+                  onPress={() => handleResendEmail(b)}
+                  activeOpacity={0.8}
+                >
+                  <LinearGradient
+                    colors={["#0c251a", "#071710"]}
+                    style={styles.downloadGradient}
+                  >
+                    <Text style={styles.downloadTicketIcon}>✉️</Text>
+                    <Text style={[styles.downloadTicketText, { color: "#34d399" }]}>EMAIL PDF PASS TO ME (GMAIL)</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
             )}
           </View>
 

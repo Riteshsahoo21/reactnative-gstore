@@ -37,19 +37,39 @@ import EventTicketPass from './source/components/events/EventTicketPass';
 import AuctionsHub from './source/components/auction/AuctionsHub';
 import AuctionLotDetails from './source/components/auction/AuctionLotDetails';
 import AuctionCheckout from './source/components/auction/AuctionCheckout';
+import AuctionVipCheckout from './source/components/auction/AuctionVipCheckout';
 import MyBids from './source/components/auction/MyBids';
 import CustomerDashboard from './source/components/CustomerDashboard';
 import GlobalAgeVerificationModal from './source/components/GlobalAgeVerificationModal';
 const Rootstack = createNativeStackNavigator();
 
+const linking = {
+  prefixes: ['grandstore://', 'https://grandstore.co.za'],
+  config: {
+    screens: {
+      SplashScreen: 'splash',
+      HomeScreen: 'home',
+      CustomerDashboard: 'dashboard',
+      AuctionsHub: 'auctions',
+      AuctionLotDetails: 'lot',
+      AuctionVipCheckout: 'vip-checkout',
+      EventTicketPass: 'tickets',
+      EventsHub: 'events',
+      MyOrders: 'orders',
+    },
+  },
+};
+
 const App = () => {
   return (
     <>
-      <NavigationContainer ref={navigatorRef => {
-        NavigatorService.setContainer(navigatorRef);
-      }}
-    >
-      <Rootstack.Navigator initialRouteName="SplashScreen">
+      <NavigationContainer
+        linking={linking}
+        ref={navigatorRef => {
+          NavigatorService.setContainer(navigatorRef);
+        }}
+      >
+        <Rootstack.Navigator initialRouteName="SplashScreen">
         <Rootstack.Screen
           name="SplashScreen"
           component={SplashScreen}
@@ -189,6 +209,11 @@ const App = () => {
         <Rootstack.Screen
           name="AuctionCheckout"
           component={AuctionCheckout}
+          options={{ headerShown: false }}
+        />
+        <Rootstack.Screen
+          name="AuctionVipCheckout"
+          component={AuctionVipCheckout}
           options={{ headerShown: false }}
         />
         <Rootstack.Screen

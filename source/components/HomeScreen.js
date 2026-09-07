@@ -25,7 +25,7 @@ import VideoSlider from "./VideoSlider";
 import SearchBar from "./SearchBar";
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
-import { API_BASE, getActiveServerHost } from "../resources/data/Constants";
+import { API_BASE, getActiveServerHost, getCandidateBases, getActiveApiBase, setActiveApiBase } from "../resources/data/Constants";
 import { getCategoryIcon } from "../helpers/categoryIcons";
 
 // === Constants ===
@@ -82,12 +82,29 @@ const DEFAULT_CATEGORIES = [
 
 const DEFAULT_AUCTIONS = [
   {
+    _id: "6a9edb94537d52a425cc4b5c",
+    lotNumber: "GS-2026-PILA",
+    title: "Desi pilaaa",
+    description: "Premium curated fine spirit vault selection.",
+    category: "Spirits",
+    status: "live",
+    currentBid: 2500,
+    startingBid: 1000,
+    bidIncrement: 200,
+    endDate: "2026-09-14T15:58:24.298Z",
+    reserveMet: true,
+    bidCount: 2,
+    images: [
+      "https://res.cloudinary.com/oioqrgj0/image/upload/v1788184939/grandstore-uploads/wyonfqo8yf7mdhhc3rub.jpg",
+    ],
+  },
+  {
     _id: "6a95896cd59ce399e7017eb7",
     lotNumber: "LOT-2026-17EB7",
     title: "wine",
     description: "best in the town",
     category: "Wine",
-    status: "live",
+    status: "sold",
     currentBid: 2002,
     startingBid: 100,
     bidIncrement: 500,
@@ -153,27 +170,36 @@ const HomeScreen = ({ navigation }) => {
 
   const displayedVaultAuctions = useMemo(() => {
     if (!Array.isArray(featuredAuctions)) return [];
-    const liveLots = featuredAuctions.filter(
-      (a) => a && (a.status === "live" || a.status === "extended")
-    );
+    const now = new Date();
+    const isLive = (a) => {
+      if (!a) return false;
+      const statusMatch = a.status === "live" || a.status === "extended";
+      const hasEnded = a.endDate ? new Date(a.endDate) <= now : false;
+      return statusMatch && !hasEnded;
+    };
+    const liveLots = featuredAuctions
+      .filter(isLive)
+      .sort((a, b) => {
+        const aEnd = a.endDate ? new Date(a.endDate).getTime() : Infinity;
+        const bEnd = b.endDate ? new Date(b.endDate).getTime() : Infinity;
+        return aEnd - bEnd;
+      });
+    const upcomingLots = featuredAuctions.filter((a) => {
+      if (!a) return false;
+      return a.status === "upcoming" || (a.startDate && new Date(a.startDate) > now);
+    });
     const pastLots = featuredAuctions.filter(
-      (a) => a && a.status === "sold"
-    );
-    const upcomingLots = featuredAuctions.filter(
-      (a) => a && a.status === "upcoming"
+      (a) => a && (a.status === "sold" || (a.endDate && new Date(a.endDate) <= now && !isLive(a)))
     );
 
     if (liveLots.length >= 2) {
-      // More than one live auction: show live auctions only!
       return liveLots;
     } else if (liveLots.length === 1) {
-      // Exactly 1 live auction: the only live auction first, then only ONE past auction
       return [...liveLots, ...pastLots.slice(0, 1)];
     } else if (pastLots.length > 0) {
-      // No live auctions: at most one past auction
-      return pastLots.slice(0, 1);
+      return pastLots.slice(0, 2);
     } else if (upcomingLots.length > 0) {
-      return upcomingLots.slice(0, 1);
+      return upcomingLots.slice(0, 2);
     }
     return [];
   }, [featuredAuctions]);
@@ -345,23 +371,35 @@ const handleAddToCartInstant = async (product) => {
   }
 };
 
+  const getCandidateUrls = (path) => {
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    const baseCandidates = typeof getCandidateBases === 'function' ? getCandidateBases() : [];
+    const urls = [
+      ...baseCandidates.map((b) => `${String(b).replace(/\/+$/, '')}${cleanPath}`),
+      `http://192.168.1.102:5000/api${cleanPath}`,
+      `http://127.0.0.1:5000/api${cleanPath}`,
+      `http://localhost:5000/api${cleanPath}`,
+      `http://10.0.2.2:5000/api${cleanPath}`,
+      `${API_BASE}${cleanPath}`,
+    ];
+    return [...new Set(urls.filter(Boolean))];
+  };
+
   const fetchAllData = async () => {
     try {
       // Fetch categories reliably from web backend with cross-platform fallback
       try {
-        const catCandidates = [
-          `${API_BASE}/categories`,
-          'http://localhost:5000/api/categories',
-          'http://192.168.1.9:5000/api/categories',
-          'http://10.0.2.2:5000/api/categories',
-        ];
-        const uniqueCatUrls = [...new Set(catCandidates)];
+        const catCandidates = getCandidateUrls('/categories');
         let catRes = null;
 
-        for (const url of uniqueCatUrls) {
+        for (const url of catCandidates) {
           try {
-            catRes = await axios.get(url, { timeout: 3000 });
-            if (catRes?.data) break;
+            catRes = await axios.get(url, { timeout: 3500 });
+            if (catRes?.data) {
+              const root = url.replace(/\/categories.*$/, '');
+              if (typeof setActiveApiBase === 'function') setActiveApiBase(root);
+              break;
+            }
           } catch (e) {
             // try next
           }
@@ -383,19 +421,17 @@ const handleAddToCartInstant = async (product) => {
       let newArrivals = [];
       let categorySections = [];
       try {
-        const prodCandidates = [
-          `${API_BASE}/products`,
-          'http://localhost:5000/api/products',
-          'http://192.168.1.9:5000/api/products',
-          'http://10.0.2.2:5000/api/products',
-        ];
-        const uniqueProdUrls = [...new Set(prodCandidates)];
+        const prodCandidates = getCandidateUrls('/products');
         let prodRes = null;
 
-        for (const url of uniqueProdUrls) {
+        for (const url of prodCandidates) {
           try {
-            prodRes = await axios.get(url, { timeout: 3000 });
-            if (prodRes?.data && Array.isArray(prodRes.data)) break;
+            prodRes = await axios.get(url, { timeout: 3500 });
+            if (prodRes?.data && Array.isArray(prodRes.data)) {
+              const root = url.replace(/\/products.*$/, '');
+              if (typeof setActiveApiBase === 'function') setActiveApiBase(root);
+              break;
+            }
           } catch (e) {
             // try next
           }
@@ -506,18 +542,25 @@ const handleAddToCartInstant = async (product) => {
       setLoading(false);
 
       try {
-        const evtCandidates = [
-          `${API_BASE}/events`,
-          'http://localhost:5000/api/events',
-          'http://127.0.0.1:5000/api/events',
-          'http://10.0.2.2:5000/api/events',
-          'http://192.168.1.9:5000/api/events',
-        ];
+        const evtCandidates = getCandidateUrls('/events');
         for (const url of evtCandidates) {
           try {
-            const evtRes = await axios.get(url, { timeout: 2000, _skipRewrite: true });
+            const evtRes = await axios.get(url, { timeout: 4500, _skipRewrite: true });
             if (evtRes?.data && Array.isArray(evtRes.data)) {
-              setFeaturedEvents(evtRes.data.slice(0, 6));
+              const now = new Date();
+              const sortedEvents = [...evtRes.data].sort((a, b) => {
+                const statusA = String(a?.status || '').toLowerCase();
+                const statusB = String(b?.status || '').toLowerCase();
+                const isClosedA = ['completed', 'closed', 'cancelled', 'concluded', 'ended'].includes(statusA) || (a?.date && new Date(a.date) < now && statusA !== 'ongoing');
+                const isClosedB = ['completed', 'closed', 'cancelled', 'concluded', 'ended'].includes(statusB) || (b?.date && new Date(b.date) < now && statusB !== 'ongoing');
+                if (isClosedA !== isClosedB) {
+                  return isClosedA ? 1 : -1;
+                }
+                const dateA = a?.date ? new Date(a.date).getTime() : 0;
+                const dateB = b?.date ? new Date(b.date).getTime() : 0;
+                return dateA - dateB;
+              });
+              setFeaturedEvents(sortedEvents);
               break;
             }
           } catch (e) {}
@@ -527,25 +570,27 @@ const handleAddToCartInstant = async (product) => {
       }
 
       try {
-        const aucCandidates = [
-          `${API_BASE}/auction`,
-          'http://localhost:5000/api/auction',
-          'http://127.0.0.1:5000/api/auction',
-          `${API_BASE}/auctions`,
-          'http://10.0.2.2:5000/api/auction',
-          'http://192.168.1.9:5000/api/auction',
-        ];
+        const aucCandidates = [...getCandidateUrls('/auction'), ...getCandidateUrls('/auctions')];
         for (const url of aucCandidates) {
           try {
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 2000);
+            const timer = setTimeout(() => controller.abort(), 4500);
             const res = await fetch(url, { signal: controller.signal, _skipRewrite: true });
             clearTimeout(timer);
             if (res && res.ok) {
               const data = await res.json();
               const list = Array.isArray(data) ? data : (data.lots || data.data || []);
               if (list.length > 0) {
-                setFeaturedAuctions(list.slice(0, 10));
+                const now = new Date();
+                const sortedLots = [...list].sort((a, b) => {
+                  const isLiveA = (a?.status === 'live' || a?.status === 'extended') && (!a?.endDate || new Date(a.endDate) > now);
+                  const isLiveB = (b?.status === 'live' || b?.status === 'extended') && (!b?.endDate || new Date(b.endDate) > now);
+                  if (isLiveA !== isLiveB) return isLiveA ? -1 : 1;
+                  const aTime = Date.parse(a?.endDate || '') || 0;
+                  const bTime = Date.parse(b?.endDate || '') || 0;
+                  return bTime - aTime;
+                });
+                setFeaturedAuctions(sortedLots);
                 break;
               }
             }
@@ -559,16 +604,11 @@ const handleAddToCartInstant = async (product) => {
       try {
         const token = await AsyncStorage.getItem("userToken");
         if (token) {
-          const dashCandidates = [
-            `${API_BASE}/auction/user/dashboard`,
-            'http://localhost:5000/api/auction/user/dashboard',
-            'http://127.0.0.1:5000/api/auction/user/dashboard',
-            'http://192.168.1.9:5000/api/auction/user/dashboard',
-          ];
+          const dashCandidates = getCandidateUrls('/auction/user/dashboard');
           for (const url of dashCandidates) {
             try {
               const controller = new AbortController();
-              const timer = setTimeout(() => controller.abort(), 2000);
+              const timer = setTimeout(() => controller.abort(), 3500);
               const res = await fetch(url, {
                 headers: { Authorization: `Bearer ${token}` },
                 signal: controller.signal,

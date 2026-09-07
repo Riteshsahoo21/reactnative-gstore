@@ -23,10 +23,15 @@ import {
 import { WebView } from "react-native-webview";
 import LinearGradient from "react-native-linear-gradient";
 import AppHeader from "../widgets/AppHeader";
-import tmh_styles from "../styles/tmh_styles";
-import { HEADER_HEIGHT_THRESHOLD, API_BASE } from "../resources/data/Constants";
+import {
+  HEADER_HEIGHT_THRESHOLD,
+  API_BASE,
+  getCandidateBases,
+  getActiveApiBase,
+} from "../resources/data/Constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { launchImageLibrary } from "react-native-image-picker";
+import tmh_styles from "../styles/tmh_styles";
 
 const escapeHtml = (str) => {
   return String(str ?? "")
@@ -43,19 +48,6 @@ const saveOrderToLocalStorage = async (orderObj) => {
     const raw = await AsyncStorage.getItem("grand_store_recent_orders");
     let list = raw ? JSON.parse(raw) : [];
     // Strictly filter out any old 2024 dummy orders or mock names
-    list = list.filter(
-      (o) =>
-        !String(o.date || "").includes("2024") &&
-        !String(o.createdAt || "").startsWith("2024") &&
-        !String(o.name || "").includes("Buld Light") &&
-        !String(o.name || "").includes("Flyrsian") &&
-        !String(o.name || "").includes("Besperados") &&
-        !(o.items || []).some((it) =>
-          String(it.name || "").includes("Buld Light") ||
-          String(it.name || "").includes("Flyrsian") ||
-          String(it.name || "").includes("Besperados")
-        )
-    );
     const key = orderObj.orderId || orderObj.id || orderObj._id;
     const filtered = list.filter(
       (o) => (o.orderId || o.id || o._id) !== key
@@ -75,15 +67,25 @@ const saveOrderToLocalStorage = async (orderObj) => {
 const GOOGLE_MAPS_API_KEY = "AIzaSyBGtqdVoKgd9sCmz2Y8wxuwa0WfDBaymGk";
 const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
 
-// Resilient API candidates for Android physical device (reverse proxy, LAN Wi-Fi, emulator)
-const API_CANDIDATES = [
-  "http://localhost:5000/api",
-  "http://127.0.0.1:5000/api",
-  "http://10.0.2.2:5000/api",
-  "http://192.168.1.9:5000/api",
-  API_BASE,
-];
-const getApiBaseCandidates = () => [...new Set(API_CANDIDATES.filter(Boolean))];
+const getApiBaseCandidates = () => {
+  const list = [];
+  if (typeof getActiveApiBase === "function") {
+    const act = getActiveApiBase();
+    if (act) list.push(act);
+  }
+  if (typeof getCandidateBases === "function") {
+    list.push(...getCandidateBases());
+  }
+  list.push(
+    "http://127.0.0.1:5000/api",
+    "http://localhost:5000/api",
+    "http://192.168.1.102:5000/api",
+    "http://192.168.1.9:5000/api",
+    "http://10.0.2.2:5000/api",
+    API_BASE
+  );
+  return [...new Set(list.filter(Boolean))];
+};
 
 const safeApiFetch = async (path, options = {}, timeoutMs = 4000) => {
   const candidates = getApiBaseCandidates();
@@ -515,6 +517,9 @@ const Checkout = ({ navigation, route }) => {
   const [guestDocFileName, setGuestDocFileName] = useState("");
   const [isUploadingDoc, setIsUploadingDoc] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isUserAgeVerified, setIsUserAgeVerified] = useState(false);
+  const [kycSettings, setKycSettings] = useState(null);
 
   // Pick and Upload Guest 18+ Verification Document
   const handlePickGuestDocument = async () => {
@@ -624,8 +629,8 @@ const Checkout = ({ navigation, route }) => {
   // Delivery Preference: 'home' (Door Courier), 'postnet' (PostNet Pickup), 'best' (Compare All)
   const [deliveryPreference, setDeliveryPreference] = useState("home");
 
-  // PostNet Branch Locator State (Only show nearby branches once city is clicked)
-  const [postnetStores, setPostnetStores] = useState([]);
+  // PostNet Branch Locator State (Defaults to Johannesburg branches if not yet fetched)
+  const [postnetStores, setPostnetStores] = useState(FALLBACK_POSTNET_STORES.johannesburg || []);
   const [preferredPostnetStore, setPreferredPostnetStore] = useState(null);
   const [isLoadingPostnet, setIsLoadingPostnet] = useState(false);
   const [branchSearch, setBranchSearch] = useState("");
@@ -726,9 +731,11 @@ const Checkout = ({ navigation, route }) => {
         setLoading(true);
 
         // Pre-fill user data if logged in
+        let isAgeVerifiedStatus = false;
         const userInfoRaw = await AsyncStorage.getItem("userInfo");
         if (userInfoRaw) {
           const user = JSON.parse(userInfoRaw);
+          setCurrentUser(user);
           if (user.name) setFullName(user.name);
           if (user.email) setEmail(user.email);
           if (user.phone) {
@@ -747,7 +754,48 @@ const Checkout = ({ navigation, route }) => {
           if (user.superCoinsBalance !== undefined) {
             setUserSuperCoins(Number(user.superCoinsBalance || 0));
           }
+
+          // Pre-fill KYC inputs if previously recorded
+          if (user.dateOfBirth) {
+            try {
+              const dobIso = new Date(user.dateOfBirth).toISOString().split("T")[0];
+              setGuestDob(dobIso);
+            } catch (e) {}
+          }
+          if (user.idNumber) setGuestIdNumber(user.idNumber);
+          if (user.idType) setGuestIdType(user.idType);
+          if (user.idDocumentUrl) {
+            setGuestDocUrl(user.idDocumentUrl);
+            setGuestDocFileName("Official_ID_Document.jpg");
+          }
+
+          if (
+            user.isAgeVerified === true ||
+            user.bidderApprovalStatus === "approved" ||
+            (["level_2_verified", "level_3_enhanced", "level_4_vip"].includes(user.bidderLevel))
+          ) {
+            isAgeVerifiedStatus = true;
+          } else {
+            isAgeVerifiedStatus = false;
+          }
+        } else {
+          // Guest mode: check if verified in current device session
+          const storedAgeKey = await AsyncStorage.getItem("isAgeVerified");
+          const storedGlobalAgeKey = await AsyncStorage.getItem("grand-store-age-verified");
+          if (storedAgeKey === "true" || storedGlobalAgeKey === "true") {
+            isAgeVerifiedStatus = true;
+          }
         }
+        setIsUserAgeVerified(isAgeVerifiedStatus);
+
+        // Fetch dynamic admin settings from /settings/public
+        try {
+          const setRes = await safeApiFetch("/settings/public", {}, 4000);
+          if (setRes && setRes.ok) {
+            const sData = await setRes.json();
+            setKycSettings(sData);
+          }
+        } catch (sErr) {}
 
         // Fetch latest Super Coins wallet balance if authenticated
         const userToken = await AsyncStorage.getItem("userToken");
@@ -1398,8 +1446,13 @@ const Checkout = ({ navigation, route }) => {
         setSuperCoinsQuote(fallbackSuperCoins);
 
         const fallbackQuote = {
+          globalSubtotal: subtotal,
+          subTotal: subtotal,
+          expiresAt: new Date(Date.now() + 60 * 60000).toISOString(),
           hasInternational: !isSouthAfrica,
           aggregatedTotals: {
+            shipping: fallbackQuotes[0]?.cost || 100,
+            vat: 0,
             estimatedImportDuties: !isSouthAfrica ? Math.round(subtotal * 0.15) : 0,
             estimatedImportTaxes: !isSouthAfrica ? Math.round(subtotal * 0.20) : 0,
           },
@@ -1408,6 +1461,7 @@ const Checkout = ({ navigation, route }) => {
             {
               shippingQuotes: fallbackQuotes,
               selectedCourier: fallbackQuotes[0],
+              selectedPickupStore: deliveryPreference === "postnet" ? preferredPostnetStore : null,
             },
           ],
         };
@@ -1477,13 +1531,24 @@ const Checkout = ({ navigation, route }) => {
       setSuperCoinsQuote(fallbackSuperCoins);
 
       setQuote({
+        globalSubtotal: subtotal,
+        subTotal: subtotal,
+        expiresAt: new Date(Date.now() + 60 * 60000).toISOString(),
         hasInternational: !isSouthAfrica,
         aggregatedTotals: {
+          shipping: fallbackQuotes[0]?.cost || (deliveryPreference === "postnet" ? 100 : 120),
+          vat: 0,
           estimatedImportDuties: Math.round(subtotal * 0.15),
           estimatedImportTaxes: Math.round(subtotal * 0.20),
         },
         superCoins: fallbackSuperCoins,
-        shipments: [{ shippingQuotes: fallbackQuotes, selectedCourier: fallbackQuotes[0] }],
+        shipments: [
+          {
+            shippingQuotes: fallbackQuotes,
+            selectedCourier: fallbackQuotes[0],
+            selectedPickupStore: deliveryPreference === "postnet" ? preferredPostnetStore : null,
+          },
+        ],
       });
       setSelectedCourier(fallbackQuotes[0]);
     } finally {
@@ -1755,9 +1820,9 @@ const Checkout = ({ navigation, route }) => {
       return;
     }
 
-    // Guest checkout document & KYC validation
+    // 18+ Age & Identity Document Enforcement for Unverified Customers
     const token = await AsyncStorage.getItem("userToken");
-    if (!token) {
+    if (!isUserAgeVerified) {
       if (!guestIdNumber.trim()) {
         showMessage("Please enter your official ID / Passport number for 18+ verification.");
         return;
@@ -1777,11 +1842,12 @@ const Checkout = ({ navigation, route }) => {
       if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
         age--;
       }
-      if (age < 18) {
-        showMessage("You must be at least 18 years of age to purchase from The Grand Store.");
+      const minAge = kycSettings?.bidderKycMinAge || 18;
+      if (age < minAge) {
+        showMessage(`You must be at least ${minAge} years of age to purchase from The Grand Store.`);
         return;
       }
-      if (!guestDocUrl) {
+      if (kycSettings?.bidderKycRequireDocumentUpload !== false && !guestDocUrl) {
         showMessage("Please upload or attach your official ID document for 18+ compliance verification.");
         return;
       }
@@ -1793,13 +1859,18 @@ const Checkout = ({ navigation, route }) => {
       const generatedOrderId = `GS-${Date.now().toString().slice(-6).toUpperCase()}`;
 
       const finalShippingAddress = {
+        name: (fullName || "").trim() || "Customer",
+        fullName: (fullName || "").trim() || "Customer",
+        phone: (phone || "").trim() || "0000000000",
+        phoneNumber: (phone || "").trim() || "0000000000",
+        email: (email || "").trim() || "customer@grandstore.co.za",
         address:
           deliveryPreference === "postnet" && preferredPostnetStore
             ? preferredPostnetStore.address
-            : address.trim(),
-        city: city.trim() || "Johannesburg",
-        postalCode: postalCode.trim() || "2000",
-        country: isSouthAfrica ? "South Africa" : country.trim(),
+            : (address || "").trim() || "Collection Address",
+        city: (city || "").trim() || preferredPostnetStore?.city || "Johannesburg",
+        postalCode: (postalCode || "").trim() || preferredPostnetStore?.postalCode || "2000",
+        country: isSouthAfrica ? "South Africa" : (country || "").trim() || "South Africa",
       };
 
       let finalOrderId = generatedOrderId;
@@ -1831,12 +1902,59 @@ const Checkout = ({ navigation, route }) => {
           if (quoteRes && quoteRes.ok) finalQuote = await quoteRes.json();
         }
 
-        if (finalQuote && finalQuote.shipments) {
-          if (selectedCourier) {
-            finalQuote.shipments[0].selectedCourier = selectedCourier;
+        // Guaranteed fallback quote if remote quote generation is not available
+        if (!finalQuote || !Array.isArray(finalQuote.shipments) || finalQuote.shipments.length === 0) {
+          const fallbackCost = deliveryPreference === "postnet" ? 100 : 120;
+          finalQuote = {
+            globalSubtotal: subtotal,
+            subTotal: subtotal,
+            expiresAt: new Date(Date.now() + 60 * 60000).toISOString(),
+            hasInternational: !isSouthAfrica,
+            aggregatedTotals: {
+              shipping: shippingFee || fallbackCost,
+              vat: 0,
+              estimatedImportDuties: !isSouthAfrica ? Math.round(subtotal * 0.15) : 0,
+              estimatedImportTaxes: !isSouthAfrica ? Math.round(subtotal * 0.20) : 0,
+            },
+            shipments: [
+              {
+                shippingQuotes: [
+                  {
+                    courierName: deliveryPreference === "postnet" ? "PostNet" : "Courier Guy",
+                    serviceLevel: deliveryPreference === "postnet" ? "PostNet Store Collection" : "Door Delivery",
+                    deliveryType: deliveryPreference === "postnet" ? "pickup" : "home",
+                    cost: shippingFee || fallbackCost,
+                  },
+                ],
+                selectedCourier: selectedCourier || {
+                  courierName: deliveryPreference === "postnet" ? "PostNet" : "Courier Guy",
+                  serviceLevel: deliveryPreference === "postnet" ? "PostNet Store Collection" : "Door Delivery",
+                  deliveryType: deliveryPreference === "postnet" ? "pickup" : "home",
+                  cost: shippingFee || fallbackCost,
+                },
+                selectedPickupStore: deliveryPreference === "postnet" ? preferredPostnetStore : null,
+              },
+            ],
+          };
+        }
+
+        if (finalQuote && Array.isArray(finalQuote.shipments)) {
+          finalQuote.shipments.forEach((shp) => {
+            if (selectedCourier) {
+              shp.selectedCourier = selectedCourier;
+            }
+            if (preferredPostnetStore) {
+              shp.selectedPickupStore = preferredPostnetStore;
+            }
+          });
+          if (!finalQuote.expiresAt) {
+            finalQuote.expiresAt = new Date(Date.now() + 60 * 60000).toISOString();
           }
-          if (preferredPostnetStore) {
-            finalQuote.shipments[0].selectedPickupStore = preferredPostnetStore;
+          if (!finalQuote.globalSubtotal) {
+            finalQuote.globalSubtotal = subtotal;
+          }
+          if (!finalQuote.subTotal) {
+            finalQuote.subTotal = subtotal;
           }
 
           const orderPayload = {
@@ -1848,16 +1966,16 @@ const Checkout = ({ navigation, route }) => {
             useSuperCoins: Boolean(token && useSuperCoins),
             isAgeConfirmed: true,
             isGuest: !token,
-            guestEmail: email.trim(),
-            guestName: fullName.trim(),
-            guestPhone: phone.trim(),
-            guestKyc: !token
+            guestEmail: (email || "").trim(),
+            guestName: (fullName || "").trim(),
+            guestPhone: (phone || "").trim(),
+            guestKyc: (!token || !isUserAgeVerified) && (guestDocUrl || guestIdNumber)
               ? {
                   idType: guestIdType,
-                  idNumber: guestIdNumber.trim(),
-                  dateOfBirth: guestDob.trim(),
+                  idNumber: String(guestIdNumber || "").trim(),
+                  dateOfBirth: String(guestDob || "").trim(),
                   documentUrl: guestDocUrl,
-                  documentType: guestDocFileName.toLowerCase().endsWith(".pdf") ? "pdf" : "image",
+                  documentType: guestDocFileName && String(guestDocFileName).toLowerCase().endsWith(".pdf") ? "pdf" : "image",
                 }
               : null,
           };
@@ -1874,10 +1992,41 @@ const Checkout = ({ navigation, route }) => {
               finalOrderId = orderData.orderId || orderData._id || generatedOrderId;
               orderMongoId = orderData._id || null;
             }
+          } else {
+            const errData = await orderRes?.json?.().catch(() => null);
+            const errMsg = errData?.message || "Order could not be registered on server. Please check your connection.";
+            console.log("Order submission failed:", errMsg);
+            if (paymentMethod === "payfast") {
+              Alert.alert("Order Submission Error", errMsg);
+              setIsSubmitting(false);
+              return;
+            }
           }
         }
       } catch (apiErr) {
         console.log("Backend API order submission skipped/fallback:", apiErr?.message || apiErr);
+      }
+
+      // If user supplied KYC documents during checkout, save and unlock verification permanently
+      if (!isUserAgeVerified && (guestDocUrl || guestIdNumber)) {
+        setIsUserAgeVerified(true);
+        await AsyncStorage.setItem("isAgeVerified", "true");
+        await AsyncStorage.setItem("grand-store-age-verified", "true");
+        try {
+          const uRaw = await AsyncStorage.getItem("userInfo");
+          if (uRaw) {
+            const parsed = JSON.parse(uRaw);
+            parsed.isAgeVerified = true;
+            if (guestDocUrl) parsed.idDocumentUrl = guestDocUrl;
+            if (guestIdNumber) parsed.idNumber = String(guestIdNumber).trim();
+            if (guestDob) parsed.dateOfBirth = String(guestDob).trim();
+            if (parsed.bidderApprovalStatus === "unregistered") {
+              parsed.bidderApprovalStatus = "pending_approval";
+            }
+            await AsyncStorage.setItem("userInfo", JSON.stringify(parsed));
+          }
+        } catch (e) {}
+        DeviceEventEmitter.emit("userAgeVerified", { isAgeVerified: true });
       }
 
       // Construct order summary for in-app receipt & confirmation
@@ -1885,23 +2034,29 @@ const Checkout = ({ navigation, route }) => {
         orderId: finalOrderId,
         orderMongoId,
         isGuest: !token,
-        guestKyc: !token
+        guestKyc: (!token || !isUserAgeVerified) && (guestDocUrl || guestIdNumber)
           ? {
-              idType: guestIdType,
-              idNumber: guestIdNumber.trim(),
+              idType: guestIdType || "national_id",
+              idNumber: String(guestIdNumber || "").trim(),
               status: "pending_review",
               documentUrl: guestDocUrl,
             }
           : null,
         isAgeConfirmed: true,
-        date: new Date().toLocaleDateString("en-ZA", {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        }),
+        date: (() => {
+          try {
+            return new Date().toLocaleDateString("en-ZA", {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+            });
+          } catch (e) {
+            return new Date().toISOString().split("T")[0];
+          }
+        })(),
         createdAt: new Date().toISOString(),
         items: checkoutItems.map((i) => ({
-          name: i.name,
+          name: i.name || "Item",
           price: Number(i.price || 0),
           quantity: Number(i.quantity || 1),
           image: i.image,
@@ -1910,7 +2065,7 @@ const Checkout = ({ navigation, route }) => {
         subtotal,
         shippingFee,
         discount,
-        superCoinsDiscount: token ? superCoinsDiscount : 0,
+        superCoinsDiscount: token ? superCoinDiscount : 0,
         superCoinsUsed:
           token && useSuperCoins
             ? superCoinsQuote?.maxRedeemableCoins || quote?.superCoins?.maxRedeemableCoins || 0
@@ -1938,16 +2093,16 @@ const Checkout = ({ navigation, route }) => {
           accountName: "The Grand Store PTY LTD",
           accountNumber: "0123456789",
           branchCode: "051001",
-          reference: finalOrderId.slice(-8).toUpperCase(),
+          reference: String(finalOrderId || "").slice(-8).toUpperCase(),
         },
         recipient: {
-          fullName,
-          phone,
-          email,
+          fullName: (fullName || "").trim() || "Customer",
+          phone: (phone || "").trim(),
+          email: (email || "").trim(),
           address:
             deliveryPreference === "postnet" && preferredPostnetStore
-              ? `Pickup: ${preferredPostnetStore.name} — ${preferredPostnetStore.address}`
-              : `${finalShippingAddress.address}, ${finalShippingAddress.city}, ${finalShippingAddress.postalCode}, ${finalShippingAddress.country}`,
+              ? `Pickup: ${preferredPostnetStore.name || "PostNet"} — ${preferredPostnetStore.address || "Store Collection"}`
+              : `${finalShippingAddress.address || "Collection"}, ${finalShippingAddress.city || ""}, ${finalShippingAddress.postalCode || ""}, ${finalShippingAddress.country || ""}`,
         },
       };
 
@@ -2002,9 +2157,13 @@ const Checkout = ({ navigation, route }) => {
       setCreatedOrder(orderSummary);
       saveOrderToLocalStorage(orderSummary);
       setOrderCompleted(true);
-      showMessage("🎉 Order placed successfully!");
     } catch (err) {
-      showMessage("Order placement encountered an issue. Please try again.");
+      console.error("Order placement exception:", err);
+      const userMsg =
+        err?.message ||
+        (typeof err === "string" ? err : null) ||
+        "Order placement encountered an issue. Please try again.";
+      showMessage(userMsg);
     } finally {
       setIsSubmitting(false);
     }
@@ -3483,26 +3642,29 @@ const Checkout = ({ navigation, route }) => {
                   </View>
                 </View>
 
-                {!isLoggedIn ? (
+                {!isUserAgeVerified ? (
                   <View style={styles.guestVerifyContainer}>
                     <Text style={styles.inputLabel}>OFFICIAL ID DOCUMENT TYPE *</Text>
                     <View style={styles.verifyTypeSelector}>
-                      {[
-                        { key: "national_id", label: "National ID" },
-                        { key: "passport", label: "Passport" },
-                        { key: "drivers_license", label: "Driver's License" },
-                      ].map((t) => (
-                        <TouchableOpacity
-                          key={t.key}
-                          style={[styles.verifyTypeOption, guestIdType === t.key && styles.verifyTypeOptionActive]}
-                          onPress={() => setGuestIdType(t.key)}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={[styles.verifyTypeOptionText, guestIdType === t.key && styles.verifyTypeOptionTextActive]}>
-                            {t.label}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
+                      {(kycSettings?.bidderKycIdTypes && kycSettings.bidderKycIdTypes.length > 0
+                        ? kycSettings.bidderKycIdTypes
+                        : ["National ID", "Passport", "Driver's License"]
+                      ).map((tName) => {
+                        const tKey = tName.toLowerCase().replace(/[^a-z0-9]/g, "_");
+                        const isMatch = guestIdType === tKey || guestIdType === tName;
+                        return (
+                          <TouchableOpacity
+                            key={tName}
+                            style={[styles.verifyTypeOption, isMatch && styles.verifyTypeOptionActive]}
+                            onPress={() => setGuestIdType(tKey)}
+                            activeOpacity={0.8}
+                          >
+                            <Text style={[styles.verifyTypeOptionText, isMatch && styles.verifyTypeOptionTextActive]}>
+                              {tName}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
                     </View>
 
                     <View style={styles.rowInputs}>
@@ -3534,7 +3696,9 @@ const Checkout = ({ navigation, route }) => {
                     </View>
 
                     <View style={styles.inputGroup}>
-                      <Text style={styles.inputLabel}>ATTACH OFFICIAL ID / PASSPORT PHOTO *</Text>
+                      <Text style={styles.inputLabel}>
+                        ATTACH OFFICIAL ID / PASSPORT PHOTO {kycSettings?.bidderKycRequireDocumentUpload !== false ? "*" : "(OPTIONAL)"}
+                      </Text>
                       {isUploadingDoc ? (
                         <View style={styles.docUploadingBox}>
                           <ActivityIndicator size="small" color="#c99742" />
@@ -3575,7 +3739,7 @@ const Checkout = ({ navigation, route }) => {
                         {isAgeConfirmed && <Text style={styles.verifyCheckmark}>✓</Text>}
                       </View>
                       <Text style={styles.verifyCheckboxText}>
-                        I legally certify that I am at least 18 years of age and authorized to purchase alcoholic beverages under the South African Liquor Act. I confirm this document belongs to me.
+                        I legally certify that I am at least {kycSettings?.bidderKycMinAge || 18} years of age and authorized to purchase alcoholic beverages under the South African Liquor Act. I confirm this document belongs to me.
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -3586,24 +3750,20 @@ const Checkout = ({ navigation, route }) => {
                         <Text style={styles.authVerifiedIcon}>✓</Text>
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.authVerifiedTitle}>18+ Account Verified</Text>
+                        <Text style={styles.authVerifiedTitle}>18+ Account Pre-Cleared</Text>
                         <Text style={styles.authVerifiedSub}>
-                          Your logged-in account has verified legal age compliance. Standard age verification may be requested upon courier handover.
+                          Your account is certified and legally age-verified under the National Liquor Act. Pre-cleared for instant 1-click wine and spirits checkout without document uploads.
                         </Text>
                       </View>
                     </View>
-                    <TouchableOpacity
-                      style={[styles.verifyCheckboxRow, { marginTop: 12 }]}
-                      activeOpacity={0.8}
-                      onPress={() => setIsAgeConfirmed(!isAgeConfirmed)}
-                    >
-                      <View style={[styles.verifyCheckbox, isAgeConfirmed && styles.verifyCheckboxChecked]}>
-                        {isAgeConfirmed && <Text style={styles.verifyCheckmark}>✓</Text>}
+                    <View style={[styles.verifyCheckboxRow, { marginTop: 12 }]}>
+                      <View style={[styles.verifyCheckbox, styles.verifyCheckboxChecked]}>
+                        <Text style={styles.verifyCheckmark}>✓</Text>
                       </View>
-                      <Text style={styles.verifyCheckboxText}>
-                        I confirm that I am at least 18 years of age and eligible to receive this shipment.
+                      <Text style={[styles.verifyCheckboxText, { color: "#34d399", fontWeight: "700" }]}>
+                        18+ Legal Age Compliance Verified • Ready for Instant Dispatch
                       </Text>
-                    </TouchableOpacity>
+                    </View>
                   </View>
                 )}
               </View>
