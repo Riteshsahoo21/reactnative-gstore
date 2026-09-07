@@ -1649,9 +1649,16 @@ const Checkout = ({ navigation, route }) => {
       showMessage("Please enter your street delivery address");
       return;
     }
+    if (deliveryPreference === "home" && !city.trim()) {
+      showMessage("Please enter your delivery city or town");
+      return;
+    }
     if (deliveryPreference === "postnet" && !preferredPostnetStore) {
       showMessage("Please search and select your preferred PostNet collection branch");
       return;
+    }
+    if (deliveryPreference === "postnet" && preferredPostnetStore && !city.trim()) {
+      setCity(preferredPostnetStore.city || preferredPostnetStore.suburb || "Johannesburg");
     }
     if (!isAgeConfirmed) {
       showMessage("Please certify that you are at least 18 years of age to purchase alcoholic beverages.");
@@ -2563,16 +2570,16 @@ const Checkout = ({ navigation, route }) => {
           <View style={styles.complianceNoticeCard}>
             <View style={styles.complianceNoticeHeader}>
               <View style={styles.complianceNoticeBadge}>
-                <Text style={styles.complianceNoticeBadgeText}>COMPLIANCE &amp; DISPATCH</Text>
+                <Text style={styles.complianceNoticeBadgeText}>COMPLIANCE & DISPATCH</Text>
               </View>
-              <Text style={styles.complianceNoticeTitle}>Real-Time Tracking &amp; Verification Status</Text>
+              <Text style={styles.complianceNoticeTitle}>Real-Time Tracking & Verification Status</Text>
             </View>
 
             {/* Real-Time Dispatch & Tracking Notification Box */}
             <View style={styles.complianceNoticeBox}>
               <Text style={styles.complianceNoticeIcon}>🔔</Text>
               <View style={{ flex: 1 }}>
-                <Text style={styles.complianceNoticeItemTitle}>Dispatch &amp; Tracking Alerts Active</Text>
+                <Text style={styles.complianceNoticeItemTitle}>Dispatch & Tracking Alerts Active</Text>
                 <Text style={styles.complianceNoticeItemDesc}>
                   Live parcel tracking links, dispatch waybill numbers, and SMS pickup OTPs will be broadcast directly to your contact endpoints:
                 </Text>
@@ -2999,7 +3006,7 @@ const Checkout = ({ navigation, route }) => {
                       <View style={styles.modeTitleRow}>
                         <Text style={styles.modeTitle}>Deliver to my address</Text>
                         <View style={styles.modeTag}>
-                          <Text style={styles.modeTagText}>PostNet &amp; Courier Guy</Text>
+                          <Text style={styles.modeTagText}>PostNet & Courier Guy</Text>
                         </View>
                       </View>
                       <Text style={styles.modeSubtitle}>
@@ -3063,7 +3070,7 @@ const Checkout = ({ navigation, route }) => {
                         </View>
                       </View>
                       <Text style={styles.modeSubtitle}>
-                        Air express courier to UK, USA, Europe &amp; 50+ countries (3–5 days). Base R1,800.
+                        Air express courier to UK, USA, Europe & 50+ countries (3–5 days). Base R1,800.
                       </Text>
                     </View>
                     <View style={styles.modeRadio}>
@@ -3288,7 +3295,7 @@ const Checkout = ({ navigation, route }) => {
                         <Text style={styles.lockedCountryFlag}>🇿🇦</Text>
                         <Text style={styles.lockedCountryText}>South Africa</Text>
                         <View style={styles.zaTag}>
-                          <Text style={styles.zaTagText}>PostNet &amp; Local Courier</Text>
+                          <Text style={styles.zaTagText}>PostNet & Local Courier</Text>
                         </View>
                       </View>
                     ) : (
@@ -3468,7 +3475,7 @@ const Checkout = ({ navigation, route }) => {
                     <Text style={[styles.stepNumber, { color: "#c99742", fontSize: 13 }]}>18+</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.stepTitle}>18+ Legal Age &amp; Identity Verification</Text>
+                    <Text style={styles.stepTitle}>18+ Legal Age & Identity Verification</Text>
                     <Text style={styles.verifySubtitle}>Mandatory compliance under the Liquor Act</Text>
                   </View>
                 </View>
@@ -3678,11 +3685,11 @@ const Checkout = ({ navigation, route }) => {
                 <View style={styles.confidenceHeader}>
                   <Text style={styles.confidenceShieldIcon}>🔒</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.confidenceTitle}>Secure &amp; Trackable Delivery</Text>
+                    <Text style={styles.confidenceTitle}>Secure & Trackable Delivery</Text>
                     <Text style={styles.confidenceSub}>
                       {deliveryPreference === "postnet"
                         ? "Direct vault dispatch to your chosen PostNet collection branch with PIN verification."
-                        : "Insured courier dispatch with tamper-proof packaging &amp; real-time tracking."}
+                        : "Insured courier dispatch with tamper-proof packaging & real-time tracking."}
                     </Text>
                   </View>
                 </View>
@@ -3721,7 +3728,7 @@ const Checkout = ({ navigation, route }) => {
                   <View style={styles.internationalDeliveryHeader}>
                     <Text style={styles.internationalWarningIcon}>⚠️</Text>
                     <Text style={styles.internationalDeliveryTitle}>
-                      IMPORTANT: International Delivery &amp; Duties
+                      IMPORTANT: International Delivery & Duties
                     </Text>
                   </View>
 
@@ -3769,7 +3776,7 @@ const Checkout = ({ navigation, route }) => {
             <>
               <View style={styles.stepTitleRow}>
                 <View>
-                  <Text style={styles.mainStepTitle}>3. Payment &amp; Rewards</Text>
+                  <Text style={styles.mainStepTitle}>3. Payment & Rewards</Text>
                   <Text style={styles.mainStepSubtitle}>Apply Super Coins and select payment method.</Text>
                 </View>
                 <TouchableOpacity onPress={() => setCheckoutStep(2)} style={styles.stepBackLink}>
@@ -3982,7 +3989,7 @@ const Checkout = ({ navigation, route }) => {
                       <Text style={styles.preferredBadge}>ANY COUNTRY</Text>
                     </View>
                     <Text style={styles.paymentOptionDesc}>
-                      Direct deposit to our Standard Bank account. Details &amp; Reference displayed upon order.
+                      Direct deposit to our Standard Bank account. Details & Reference displayed upon order.
                     </Text>
                   </View>
                 </TouchableOpacity>
