@@ -21,6 +21,7 @@ import {
   Platform,
   Easing,
   DeviceEventEmitter,
+  Share,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -326,8 +327,49 @@ export default function AuctionLotDetails({ route, navigation }) {
   const [showMagicalEffect, setShowMagicalEffect] = useState(false);
   const [lastBidAmount, setLastBidAmount] = useState(0);
   const [showCelebrationModal, setShowCelebrationModal] = useState(false);
+  const dismissedCelebrationRef = useRef(new Set());
+  const [downloadingCert, setDownloadingCert] = useState(false);
   const [verificationModalOpen, setVerificationModalOpen] = useState(false);
   const [showCalendarFullSpecs, setShowCalendarFullSpecs] = useState(false);
+
+  const handleDismissCelebration = useCallback(async () => {
+    const targetId = lot?._id || lotId;
+    if (targetId) {
+      dismissedCelebrationRef.current.add(String(targetId));
+      try {
+        await AsyncStorage.setItem(`hasDismissedCelebration_${targetId}`, "true");
+      } catch (e) {}
+    }
+    setShowCelebrationModal(false);
+  }, [lot?._id, lotId]);
+
+  const handleDownloadCertificate = useCallback(() => {
+    if (!lot?._id) return;
+    setDownloadingCert(true);
+    const host = getActiveServerHost();
+    const downloadUrl = `${host}/api/auction/${lot._id}/certificate?download=1`;
+    Linking.openURL(downloadUrl).catch((err) => {
+      console.warn("Could not open certificate URL:", err);
+      Alert.alert("Download Notice", "Opening certificate in browser...");
+    }).finally(() => {
+      setTimeout(() => setDownloadingCert(false), 2000);
+    });
+  }, [lot?._id]);
+
+  const handleShareCertificate = useCallback(async () => {
+    if (!lot) return;
+    const certUrl = `https://grandstoreglobal.com/auction/${lot._id}`;
+    const safeLotNum = lot.lotNumber || (lot._id && lot._id.slice(-6).toUpperCase()) || "GS-LOT";
+    try {
+      await Share.share({
+        title: `The Grand Store Certificate of Acquisition - ${lot.title}`,
+        message: `🏆 Official Certificate of Acquisition awarded for Lot #${safeLotNum}: ${lot.title}\n\nVerify provenance:\n${certUrl}`,
+        url: certUrl,
+      });
+    } catch (e) {
+      console.log("Error sharing certificate:", e);
+    }
+  }, [lot]);
 
   // 1-second precision anti-sniping clock ticker
   useEffect(() => {
@@ -475,11 +517,19 @@ export default function AuctionLotDetails({ route, navigation }) {
           setLot(data.lot);
           setBids(data.bids || []);
 
-          // Auto-trigger victory celebration if current user won and unpaid
+          // Auto-trigger victory celebration if current user won and unpaid (only once)
           if (user && data.lot?.winner) {
             const winnerId = typeof data.lot.winner === "object" ? data.lot.winner._id : data.lot.winner;
             if (winnerId === user._id && data.lot.status === "sold" && data.lot.paymentStatus !== "Paid") {
-              setShowCelebrationModal(true);
+              const alreadyDismissed = dismissedCelebrationRef.current.has(String(targetId));
+              if (!alreadyDismissed) {
+                const storedDismiss = await AsyncStorage.getItem(`hasDismissedCelebration_${targetId}`);
+                if (storedDismiss === "true") {
+                  dismissedCelebrationRef.current.add(String(targetId));
+                } else {
+                  setShowCelebrationModal(true);
+                }
+              }
             }
           }
         }
@@ -896,116 +946,191 @@ export default function AuctionLotDetails({ route, navigation }) {
           </LinearGradient>
         </View>
 
-        {/* 4. OFFICIAL CERTIFICATE OF ACQUISITION (IF CURRENT USER IS WINNER) */}
+        {/* 4. OFFICIAL CERTIFICATE OF ACQUISITION (WHITE LUXURY TEMPLATE) */}
         {isSold && isWinner && (
-          <View style={styles.certificateCard}>
-            <LinearGradient colors={["#20180a", "#120e06", "#080603"]} style={styles.certificateGradient}>
-              <View style={styles.certificateHeader}>
-                <View style={styles.certificateEmblem}>
-                  <Text style={styles.certificateEmblemText}>🏆</Text>
-                </View>
-                <View style={styles.certificateHeaderInfo}>
-                  <View style={styles.awardTagRow}>
-                    <Text style={styles.awardTag}>IMPERIAL AWARD</Text>
-                    <Text style={styles.verifiedWinnerTag}>✓ VERIFIED WINNER</Text>
+          <View style={styles.certOuterContainer}>
+            {/* Corner Ribbon Motto (Top Right) */}
+            <View style={styles.certRibbonTopRight}>
+              <Text style={styles.certRibbonTopRightText}>MORE THAN A DRINK A LEGACY</Text>
+            </View>
+
+            {/* Inner Gold Frame */}
+            <View style={styles.certInnerFrame}>
+              {/* Background Watermark */}
+              <View style={styles.certWatermarkContainer} pointerEvents="none">
+                <Text style={styles.certWatermarkCrest}>⚜️</Text>
+                <Text style={styles.certWatermarkText}>ROYAL LIFESTYLE</Text>
+                <Text style={styles.certWatermarkSub}>THE GRAND STORE</Text>
+              </View>
+
+              {/* Header: Crest Badge & Brand */}
+              <View style={styles.certHeaderRow}>
+                <View style={styles.certBrandCol}>
+                  <View style={styles.certBadge}>
+                    <Text style={styles.certBadgeText}>★ TRUE ROYAL LIFESTYLE ★</Text>
                   </View>
-                  <Text style={styles.certificateTitle}>Certificate of Acquisition</Text>
+                  <Text style={styles.certBrandTitle}>THE GRAND STORE</Text>
+                  <Text style={styles.certBrandTagline}>Crafting Moments, Raising Spirits</Text>
+                </View>
+                <View style={styles.certPillarsCol}>
+                  <Text style={styles.certPillarItem}>FINE SPIRITS</Text>
+                  <Text style={styles.certPillarDot}>•</Text>
+                  <Text style={styles.certPillarItem}>RARE COLLECTIONS</Text>
+                  <Text style={styles.certPillarDot}>•</Text>
+                  <Text style={styles.certPillarItem}>EXCLUSIVE AUCTIONS</Text>
                 </View>
               </View>
 
-              <Text style={styles.certificateGreeting}>
-                Distinguished Patron, the auction gavel has officially fallen in your favor. Ownership of this singular piece has been awarded to your registered vault account.
-              </Text>
+              <View style={styles.certHeaderDivider} />
 
-              {/* Christie's / Sotheby's Financial Settlement Statement */}
-              <View style={styles.settlementStatement}>
-                <View style={styles.settlementHeaderRow}>
-                  <Text style={styles.settlementHeaderText}>SETTLEMENT STATEMENT</Text>
-                  <Text style={styles.settlementVaultTag}>ZAR ESCROW</Text>
+              {/* Title Section */}
+              <View style={styles.certTitleSection}>
+                <Text style={styles.certMainTitle}>CERTIFICATE</Text>
+                <Text style={styles.certSubtitle}>— OF ACQUISITION —</Text>
+              </View>
+
+              {/* Recipient Section */}
+              <View style={styles.certRecipientSection}>
+                <Text style={styles.certPresentedTo}>THIS CERTIFICATE IS PROUDLY PRESENTED TO</Text>
+                <Text style={styles.certWinnerName}>
+                  {user?.name || (typeof lot.winner === "object" ? lot.winner?.name : lot.winner) || "Distinguished Patron"}
+                </Text>
+                <View style={styles.certWinnerUnderline} />
+              </View>
+
+              {/* Proclamation Copy */}
+              <View style={styles.certProclamationSection}>
+                <Text style={styles.certProclamationText}>
+                  In recognition of your successful bid and acquisition in The Grand Store Auction.
+                </Text>
+                <Text style={styles.certProclamationText}>
+                  Your passion for exceptional spirits and rare collections is truly appreciated.
+                </Text>
+                <Text style={styles.certProclamationCheers}>
+                  Cheers to Great Choices!
+                </Text>
+              </View>
+
+              {/* Lot Particulars Box */}
+              <View style={styles.certParticularsBox}>
+                <View style={styles.certParticularsHeader}>
+                  <View style={{ flex: 1, paddingRight: 8 }}>
+                    <Text style={styles.certParticularsLabel}>CATALOGUE LOT PARTICULARS</Text>
+                    <Text style={styles.certParticularsTitle} numberOfLines={2}>
+                      Lot #{lot.lotNumber || lot._id.slice(-6).toUpperCase()}: {lot.title}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={styles.certParticularsLabel}>WINNING HAMMER BID</Text>
+                    <Text style={styles.certParticularsPrice}>
+                      R{Number(lot.winningBid || 0).toLocaleString("en-ZA")}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.certParticularsFooter}>
+                  <Text style={styles.certParticularsAuth}>Authentication: The Grand Store Private Vault</Text>
+                  <View style={styles.certParticularsCpaBadge}>
+                    <Text style={styles.certParticularsCpaText}>✓ CPA SEC. 45 TRUST SECURED</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Proof / Issue Date, Provenance Laurel, Gold Medallion */}
+              <View style={styles.certSealRow}>
+                {/* Date of Issue */}
+                <View style={styles.certDateCol}>
+                  <Text style={styles.certDateLabel}>DATE OF ISSUE</Text>
+                  <Text style={styles.certDateValue}>
+                    {lot.endDate
+                      ? new Date(lot.endDate).toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" })
+                      : new Date().toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" })}
+                  </Text>
+                  <View style={styles.certDateLine} />
                 </View>
 
-                <View style={styles.statementRow}>
-                  <Text style={styles.statementLabel}>Winning Hammer Bid</Text>
-                  <Text style={styles.statementVal}>R{Number(lot.winningBid || 0).toLocaleString("en-ZA")}</Text>
+                {/* Center Certified Provenance */}
+                <View style={styles.certProvenanceCol}>
+                  <View style={styles.certProvenanceIcon}>
+                    <Text style={{ fontSize: 18 }}>⚖️</Text>
+                  </View>
+                  <Text style={styles.certProvenanceTitle}>CERTIFIED PROVENANCE</Text>
+                  <Text style={styles.certProvenanceStars}>★ ★ ★</Text>
                 </View>
-                <View style={styles.statementRow}>
-                  <Text style={styles.statementLabel}>Buyer's Premium (5%)</Text>
-                  <Text style={styles.statementVal}>R{Number(lot.buyerPremiumAmount || 0).toLocaleString("en-ZA")}</Text>
-                </View>
-                <View style={styles.statementRow}>
-                  <Text style={styles.statementLabel}>B.A.R. Vault Surcharge (2%)</Text>
-                  <Text style={styles.statementVal}>R{Number(lot.barChargeAmount || 0).toLocaleString("en-ZA")}</Text>
-                </View>
-                <View style={styles.statementRow}>
-                  <Text style={styles.statementLabel}>VAT (15%)</Text>
-                  <Text style={styles.statementVal}>R{Number(lot.vatAmount || 0).toLocaleString("en-ZA")}</Text>
-                </View>
-                <View style={styles.statementRow}>
-                  <Text style={styles.statementLabel}>White-Glove Courier Logistics</Text>
-                  <Text style={styles.statementValHighlight}>
-                    {lot.shippingCost ? `R${Number(lot.shippingCost).toLocaleString("en-ZA")}` : "Calculated at Checkout"}
+
+                {/* Bottom-Right Medallion Seal */}
+                <View style={styles.certMedallionCol}>
+                  <View style={styles.certMedallionCircle}>
+                    <Text style={styles.certMedallionStars}>★ ★ ★</Text>
+                    <Text style={styles.certMedallionTextSmall}>EXCEPTIONAL</Text>
+                    <Text style={styles.certMedallionTextBold}>PEOPLE</Text>
+                    <Text style={styles.certMedallionTextSmall}>SPIRITS</Text>
+                    <Text style={styles.certMedallionInfinity}>∞</Text>
+                  </View>
+                  <Text style={styles.certRefNo}>
+                    NO. {lot.gsReference || `GSC-${lot._id.slice(-6).toUpperCase()}`}
                   </Text>
                 </View>
-
-                <View style={styles.netSumDivider} />
-                <View style={styles.netSumRow}>
-                  <View>
-                    <Text style={styles.netSumLabel}>NET ACQUISITION SUM</Text>
-                    <Text style={styles.netSumSub}>Full taxes & insurance included</Text>
-                  </View>
-                  <Text style={styles.netSumTotal}>
-                    R{Number(lot.totalPaidByBuyer || (lot.winningBid || 0) * 1.22).toLocaleString("en-ZA")}
-                  </Text>
-                </View>
               </View>
 
-              {/* Grand Store Security Watermark & Provenance Note */}
-              <View style={styles.certWatermarkRow}>
-                <Text style={styles.certWatermarkText}>THE GRAND STORE • VAULT ARCHIVE • CERTIFIED PROVENANCE</Text>
+              {/* Bottom Footnote & Corner Motto */}
+              <View style={styles.certBottomFootnote}>
+                <Text style={styles.certFootnoteText}>
+                  COLLECT INVEST CELEBRATE  •  THE GRAND STORE VAULT ARCHIVE
+                </Text>
               </View>
 
-              {/* Curatorial Signatures Representation */}
-              <View style={styles.certSignaturesContainer}>
-                <View style={styles.certSigCol}>
-                  <Text style={styles.certSigName}>Julian Vance-Montgomery</Text>
-                  <View style={styles.certSigLine} />
-                  <Text style={styles.certSigRole}>Curator of Acquisitions</Text>
-                </View>
-                <View style={styles.certSigCol}>
-                  <Text style={styles.certSigName}>Eleanor St. Claire</Text>
-                  <View style={styles.certSigLine} />
-                  <Text style={styles.certSigRole}>Chief Escrow Registrar</Text>
-                </View>
-              </View>
-
-              {/* Download Official Certificate PDF Button */}
-              <TouchableOpacity
-                style={styles.downloadCertBtn}
-                onPress={() => {
-                  const certUrl = `https://api.grandstoreglobal.com/api/auction/${lot._id}/certificate`;
-                  Linking.openURL(certUrl).catch(err => console.warn('Could not open certificate URL:', err));
-                }}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.downloadCertText}>📜 DOWNLOAD OFFICIAL PDF CERTIFICATE</Text>
-              </TouchableOpacity>
-
-              {/* Action Button */}
-              {lot.paymentStatus === "Paid" ? (
-                <View style={styles.settledBadgeBtn}>
-                  <Text style={styles.settledBadgeText}>✓ ACQUISITION SETTLED • VAULT DISPATCH IN PREPARATION</Text>
-                </View>
-              ) : (
+              {/* Action Buttons: Download PDF & Share */}
+              <View style={styles.certButtonRow}>
                 <TouchableOpacity
-                  style={styles.claimLotBtn}
-                  onPress={() => navigation.navigate("AuctionCheckout", { lotId: lot._id, lot })}
-                  activeOpacity={0.88}
+                  style={[styles.certDownloadBtn, downloadingCert && { opacity: 0.6 }]}
+                  onPress={handleDownloadCertificate}
+                  disabled={downloadingCert}
+                  activeOpacity={0.8}
                 >
-                  <LinearGradient colors={["#ffd700", "#e0ad38", "#c99742"]} style={styles.claimLotGradient}>
-                    <Text style={styles.claimLotText}>CLAIM LOT & COMPLETE SETTLEMENT →</Text>
-                  </LinearGradient>
+                  <Text style={styles.certDownloadBtnText}>
+                    {downloadingCert ? "⏳ DOWNLOADING PDF..." : "📜 DOWNLOAD OFFICIAL PDF"}
+                  </Text>
                 </TouchableOpacity>
-              )}
+
+                <TouchableOpacity
+                  style={styles.certShareBtn}
+                  onPress={handleShareCertificate}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.certShareBtnText}>🔗 SHARE</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Settlement / Claim Status CTA */}
+              <View style={{ marginTop: 12 }}>
+                {lot.paymentStatus === "Paid" ? (
+                  <View style={styles.certPaidBadge}>
+                    <Text style={styles.certPaidBadgeText}>
+                      ✓ ACQUISITION SETTLED • VAULT DISPATCH IN PREPARATION
+                    </Text>
+                  </View>
+                ) : (lot.paymentStatus === "Awaiting_Approval" || Boolean(lot.proofUrl)) ? (
+                  <TouchableOpacity
+                    style={styles.certAwaitingBadge}
+                    onPress={() => navigation.navigate("AuctionCheckout", { lotId: lot._id, lot })}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.certAwaitingBadgeText}>
+                      ⏳ EFT PROOF SUBMITTED • AWAITING ADMIN VERIFICATION
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.claimLotBtn}
+                    onPress={() => navigation.navigate("AuctionCheckout", { lotId: lot._id, lot })}
+                    activeOpacity={0.88}
+                  >
+                    <LinearGradient colors={["#ffd700", "#e0ad38", "#c99742"]} style={styles.claimLotGradient}>
+                      <Text style={styles.claimLotText}>CLAIM LOT & COMPLETE SETTLEMENT →</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                )}
+              </View>
 
               {/* Integrated Calendar Handover Card */}
               <View style={styles.calendarMiniCard}>
@@ -1022,7 +1147,7 @@ export default function AuctionLotDetails({ route, navigation }) {
                   </Text>
                 </View>
               </View>
-            </LinearGradient>
+            </View>
           </View>
         )}
 
@@ -1418,7 +1543,7 @@ export default function AuctionLotDetails({ route, navigation }) {
             <TouchableOpacity
               style={styles.proceedCheckoutBtn}
               onPress={() => {
-                setShowCelebrationModal(false);
+                handleDismissCelebration();
                 navigation.navigate("AuctionCheckout", { lotId: lot._id, lot });
               }}
               activeOpacity={0.88}
@@ -1430,7 +1555,7 @@ export default function AuctionLotDetails({ route, navigation }) {
 
             <TouchableOpacity
               style={styles.closeCelebrationBtn}
-              onPress={() => setShowCelebrationModal(false)}
+              onPress={handleDismissCelebration}
             >
               <Text style={styles.closeCelebrationText}>Review Certificate in Catalogue</Text>
             </TouchableOpacity>
@@ -1773,277 +1898,488 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
 
-  // 4. Certificate of Acquisition
-  certificateCard: {
+  // 4. Official Certificate of Acquisition (White Parchment Luxury Design)
+  certOuterContainer: {
     marginHorizontal: 16,
     marginVertical: 14,
-    borderRadius: 20,
-    overflow: "hidden",
-    borderWidth: 1.5,
-    borderColor: "rgba(212, 175, 55, 0.7)",
-    shadowColor: "#d4af37",
+    backgroundColor: "#FAF9F5",
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: "#181818",
+    padding: 10,
+    position: "relative",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 15,
-    elevation: 8,
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 6,
   },
-  certificateGradient: {
-    padding: 18,
+  certRibbonTopRight: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    backgroundColor: "#181818",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderBottomLeftRadius: 8,
+    zIndex: 10,
   },
-  certificateHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
+  certRibbonTopRightText: {
+    color: "#d4af37",
+    fontSize: 7.5,
+    fontWeight: "900",
+    letterSpacing: 0.8,
   },
-  certificateEmblem: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: "#000",
+  certInnerFrame: {
     borderWidth: 1.5,
-    borderColor: "#d4af37",
+    borderColor: "#c5a059",
+    borderRadius: 8,
+    padding: 14,
+    backgroundColor: "#FAF9F5",
+    position: "relative",
+  },
+  certWatermarkContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
+    opacity: 0.05,
+    zIndex: 0,
   },
-  certificateEmblemText: {
-    fontSize: 24,
-  },
-  certificateHeaderInfo: {
-    flex: 1,
-  },
-  awardTagRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 3,
-  },
-  awardTag: {
-    color: "#f5d77f",
-    fontSize: 9,
-    fontWeight: "900",
-    letterSpacing: 1,
-    backgroundColor: "rgba(212, 175, 55, 0.15)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  verifiedWinnerTag: {
-    color: "#34d399",
-    fontSize: 9,
-    fontWeight: "bold",
-    letterSpacing: 0.8,
-    backgroundColor: "rgba(16, 185, 129, 0.15)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  certificateTitle: {
-    color: "#ffffff",
-    fontSize: 17,
-    fontWeight: "bold",
-  },
-  certificateGreeting: {
-    color: "#e7ddcb",
-    fontSize: 12,
-    lineHeight: 18,
-    marginBottom: 14,
-  },
-  settlementStatement: {
-    backgroundColor: "rgba(0,0,0,0.6)",
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    padding: 14,
-    marginBottom: 16,
-  },
-  settlementHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.08)",
-    marginBottom: 8,
-  },
-  settlementHeaderText: {
-    color: "#f5d77f",
-    fontSize: 10,
-    fontWeight: "900",
-    letterSpacing: 1.2,
-  },
-  settlementVaultTag: {
-    color: "rgba(255,255,255,0.4)",
-    fontSize: 9,
-    fontWeight: "600",
-  },
-  statementRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 3,
-  },
-  statementLabel: {
-    color: "rgba(255,255,255,0.65)",
-    fontSize: 11,
-  },
-  statementVal: {
-    color: "#ffffff",
-    fontSize: 11,
-    fontWeight: "600",
-  },
-  statementValHighlight: {
-    color: "#f5d77f",
-    fontSize: 11,
-    fontWeight: "bold",
-  },
-  netSumDivider: {
-    height: 1,
-    backgroundColor: "rgba(212, 175, 55, 0.3)",
-    marginVertical: 8,
-  },
-  netSumRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  netSumLabel: {
-    color: "#f5d77f",
-    fontSize: 11,
-    fontWeight: "900",
-    letterSpacing: 1,
-  },
-  netSumSub: {
-    color: "rgba(255,255,255,0.4)",
-    fontSize: 9,
-  },
-  netSumTotal: {
-    color: "#ffffff",
-    fontSize: 18,
-    fontWeight: "900",
-  },
-  claimLotBtn: {
-    borderRadius: 14,
-    overflow: "hidden",
-    marginBottom: 12,
-  },
-  claimLotGradient: {
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  claimLotText: {
-    color: "#000",
-    fontSize: 12,
-    fontWeight: "900",
-    letterSpacing: 1.2,
-  },
-  certWatermarkRow: {
-    paddingVertical: 6,
-    alignItems: "center",
-    marginBottom: 10,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(212, 175, 55, 0.2)",
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(212, 175, 55, 0.2)",
+  certWatermarkCrest: {
+    fontSize: 72,
+    marginBottom: 4,
   },
   certWatermarkText: {
-    color: "rgba(212, 175, 55, 0.5)",
-    fontSize: 9,
-    fontWeight: "bold",
-    letterSpacing: 1.5,
+    fontSize: 26,
+    fontWeight: "900",
+    letterSpacing: 4,
+    color: "#181818",
+    textAlign: "center",
   },
-  certSignaturesContainer: {
+  certWatermarkSub: {
+    fontSize: 14,
+    fontWeight: "bold",
+    letterSpacing: 3,
+    color: "#181818",
+    marginTop: 4,
+  },
+  certHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 14,
-    paddingHorizontal: 8,
+    alignItems: "flex-start",
+    zIndex: 1,
+    marginTop: 8,
   },
-  certSigCol: {
+  certBrandCol: {
+    flex: 1,
+  },
+  certBadge: {
+    backgroundColor: "#181818",
+    alignSelf: "flex-start",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 3,
+    marginBottom: 4,
+  },
+  certBadgeText: {
+    color: "#d4af37",
+    fontSize: 7.5,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+  certBrandTitle: {
+    color: "#1a1a1a",
+    fontSize: 15,
+    fontWeight: "900",
+    letterSpacing: 1.5,
+  },
+  certBrandTagline: {
+    color: "#8a7a63",
+    fontSize: 9,
+    fontStyle: "italic",
+    marginTop: 1,
+  },
+  certPillarsCol: {
+    alignItems: "flex-end",
+    paddingLeft: 6,
+  },
+  certPillarItem: {
+    color: "#8a7a63",
+    fontSize: 7,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
+  certPillarDot: {
+    color: "#c5a059",
+    fontSize: 6,
+    marginVertical: 1,
+  },
+  certHeaderDivider: {
+    height: 1,
+    backgroundColor: "rgba(197, 160, 89, 0.4)",
+    marginVertical: 10,
+    zIndex: 1,
+  },
+  certTitleSection: {
+    alignItems: "center",
+    marginVertical: 6,
+    zIndex: 1,
+  },
+  certMainTitle: {
+    color: "#1a1a1a",
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: 3,
+  },
+  certSubtitle: {
+    color: "#a87d26",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 2,
+    marginTop: 2,
+  },
+  certRecipientSection: {
+    alignItems: "center",
+    marginVertical: 8,
+    zIndex: 1,
+  },
+  certPresentedTo: {
+    color: "#7a6b52",
+    fontSize: 8.5,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+  },
+  certWinnerName: {
+    color: "#1a1a1a",
+    fontSize: 18,
+    fontWeight: "bold",
+    fontStyle: "italic",
+    marginTop: 4,
+    textAlign: "center",
+  },
+  certWinnerUnderline: {
+    width: "70%",
+    height: 1.5,
+    backgroundColor: "#c5a059",
+    marginTop: 4,
+  },
+  certProclamationSection: {
+    alignItems: "center",
+    marginVertical: 6,
+    paddingHorizontal: 6,
+    zIndex: 1,
+  },
+  certProclamationText: {
+    color: "#332e27",
+    fontSize: 10.5,
+    textAlign: "center",
+    lineHeight: 15,
+    marginTop: 2,
+  },
+  certProclamationCheers: {
+    color: "#a87d26",
+    fontSize: 12,
+    fontWeight: "bold",
+    fontStyle: "italic",
+    marginTop: 4,
+    textAlign: "center",
+  },
+  certParticularsBox: {
+    backgroundColor: "#F4F1E6",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(197, 160, 89, 0.4)",
+    padding: 10,
+    marginVertical: 8,
+    zIndex: 1,
+  },
+  certParticularsHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(197, 160, 89, 0.3)",
+  },
+  certParticularsLabel: {
+    color: "#a87d26",
+    fontSize: 7.5,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+    marginBottom: 2,
+  },
+  certParticularsTitle: {
+    color: "#1a1a1a",
+    fontSize: 11.5,
+    fontWeight: "bold",
+  },
+  certParticularsPrice: {
+    color: "#1a1a1a",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  certParticularsFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: 6,
+  },
+  certParticularsAuth: {
+    color: "#6b5a41",
+    fontSize: 8.5,
+    flex: 1,
+  },
+  certParticularsCpaBadge: {
+    backgroundColor: "#E6F4EA",
+    borderWidth: 1,
+    borderColor: "#A8DAB5",
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  certParticularsCpaText: {
+    color: "#137333",
+    fontSize: 7.5,
+    fontWeight: "bold",
+  },
+  certSealRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginVertical: 8,
+    zIndex: 1,
+  },
+  certDateCol: {
+    flex: 1,
+  },
+  certDateLabel: {
+    color: "#6b5a41",
+    fontSize: 7.5,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
+  certDateValue: {
+    color: "#1a1a1a",
+    fontSize: 11,
+    fontWeight: "bold",
+    marginTop: 2,
+  },
+  certDateLine: {
+    height: 1,
+    backgroundColor: "#c5a059",
+    width: "80%",
+    marginTop: 2,
+  },
+  certProvenanceCol: {
     alignItems: "center",
     flex: 1,
   },
-  certSigName: {
-    color: "#f5d77f",
-    fontSize: 11,
-    fontStyle: "italic",
-    marginBottom: 3,
-  },
-  certSigLine: {
-    width: "70%",
-    height: 1,
-    backgroundColor: "rgba(212, 175, 55, 0.4)",
-    marginBottom: 3,
-  },
-  certSigRole: {
-    color: "rgba(255, 255, 255, 0.6)",
-    fontSize: 8,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  downloadCertBtn: {
-    backgroundColor: "rgba(212, 175, 55, 0.15)",
-    borderWidth: 1,
-    borderColor: "rgba(212, 175, 55, 0.4)",
-    borderRadius: 12,
-    paddingVertical: 12,
+  certProvenanceIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1.5,
+    borderColor: "#c5a059",
+    backgroundColor: "#FAF9F5",
+    justifyContent: "center",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 2,
   },
-  downloadCertText: {
-    color: "#ffd700",
-    fontSize: 11,
+  certProvenanceTitle: {
+    color: "#a87d26",
+    fontSize: 7.5,
     fontWeight: "bold",
-    letterSpacing: 1,
+    letterSpacing: 0.6,
   },
-  settledBadgeBtn: {
-    backgroundColor: "rgba(16, 185, 129, 0.2)",
+  certProvenanceStars: {
+    color: "#a87d26",
+    fontSize: 7,
+    marginTop: 1,
+  },
+  certMedallionCol: {
+    flex: 1,
+    alignItems: "flex-end",
+  },
+  certMedallionCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 1.5,
+    borderColor: "#d4af37",
+    backgroundColor: "#FAF9F5",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 2,
+    shadowColor: "#d4af37",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  certMedallionStars: {
+    color: "#aa8022",
+    fontSize: 5,
+    lineHeight: 6,
+  },
+  certMedallionTextSmall: {
+    color: "#5a4413",
+    fontSize: 5,
+    fontWeight: "900",
+    lineHeight: 6,
+  },
+  certMedallionTextBold: {
+    color: "#141414",
+    fontSize: 6,
+    fontWeight: "bold",
+    lineHeight: 7,
+  },
+  certMedallionInfinity: {
+    color: "#aa8022",
+    fontSize: 7,
+    lineHeight: 8,
+  },
+  certRefNo: {
+    color: "#8a7a63",
+    fontSize: 7.5,
+    fontWeight: "bold",
+    marginTop: 3,
+  },
+  certBottomFootnote: {
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(197, 160, 89, 0.3)",
+    alignItems: "center",
+    marginBottom: 8,
+    zIndex: 1,
+  },
+  certFootnoteText: {
+    color: "#7a6b52",
+    fontSize: 7.5,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textAlign: "center",
+  },
+  certButtonRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 4,
+    zIndex: 1,
+  },
+  certDownloadBtn: {
+    flex: 2,
+    backgroundColor: "#161616",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#c5a059",
+    paddingVertical: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  certDownloadBtnText: {
+    color: "#f5d77f",
+    fontSize: 10.5,
+    fontWeight: "bold",
+    letterSpacing: 0.8,
+  },
+  certShareBtn: {
+    flex: 1,
+    backgroundColor: "rgba(197, 160, 89, 0.15)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#c5a059",
+    paddingVertical: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  certShareBtnText: {
+    color: "#705214",
+    fontSize: 10.5,
+    fontWeight: "bold",
+    letterSpacing: 0.8,
+  },
+  certPaidBadge: {
+    backgroundColor: "rgba(16, 185, 129, 0.15)",
     borderColor: "rgba(16, 185, 129, 0.5)",
     borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 10,
+    padding: 11,
     alignItems: "center",
-    marginBottom: 12,
   },
-  settledBadgeText: {
-    color: "#34d399",
+  certPaidBadgeText: {
+    color: "#059669",
     fontSize: 10,
     fontWeight: "bold",
     letterSpacing: 0.8,
     textAlign: "center",
   },
-  calendarMiniCard: {
-    backgroundColor: "rgba(255,255,255,0.03)",
-    borderRadius: 12,
+  certAwaitingBadge: {
+    backgroundColor: "rgba(245, 158, 11, 0.15)",
+    borderColor: "rgba(245, 158, 11, 0.5)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    padding: 12,
+    borderRadius: 10,
+    padding: 11,
+    alignItems: "center",
+  },
+  certAwaitingBadgeText: {
+    color: "#b45309",
+    fontSize: 10,
+    fontWeight: "bold",
+    letterSpacing: 0.8,
+    textAlign: "center",
+  },
+  claimLotBtn: {
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  claimLotGradient: {
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  claimLotText: {
+    color: "#000",
+    fontSize: 11.5,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  calendarMiniCard: {
+    backgroundColor: "#F4F1E6",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(197, 160, 89, 0.3)",
+    padding: 10,
+    marginTop: 10,
   },
   calendarMiniHeader: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 6,
+    marginBottom: 4,
   },
   calendarMiniIcon: {
-    fontSize: 18,
-    marginRight: 10,
+    fontSize: 16,
+    marginRight: 8,
   },
   calendarMiniTitle: {
-    color: "#fff",
-    fontSize: 11,
+    color: "#1a1a1a",
+    fontSize: 10.5,
     fontWeight: "bold",
   },
   calendarMiniDesc: {
-    color: "rgba(255,255,255,0.5)",
-    fontSize: 10,
+    color: "#6b5a41",
+    fontSize: 9.5,
   },
   calendarLocationRow: {
-    paddingTop: 6,
+    paddingTop: 4,
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.05)",
+    borderTopColor: "rgba(197, 160, 89, 0.2)",
   },
   calendarLocationText: {
-    color: "rgba(255,255,255,0.7)",
-    fontSize: 10,
+    color: "#4a4237",
+    fontSize: 9.5,
   },
 
   // 5. Bidding Console

@@ -103,10 +103,12 @@ export default function AuctionCheckout({ route, navigation }) {
   const loadUser = async () => {
     try {
       const stored = await AsyncStorage.getItem("userInfo");
+      const storedToken = await AsyncStorage.getItem("userToken");
       if (stored) {
         const parsed = JSON.parse(stored);
         setUser(parsed);
-        setToken(parsed.token);
+        const resolvedToken = parsed.token || storedToken || null;
+        setToken(resolvedToken);
         const names = (parsed.name || "").split(" ");
         setAddressForm((prev) => ({
           ...prev,
@@ -114,6 +116,8 @@ export default function AuctionCheckout({ route, navigation }) {
           lastName: names.slice(1).join(" ") || "",
           phone: parsed.phone || parsed.phoneNumber || "",
         }));
+      } else if (storedToken) {
+        setToken(storedToken);
       }
     } catch (e) {
       // ignore
@@ -195,11 +199,13 @@ export default function AuctionCheckout({ route, navigation }) {
       setUploadingProof(true);
 
       const formData = new FormData();
-      formData.append("file", {
-        uri: asset.uri,
+      const fileData = {
+        uri: Platform.OS === "android" ? asset.uri : asset.uri.replace("file://", ""),
         type: asset.type || "image/jpeg",
         name: asset.fileName || "receipt.jpg",
-      });
+      };
+      formData.append("file", fileData);
+      formData.append("document", fileData);
 
       const res = await safeFetch("/vendor/upload-public", {
         method: "POST",
@@ -208,15 +214,14 @@ export default function AuctionCheckout({ route, navigation }) {
 
       if (res && res.ok) {
         const data = await res.json();
-        setProofUrl(data.url);
+        const fullUrl = data.url?.startsWith("http") ? data.url : `${getActiveServerHost()}/${(data.url || "").replace(/^\//, "")}`;
+        setProofUrl(fullUrl);
         Alert.alert("Uploaded", "Payment receipt screenshot attached successfully.");
       } else {
-        // Fallback: use local URI
-        setProofUrl(asset.uri);
-        Alert.alert("Receipt Attached", "Receipt screenshot selected.");
+        Alert.alert("Upload Issue", "Could not upload image to server. You can also paste an online receipt link below.");
       }
     } catch (e) {
-      Alert.alert("Upload Error", "Could not upload file. You can enter an online receipt URL below.");
+      Alert.alert("Upload Error", "Could not process image upload. You can enter an online receipt link below.");
     } finally {
       setUploadingProof(false);
     }
