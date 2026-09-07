@@ -444,33 +444,12 @@ export default function EventTicketPass({ route, navigation }) {
     }
   };
 
-  // Share VIP Pass with User Choice (PDF Document, QR Photo, or Both)
+  // Direct 1-tap sharing of ticket pass (QR photo + VIP cellar pass caption) without options prompt
   const handleSharePass = (b) => {
-    Alert.alert(
-      "Share VIP Pass",
-      `Ticket: ${b.ticketId}\nChoose how you would like to share:`,
-      [
-        {
-          text: "🖼️ Share QR Pass (Photo)",
-          onPress: () => executeFileShare(b, "qr"),
-        },
-        {
-          text: "📄 Share PDF Pass (Document)",
-          onPress: () => executeFileShare(b, "pdf"),
-        },
-        {
-          text: "✨ Share Both (PDF & QR Photo)",
-          onPress: () => executeFileShare(b, "both"),
-        },
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-      ]
-    );
+    executeFileShare(b, "qr");
   };
 
-  const handleShareOrDownloadTicket = (b) => handleSharePass(b);
+  const handleShareOrDownloadTicket = (b) => executeFileShare(b, "qr");
 
   // Relaunch PayFast for a pending ticket
   const handlePayPendingTicket = async (booking) => {
@@ -868,7 +847,7 @@ export default function EventTicketPass({ route, navigation }) {
                   activeOpacity={0.8}
                 >
                   <Text style={styles.enlargedActionBtnIcon}>⬇️</Text>
-                  <Text style={styles.enlargedActionBtnText}>Download</Text>
+                  <Text style={styles.enlargedActionBtnText}>Download PDF</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -876,17 +855,17 @@ export default function EventTicketPass({ route, navigation }) {
                   onPress={() => executeFileShare(b, "qr")}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.enlargedActionBtnIcon}>🖼️</Text>
-                  <Text style={[styles.enlargedActionBtnText, { color: "#110e08" }]}>Share QR</Text>
+                  <Text style={styles.enlargedActionBtnIcon}>📲</Text>
+                  <Text style={[styles.enlargedActionBtnText, { color: "#110e08" }]}>Share Ticket</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   style={styles.enlargedActionBtn}
-                  onPress={() => executeFileShare(b, "pdf")}
+                  onPress={() => setEnlargedQrTicket(null)}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.enlargedActionBtnIcon}>📄</Text>
-                  <Text style={styles.enlargedActionBtnText}>Share PDF</Text>
+                  <Text style={styles.enlargedActionBtnIcon}>✕</Text>
+                  <Text style={styles.enlargedActionBtnText}>Close</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -904,7 +883,7 @@ export default function EventTicketPass({ route, navigation }) {
           <View style={styles.shareLoadingCard}>
             <ActivityIndicator size="large" color="#c99742" />
             <Text style={styles.shareLoadingTitle}>PREPARING VIP PASS</Text>
-            <Text style={styles.shareLoadingSub}>Attaching official VIP Pass PDF & scannable QR photo...</Text>
+            <Text style={styles.shareLoadingSub}>Attaching scannable QR ticket...</Text>
           </View>
         </View>
       </Modal>
@@ -1074,7 +1053,7 @@ export default function EventTicketPass({ route, navigation }) {
                   </LinearGradient>
                 </TouchableOpacity>
 
-                {/* 2. SHARE VIP PASS (WITH GENERATED QR IMAGE & MESSAGE) */}
+                {/* 2. SHARE TICKET (DIRECT 1-TAP WITH GENERATED QR PHOTO & MESSAGE) */}
                 <TouchableOpacity
                   style={[styles.downloadTicketBtn, { borderColor: "#c9a35b" }]}
                   onPress={() => handleSharePass(b)}
@@ -1085,7 +1064,7 @@ export default function EventTicketPass({ route, navigation }) {
                     style={styles.downloadGradient}
                   >
                     <Text style={styles.downloadTicketIcon}>📲</Text>
-                    <Text style={styles.downloadTicketText}>SHARE VIP PASS & QR</Text>
+                    <Text style={styles.downloadTicketText}>SHARE TICKET</Text>
                   </LinearGradient>
                 </TouchableOpacity>
 
