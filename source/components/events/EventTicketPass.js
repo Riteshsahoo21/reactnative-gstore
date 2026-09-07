@@ -23,6 +23,7 @@ import {
 import LinearGradient from "react-native-linear-gradient";
 import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import RNShare from "react-native-share";
 import AppHeader from "../../widgets/AppHeader";
 import {
   API_BASE,
@@ -42,6 +43,7 @@ const getEventApiCandidates = () => {
   list.push(
     API_BASE,
     "http://127.0.0.1:5000/api",
+    "http://192.168.1.102:5000/api",
     "http://localhost:5000/api",
     "http://10.0.2.2:5000/api",
     "http://192.168.1.9:5000/api"
@@ -74,6 +76,7 @@ export default function EventTicketPass({ route, navigation }) {
   const [payfastModalData, setPayfastModalData] = useState(null);
   const [isPayfastLoading, setIsPayfastLoading] = useState(true);
   const [enlargedQrTicket, setEnlargedQrTicket] = useState(null);
+  const [isPreparingShare, setIsPreparingShare] = useState(false);
 
   const safeFetch = async (endpoint, options = {}) => {
     const candidates = getEventApiCandidates();
@@ -257,57 +260,167 @@ export default function EventTicketPass({ route, navigation }) {
     }
   };
 
-  // Share VIP Pass with Generated QR Image & Message
-  const handleSharePass = async (b) => {
+  // Helper to fetch official base64 data for PDF and QR photo
+  const fetchPassDataForSharing = async (booking) => {
+    const targetId = booking._id || booking.ticketId;
+    const candidates = typeof getEventApiCandidates === "function" ? getEventApiCandidates() : [];
+
+    for (const base of candidates) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4000);
+        const res = await fetch(
+          `${base.replace(/\/$/, "")}/events/bookings/${targetId}/ticket-pdf?format=base64`,
+          {
+            method: "GET",
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(timer);
+        if (res && res.ok) {
+          const json = await res.json();
+          if (json && (json.pdfBase64 || json.qrBase64)) {
+            return json;
+          }
+        }
+      } catch (e) {}
+    }
+    return null;
+  };
+
+  // Execute native file sharing (PDF Document or QR Photo or Both)
+  const executeFileShare = async (b, mode = "both") => {
+    const targetId = b._id || b.ticketId;
+    const eventObj = b.event || {};
+    const eventTitle = eventObj.title || "Exclusive Tasting Experience";
+    const dateStr = eventObj.date
+      ? new Date(eventObj.date).toLocaleDateString("en-US", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+      : "Confirmed Date";
+    const timeStr = eventObj.startTime || "18:00";
+    const venueStr = eventObj.location || "The Grand Store Private Vault";
+
+    // Clean caption message with ZERO links - pass files are attached natively
+    const captionMessage =
+      `🏆 THE GRAND STORE • VIP CELLAR PASS\n\n` +
+      `Event: ${eventTitle}\n` +
+      `Date: ${dateStr} • ${timeStr}\n` +
+      `Venue: ${venueStr}\n` +
+      `Ticket ID: ${b.ticketId}\n` +
+      `Tier: ${b.ticketType} (${b.quantity} ${b.quantity === 1 ? "Guest" : "Guests"})\n` +
+      `Booking Ref: ${b.gsReference || "N/A"}\n\n` +
+      `Present this pass at reception for VIP cellar admission.`;
+
     try {
-      const eventObj = b.event || {};
-      const eventTitle = eventObj.title || "Exclusive Tasting Experience";
-      const dateStr = eventObj.date
-        ? new Date(eventObj.date).toLocaleDateString("en-US", {
-            weekday: "short",
-            day: "numeric",
-            month: "short",
-            year: "numeric",
-          })
-        : "Confirmed Date";
-      const timeStr = eventObj.startTime || "18:00";
-      const venueStr = eventObj.location || "The Grand Store Private Vault";
+      setIsPreparingShare(true);
+      const passData = await fetchPassDataForSharing(b);
 
-      const qrPayload = JSON.stringify({
-        ticketId: b.ticketId,
-        gsReference: b.gsReference,
-        event: eventTitle,
-        date: eventObj.date,
-        tier: b.ticketType,
-        quantity: b.quantity,
-      });
+      const pdfDataUrl = passData?.pdfBase64;
+      let finalQrBase64 =
+        passData?.qrBase64 ||
+        (typeof b.qrCodeData === "string" && b.qrCodeData.startsWith("data:image") ? b.qrCodeData : null);
 
-      // Generate clean public web image URL for QR code (never dump base64 strings into text)
-      const qrWebLink = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(b.ticketId || qrPayload)}`;
-
-      const targetId = b._id || b.ticketId;
-      let host = typeof getActiveServerHost === "function" ? getActiveServerHost() : "https://api.grandstoreglobal.com";
-      if (!host || host.includes("127.0.0.1") || host.includes("localhost")) {
-        host = "https://api.grandstoreglobal.com";
+      if (!finalQrBase64) {
+        try {
+          const qrFetchRes = await fetch(
+            `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(b.ticketId)}`
+          );
+          const blob = await qrFetchRes.blob();
+          finalQrBase64 = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          });
+        } catch (e) {
+          console.log("Could not convert QR to base64:", e);
+        }
       }
-      const pdfPassUrl = `${host}/api/events/bookings/${targetId}/ticket-pdf`;
 
-      const shareMessage =
-        `🏆 THE GRAND STORE • VIP CELLAR PASS\n\n` +
-        `Event: ${eventTitle}\n` +
-        `Date: ${dateStr} • ${timeStr}\n` +
-        `Venue: ${venueStr}\n` +
-        `Ticket ID: ${b.ticketId}\n` +
-        `Tier: ${b.ticketType} (${b.quantity} ${b.quantity === 1 ? "Guest" : "Guests"})\n` +
-        `Booking Ref: ${b.gsReference || "N/A"}\n\n` +
-        `🎟️ Scannable QR Pass:\n${qrWebLink}\n\n` +
-        `📄 Printable VIP Pass (PDF):\n${pdfPassUrl}\n\n` +
-        `Present this pass at reception for VIP cellar admission.`;
-
-      await Share.share({
-        title: `VIP Pass - ${b.ticketId}`,
-        message: shareMessage,
-      });
+      if (mode === "pdf") {
+        if (!pdfDataUrl) {
+          Alert.alert("Preparing Pass", "Could not retrieve the official PDF pass file. Please check your internet connection.");
+          return;
+        }
+        // Share ONLY the original PDF document
+        await RNShare.open({
+          title: `VIP Pass - ${b.ticketId}`,
+          subject: `VIP Event Pass • ${eventTitle}`,
+          url: pdfDataUrl,
+          filename: `TheGrandStore-VIP-Pass-${b.ticketId}`,
+          type: "application/pdf",
+          message: captionMessage,
+          failOnCancel: false,
+        });
+      } else if (mode === "qr") {
+        if (!finalQrBase64) {
+          Alert.alert("Notice", "Could not generate QR image pass.");
+          return;
+        }
+        // Share ONLY the original QR photo
+        await RNShare.open({
+          title: `VIP Pass QR - ${b.ticketId}`,
+          subject: `VIP Cellar Access QR • ${eventTitle}`,
+          url: finalQrBase64,
+          filename: `VIP-Pass-QR-${b.ticketId}`,
+          type: "image/png",
+          message: captionMessage,
+          failOnCancel: false,
+        });
+      } else {
+        // Share BOTH files together
+        if (pdfDataUrl && finalQrBase64 && Platform.OS === "android") {
+          try {
+            await RNShare.open({
+              title: `VIP Pass & QR - ${b.ticketId}`,
+              subject: `VIP Event Pass • ${eventTitle}`,
+              urls: [pdfDataUrl, finalQrBase64],
+              filenames: [
+                `TheGrandStore-VIP-Pass-${b.ticketId}.pdf`,
+                `VIP-Pass-QR-${b.ticketId}.png`,
+              ],
+              type: "*/*",
+              message: captionMessage,
+              failOnCancel: false,
+            });
+          } catch (multiErr) {
+            // If multi-file sharing is not supported by target app, share the PDF pass
+            await RNShare.open({
+              title: `VIP Pass - ${b.ticketId}`,
+              subject: `VIP Event Pass • ${eventTitle}`,
+              url: pdfDataUrl,
+              filename: `TheGrandStore-VIP-Pass-${b.ticketId}`,
+              type: "application/pdf",
+              message: captionMessage,
+              failOnCancel: false,
+            });
+          }
+        } else if (pdfDataUrl) {
+          await RNShare.open({
+            title: `VIP Pass - ${b.ticketId}`,
+            subject: `VIP Event Pass • ${eventTitle}`,
+            url: pdfDataUrl,
+            filename: `TheGrandStore-VIP-Pass-${b.ticketId}`,
+            type: "application/pdf",
+            message: captionMessage,
+            failOnCancel: false,
+          });
+        } else if (finalQrBase64) {
+          await RNShare.open({
+            title: `VIP Pass QR - ${b.ticketId}`,
+            subject: `VIP Cellar Access QR • ${eventTitle}`,
+            url: finalQrBase64,
+            filename: `VIP-Pass-QR-${b.ticketId}`,
+            type: "image/png",
+            message: captionMessage,
+            failOnCancel: false,
+          });
+        }
+      }
     } catch (err) {
       if (
         err?.message &&
@@ -315,9 +428,38 @@ export default function EventTicketPass({ route, navigation }) {
         !err.message.includes("dismissed") &&
         !err.message.includes("cancelled")
       ) {
-        console.log("Error sharing pass:", err);
+        console.log("Error sharing pass files:", err);
+        Alert.alert("Notice", "Could not complete direct file sharing. Please try again.");
       }
+    } finally {
+      setIsPreparingShare(false);
     }
+  };
+
+  // Share VIP Pass with User Choice (PDF Document, QR Photo, or Both)
+  const handleSharePass = (b) => {
+    Alert.alert(
+      "Share VIP Pass",
+      `Ticket: ${b.ticketId}\nChoose how you would like to share:`,
+      [
+        {
+          text: "🖼️ Share QR Pass (Photo)",
+          onPress: () => executeFileShare(b, "qr"),
+        },
+        {
+          text: "📄 Share PDF Pass (Document)",
+          onPress: () => executeFileShare(b, "pdf"),
+        },
+        {
+          text: "✨ Share Both (PDF & QR Photo)",
+          onPress: () => executeFileShare(b, "both"),
+        },
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+      ]
+    );
   };
 
   const handleShareOrDownloadTicket = (b) => handleSharePass(b);
@@ -717,22 +859,46 @@ export default function EventTicketPass({ route, navigation }) {
                   onPress={() => handleDownloadPdf(b)}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.enlargedActionBtnIcon}>📄</Text>
-                  <Text style={styles.enlargedActionBtnText}>Download PDF</Text>
+                  <Text style={styles.enlargedActionBtnIcon}>⬇️</Text>
+                  <Text style={styles.enlargedActionBtnText}>Download</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   style={[styles.enlargedActionBtn, styles.enlargedShareBtn]}
-                  onPress={() => handleSharePass(b)}
+                  onPress={() => executeFileShare(b, "qr")}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.enlargedActionBtnIcon}>📲</Text>
+                  <Text style={styles.enlargedActionBtnIcon}>🖼️</Text>
                   <Text style={[styles.enlargedActionBtnText, { color: "#110e08" }]}>Share QR</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.enlargedActionBtn}
+                  onPress={() => executeFileShare(b, "pdf")}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.enlargedActionBtnIcon}>📄</Text>
+                  <Text style={styles.enlargedActionBtnText}>Share PDF</Text>
                 </TouchableOpacity>
               </View>
             </View>
           </TouchableOpacity>
         </SafeAreaView>
+      </Modal>
+    );
+  };
+
+  const renderPreparingShareModal = () => {
+    if (!isPreparingShare) return null;
+    return (
+      <Modal visible={isPreparingShare} transparent animationType="fade">
+        <View style={styles.shareLoadingOverlay}>
+          <View style={styles.shareLoadingCard}>
+            <ActivityIndicator size="large" color="#c99742" />
+            <Text style={styles.shareLoadingTitle}>PREPARING VIP PASS</Text>
+            <Text style={styles.shareLoadingSub}>Attaching official VIP Pass PDF & scannable QR photo...</Text>
+          </View>
+        </View>
       </Modal>
     );
   };
@@ -1067,6 +1233,7 @@ export default function EventTicketPass({ route, navigation }) {
 
       {renderPayfastModal()}
       {renderEnlargedQrModal()}
+      {renderPreparingShareModal()}
     </SafeAreaView>
   );
 }
@@ -1764,5 +1931,40 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: "800",
     letterSpacing: 0.5,
+  },
+  shareLoadingOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.75)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  shareLoadingCard: {
+    backgroundColor: "#19140e",
+    borderWidth: 1.5,
+    borderColor: "#c99742",
+    borderRadius: 16,
+    padding: 24,
+    alignItems: "center",
+    width: "85%",
+    elevation: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.7,
+    shadowRadius: 12,
+  },
+  shareLoadingTitle: {
+    color: "#f5c242",
+    fontSize: 13.5,
+    fontWeight: "900",
+    letterSpacing: 1.5,
+    marginTop: 16,
+  },
+  shareLoadingSub: {
+    color: "#aaa",
+    fontSize: 11.5,
+    textAlign: "center",
+    marginTop: 6,
+    lineHeight: 16,
   },
 });
