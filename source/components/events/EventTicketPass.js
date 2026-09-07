@@ -169,11 +169,47 @@ export default function EventTicketPass({ route, navigation }) {
   const handleDownloadPdf = async (b) => {
     try {
       const targetId = b._id || b.ticketId;
-      let host = typeof getActiveServerHost === "function" ? getActiveServerHost() : "https://api.grandstoreglobal.com";
-      if (!host || host === "https://grandstoreglobal.com" || host === "http://grandstoreglobal.com") {
-        host = "https://api.grandstoreglobal.com";
+      const candidates = typeof getCandidateBases === "function" ? getCandidateBases() : [];
+      let workingHost = null;
+
+      // Prioritize local reversed host (adb reverse port 5000), LAN IP, and active server
+      const candidateHosts = [
+        "http://127.0.0.1:5000",
+        "http://localhost:5000",
+        ...(typeof getActiveServerHost === "function" ? [getActiveServerHost()] : []),
+        ...candidates.map((c) => (c ? c.replace(/\/api\/?$/, "") : null)),
+        "http://192.168.1.102:5000",
+        "http://10.0.2.2:5000",
+        "https://api.grandstoreglobal.com",
+      ].filter(Boolean);
+
+      const uniqueHosts = [...new Set(candidateHosts)];
+
+      // Verify which candidate host actually serves the PDF endpoint
+      for (const host of uniqueHosts) {
+        try {
+          const checkUrl = `${host}/api/events/bookings/${targetId}/ticket-pdf`;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 1800);
+          const res = await fetch(checkUrl, {
+            method: "HEAD",
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          if (res && res.status === 200) {
+            workingHost = host;
+            break;
+          }
+        } catch (e) {
+          // Probe next candidate
+        }
       }
-      const downloadUrl = `${host}/api/events/bookings/${targetId}/ticket-pdf`;
+
+      if (!workingHost) {
+        workingHost = "http://127.0.0.1:5000";
+      }
+
+      const downloadUrl = `${workingHost}/api/events/bookings/${targetId}/ticket-pdf?download=1`;
       await Linking.openURL(downloadUrl);
     } catch (err) {
       console.log("Error opening PDF download link:", err);
@@ -258,30 +294,13 @@ export default function EventTicketPass({ route, navigation }) {
         `Ticket ID: ${b.ticketId}\n` +
         `Tier: ${b.ticketType} (${b.quantity} ${b.quantity === 1 ? "Guest" : "Guests"})\n` +
         `Booking Ref: ${b.gsReference || "N/A"}\n\n` +
-        `Official scannable QR ticket attached. Present at reception for VIP cellar admission.`;
+        `Official Scannable Pass Verification:\n${qrImageUri}\n\n` +
+        `Present this pass at reception for VIP cellar admission.`;
 
-      let RNShareModule = null;
-      try {
-        RNShareModule = require("react-native-share").default || require("react-native-share");
-      } catch (e) {
-        RNShareModule = null;
-      }
-
-      if (RNShareModule && typeof RNShareModule.open === "function") {
-        await RNShareModule.open({
-          title: `VIP Pass - ${b.ticketId}`,
-          subject: `VIP Event Pass • ${eventTitle}`,
-          message: shareMessage,
-          url: qrImageUri,
-          type: "image/png",
-          failOnCancel: false,
-        });
-      } else {
-        await Share.share({
-          title: `VIP Pass - ${b.ticketId}`,
-          message: shareMessage,
-        });
-      }
+      await Share.share({
+        title: `VIP Pass - ${b.ticketId}`,
+        message: shareMessage,
+      });
     } catch (err) {
       if (
         err?.message &&
