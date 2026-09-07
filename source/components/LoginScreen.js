@@ -280,7 +280,7 @@ const LoginScreen = ({ navigation, route }) => {
         if (isShaMismatch) {
           Alert.alert(
             'Google Sign-In: SHA-1 Setup Needed',
-            'To enable Google 1-tap sign-in on this device, add your debug SHA-1 fingerprint to Firebase Console (grand-store-65d7c):\n\nSHA-1:\n5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25\n\nPackage: com.receiptionistapp\n\nYou can also sign in right now using Email & Password or Mobile OTP (+27).',
+            'To enable Google 1-tap sign-in on this device, ensure your SHA-1 fingerprint is registered in Firebase Console (grand-store-65d7c):\n\nSHA-1:\n84:F4:6A:B1:29:55:3D:FF:1A:06:3A:4E:FE:BD:18:99:81:71:36:3F\n\nPackage: com.grandstore.android\n\nYou can also sign in right now using Email & Password or Mobile OTP (+27).',
             [
               {
                 text: 'Sign in with Email',

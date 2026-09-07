@@ -41,59 +41,6 @@
           ]
         }
       }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:153305069501:android:553ad007d43df3e0aa04d4",
-        "android_client_info": {
-          "package_name": "com.receiptionistapp"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "153305069501-dq01kr7b6ingdl3f3qk5r9790hebvbv7.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.receiptionistapp",
-            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
-          }
-        },
-        {
-          "client_id": "153305069501-rel01kr7b6ingdl3f3qk5r9790hebvbv7.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.receiptionistapp",
-            "certificate_hash": "67095a1fd9639443e1f8fa652e18497eed09ed6e"
-          }
-        },
-        {
-          "client_id": "153305069501-old01kr7b6ingdl3f3qk5r9790hebvbv7.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.receiptionistapp",
-            "certificate_hash": "84f46ab129553dff1a063a4efebd18998171363f"
-          }
-        },
-        {
-          "client_id": "153305069501-nrfrhnj4l2427g5dbnn1ubpajocf578a.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyCIWnaT2EY-ZoEdmgcyG4wgajl4qiSlDdw"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "153305069501-nrfrhnj4l2427g5dbnn1ubpajocf578a.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
-        }
-      }
     }
   ],
   "configuration_version": "1"
