@@ -1958,7 +1958,7 @@ const Checkout = ({ navigation, route }) => {
           const pfRes = await safeApiFetch("/payfast/generate-shop", {
             method: "POST",
             headers: reqHeaders,
-            body: JSON.stringify({ orderId: targetPayOrderId }),
+            body: JSON.stringify({ orderId: targetPayOrderId, isMobile: true }),
           });
 
           if (pfRes && pfRes.ok) {
@@ -2015,8 +2015,9 @@ const Checkout = ({ navigation, route }) => {
     const currentUrl = navState?.url || "";
     console.log("PayFast In-App Navigation State:", currentUrl);
 
-    // 1. Success interception (PayFast returns to return_url, sandbox finish, or success page)
+    // 1. Success interception (PayFast returns to return_url, sandbox finish, mobile-return, or success page)
     const isSuccessUrl =
+      currentUrl.includes("mobile-return") && currentUrl.includes("status=success") ||
       currentUrl.includes("payment=success") ||
       currentUrl.includes("order-success") ||
       currentUrl.includes("/customer/order/") ||
@@ -2039,8 +2040,9 @@ const Checkout = ({ navigation, route }) => {
       return;
     }
 
-    // 2. Cancellation interception (PayFast returns to cancel_url)
+    // 2. Cancellation interception (PayFast returns to cancel_url or mobile-return cancel)
     if (
+      (currentUrl.includes("mobile-return") && currentUrl.includes("status=cancel")) ||
       currentUrl.includes("payment=cancel") ||
       currentUrl.includes("/cancel") ||
       currentUrl.includes("cancelled") ||
@@ -2181,7 +2183,7 @@ const Checkout = ({ navigation, route }) => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ orderId: targetPayOrderId }),
+        body: JSON.stringify({ orderId: targetPayOrderId, isMobile: true }),
       });
       if (pfRes && pfRes.ok) {
         const pfData = await pfRes.json();
@@ -2388,6 +2390,7 @@ const Checkout = ({ navigation, route }) => {
             onShouldStartLoadWithRequest={(req) => {
               const targetUrl = req?.url || "";
               if (
+                (targetUrl.includes("mobile-return") && targetUrl.includes("status=success")) ||
                 targetUrl.includes("payment=success") ||
                 targetUrl.includes("order-success") ||
                 targetUrl.includes("/customer/order/") ||

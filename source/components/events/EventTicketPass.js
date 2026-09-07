@@ -6,6 +6,8 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  Image,
+  Share,
   TouchableOpacity,
   SafeAreaView,
   ActivityIndicator,
@@ -146,6 +148,24 @@ export default function EventTicketPass({ route, navigation }) {
     }
   };
 
+  // Share or Download Ticket Pass
+  const handleShareOrDownloadTicket = async (b) => {
+    try {
+      const eventTitle = b.event?.title || "Private Cellar Tasting";
+      const dateStr = b.event?.date ? new Date(b.event.date).toLocaleDateString("en-ZA") : "";
+      const timeStr = b.event?.startTime || "18:00";
+      const venueStr = b.event?.location || "The Grand Store Private Vault";
+      const shareMsg = `🏆 THE GRAND STORE • VIP PASS\nEvent: ${eventTitle}\nDate: ${dateStr} at ${timeStr}\nVenue: ${venueStr}\nTicket ID: ${b.ticketId}\nBooking Ref: ${b.gsReference || "N/A"}\nTier: ${b.ticketType} (Qty: ${b.quantity})\n\nOfficial scannable QR ticket has also been delivered to your email. Present this pass at reception for cellar access.`;
+      
+      await Share.share({
+        title: `The Grand Store VIP Pass - ${b.ticketId}`,
+        message: shareMsg,
+      });
+    } catch (e) {
+      console.log("Error sharing pass:", e);
+    }
+  };
+
   // Relaunch PayFast for a pending ticket
   const handlePayPendingTicket = async (booking) => {
     try {
@@ -156,7 +176,7 @@ export default function EventTicketPass({ route, navigation }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ bookingId: booking._id }),
+        body: JSON.stringify({ bookingId: booking._id, isMobile: true }),
       });
 
       if (pfRes && pfRes.ok) {
@@ -191,7 +211,8 @@ export default function EventTicketPass({ route, navigation }) {
       currentUrl.includes("status=success") ||
       currentUrl.includes("/finish") ||
       currentUrl.includes("/complete") ||
-      currentUrl.includes("paid=true");
+      currentUrl.includes("paid=true") ||
+      (currentUrl.includes("mobile-return") && currentUrl.includes("status=success"));
 
     if (isSuccess) {
       setShowPayfastModal(false);
@@ -222,7 +243,8 @@ export default function EventTicketPass({ route, navigation }) {
       currentUrl.includes("payment=cancel") ||
       currentUrl.includes("/cancel") ||
       currentUrl.includes("cancelled") ||
-      currentUrl.includes("cancel=true")
+      currentUrl.includes("cancel=true") ||
+      (currentUrl.includes("mobile-return") && currentUrl.includes("status=cancel"))
     ) {
       setShowPayfastModal(false);
       setIsPayfastLoading(false);
@@ -375,6 +397,47 @@ export default function EventTicketPass({ route, navigation }) {
             startInLoadingState={true}
             onNavigationStateChange={handlePayfastNavStateChange}
             onLoadEnd={() => setIsPayfastLoading(false)}
+            onMessage={async (event) => {
+              try {
+                const msg = JSON.parse(event.nativeEvent.data);
+                if (msg.type === "PAYFAST_SUCCESS" || msg.status === "success") {
+                  setShowPayfastModal(false);
+                  setIsPayfastLoading(false);
+                  const booked = payfastModalData?.booking;
+                  const targetBookingId = booked?._id || booked?.ticketId;
+                  try {
+                    const token = await AsyncStorage.getItem("userToken");
+                    if (targetBookingId) {
+                      await safeFetch("/payfast/confirm-order", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        },
+                        body: JSON.stringify({ bookingId: targetBookingId }),
+                      });
+                    }
+                  } catch (e) {}
+                  Alert.alert("Payment Confirmed! 🥂", "Your ticket has been marked as PAID and your VIP pass is active.");
+                  fetchMyTickets();
+                } else if (msg.type === "PAYFAST_CANCEL" || msg.status === "cancel") {
+                  setShowPayfastModal(false);
+                  setIsPayfastLoading(false);
+                  Alert.alert("Cancelled", "PayFast payment was cancelled.");
+                }
+              } catch (e) {}
+            }}
+            onShouldStartLoadWithRequest={(request) => {
+              const reqUrl = request.url || "";
+              if (reqUrl.includes("mobile-return") && reqUrl.includes("status=success")) {
+                setShowPayfastModal(false);
+                setIsPayfastLoading(false);
+                Alert.alert("Payment Confirmed! 🥂", "Your ticket has been marked as PAID and your VIP pass is active.");
+                fetchMyTickets();
+                return false;
+              }
+              return true;
+            }}
             style={{ flex: 1, backgroundColor: "#0b0907" }}
           />
         </SafeAreaView>
@@ -496,27 +559,49 @@ export default function EventTicketPass({ route, navigation }) {
             </View>
           </View>
 
-          {/* SIMULATED BARCODE */}
-          <View style={styles.barcodeSection}>
-            <View style={styles.barcodeLines}>
-              {[...Array(38)].map((_, i) => (
-                <View
-                  key={i}
-                  style={[
-                    styles.barcodeBar,
-                    {
-                      width: i % 3 === 0 ? 3 : i % 5 === 0 ? 1 : 2,
-                      backgroundColor: i % 7 === 0 ? "transparent" : "#c99742",
-                    },
-                  ]}
-                />
-              ))}
+          {/* REAL VIP QR CODE & DOWNLOAD/SHARE */}
+          <View style={styles.qrCodeSection}>
+            <View style={styles.qrWrapper}>
+              <Image
+                source={{
+                  uri:
+                    b.qrCodeData ||
+                    `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
+                      JSON.stringify({
+                        ticketId: b.ticketId,
+                        gsReference: b.gsReference,
+                        event: eventObj.title,
+                        tier: b.ticketType,
+                        quantity: b.quantity,
+                      })
+                    )}`,
+                }}
+                style={styles.qrImage}
+                resizeMode="contain"
+              />
             </View>
             <Text style={styles.barcodeText}>{b.ticketId || b._id}</Text>
+            <Text style={styles.qrScanKicker}>OFFICIAL CELLAR VIP ADMISSION PASS</Text>
+
+            {isPaid && (
+              <TouchableOpacity
+                style={styles.downloadTicketBtn}
+                onPress={() => handleShareOrDownloadTicket(b)}
+                activeOpacity={0.8}
+              >
+                <LinearGradient
+                  colors={["#2b2214", "#15120c"]}
+                  style={styles.downloadGradient}
+                >
+                  <Text style={styles.downloadTicketIcon}>📥</Text>
+                  <Text style={styles.downloadTicketText}>DOWNLOAD / SHARE VIP PASS</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
           </View>
 
           <Text style={styles.entryInstructions}>
-            Present this digital VIP pass upon arrival. Your host sommelier will verify your pass for cellar entrance.
+            Present this scannable VIP pass upon arrival. Your host sommelier will verify your digital credentials for cellar access. An official PDF ticket has also been sent to your email.
           </Text>
 
           {/* BANK TRANSFER PROOF SECTION */}
@@ -885,7 +970,64 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  // BARCODE SECTION
+  // QR CODE & PASS SECTION
+  qrCodeSection: {
+    marginTop: 18,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.06)",
+    alignItems: "center",
+  },
+  qrWrapper: {
+    padding: 10,
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: "#c99742",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  qrImage: {
+    width: 170,
+    height: 170,
+    borderRadius: 6,
+  },
+  qrScanKicker: {
+    color: "#c99742",
+    fontSize: 9.5,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  downloadTicketBtn: {
+    marginTop: 12,
+    borderRadius: 8,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.4)",
+    width: "100%",
+  },
+  downloadGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  downloadTicketIcon: {
+    fontSize: 16,
+  },
+  downloadTicketText: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1,
+  },
   barcodeSection: {
     marginTop: 20,
     paddingTop: 16,

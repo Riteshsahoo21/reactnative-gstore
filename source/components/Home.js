@@ -698,7 +698,6 @@ const handleLogout = async () => {
                 { label: "Offers", icon: require("../resources/images/offer.png"), onPress: () => navigation.navigate(Offers), subtitle: "Exclusive Member Allocations" },
                 { label: "My Orders", icon: require("../resources/images/Order.png"), onPress: () => navigation.navigate("MyOrders"), subtitle: "Order History & Real-Time Tracking" },
                 { label: "Contact Us", icon: require("../resources/images/phone.png"), onPress: () => navigation.navigate("ContactUs"), subtitle: "Dedicated Private Sommelier & Support" },
-                { label: "About Us", icon: require("../resources/images/group.png"), onPress: () => navigation.navigate("AboutUs"), subtitle: "Heritage, Craftsmanship & Cellar Story" },
                 { label: "Logout", icon: require("../resources/images/logout_icon.png"), onPress: handleLogout, isLogout: true, subtitle: "Securely sign out of your account" },
               ].map((item, i) => {
                 const anim = itemAnimations[i] || new Animated.Value(1);

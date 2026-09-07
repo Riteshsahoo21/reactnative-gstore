@@ -26,7 +26,6 @@ import Payment from './source/components/order/Payment';
 import Checkout from './source/components/Checkout';
 import WhiskyBrands from './source/components/WhiskyBrands';
 import ProductDetails from './source/components/ProductDetails';
-import AboutUs from './source/components/AboutUs';
 import ContactUs from './source/components/ContactUs';
 import Wishlist from './source/components/Wishlist';
 import PaymentDetails from './source/components/PaymentDetails';
@@ -40,10 +39,12 @@ import AuctionLotDetails from './source/components/auction/AuctionLotDetails';
 import AuctionCheckout from './source/components/auction/AuctionCheckout';
 import MyBids from './source/components/auction/MyBids';
 import CustomerDashboard from './source/components/CustomerDashboard';
+import GlobalAgeVerificationModal from './source/components/GlobalAgeVerificationModal';
 const Rootstack = createNativeStackNavigator();
 
 const App = () => {
   return (
+    <>
       <NavigationContainer ref={navigatorRef => {
         NavigatorService.setContainer(navigatorRef);
       }}
@@ -145,11 +146,6 @@ const App = () => {
           options={{ headerShown: false}}
         />
          <Rootstack.Screen
-          name="AboutUs"
-          component={AboutUs}
-          options={{ headerShown: false}}
-        />
-         <Rootstack.Screen
           name="ContactUs"
           component={ContactUs}
           options={{ headerShown: false}}
@@ -207,6 +203,8 @@ const App = () => {
         />
       </Rootstack.Navigator>
     </NavigationContainer>
+    <GlobalAgeVerificationModal />
+    </>
   );
 };
 

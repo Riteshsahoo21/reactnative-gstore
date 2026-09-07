@@ -256,6 +256,7 @@ export default function AuctionCheckout({ route, navigation }) {
             auctionId: lot._id,
             shippingCost: dynamicShipping,
             shippingAddress: addressForm,
+            isMobile: true,
           }),
         });
 
@@ -407,10 +408,12 @@ export default function AuctionCheckout({ route, navigation }) {
       url.includes("payment=success") ||
       url.includes("status=complete") ||
       url.includes("status=COMPLETE") ||
+      url.includes("status=success") ||
       url.includes("paid=true") ||
       url.includes("/finish") ||
       url.includes("/complete") ||
-      url.includes("/checkout/success")
+      url.includes("/checkout/success") ||
+      (url.includes("mobile-return") && url.includes("status=success"))
     ) {
       setPayfastModalVisible(false);
       await finalizePaidAuction();
@@ -422,7 +425,11 @@ export default function AuctionCheckout({ route, navigation }) {
       return;
     }
 
-    if (url.includes("payment=cancel") || url.includes("status=cancelled")) {
+    if (
+      url.includes("payment=cancel") ||
+      url.includes("status=cancelled") ||
+      (url.includes("mobile-return") && url.includes("status=cancel"))
+    ) {
       setPayfastModalVisible(false);
       Alert.alert("Payment Cancelled", "Your PayFast checkout session was cancelled. You can retry anytime.");
     }
@@ -887,6 +894,37 @@ export default function AuctionCheckout({ route, navigation }) {
             <WebView
               source={{ html: payfastHtml }}
               onNavigationStateChange={handleWebViewNavChange}
+              onMessage={async (event) => {
+                try {
+                  const msg = JSON.parse(event.nativeEvent.data);
+                  if (msg.type === "PAYFAST_SUCCESS" || msg.status === "success") {
+                    setPayfastModalVisible(false);
+                    await finalizePaidAuction();
+                    Alert.alert(
+                      "Settlement Completed! 🏆",
+                      "Your payment has been successfully cleared with the Grand Store Vault. White-glove courier dispatch will begin shortly.",
+                      [{ text: "View Receipt", onPress: () => navigation.navigate("MyBids") }]
+                    );
+                  } else if (msg.type === "PAYFAST_CANCEL" || msg.status === "cancel") {
+                    setPayfastModalVisible(false);
+                    Alert.alert("Payment Cancelled", "Your PayFast checkout session was cancelled.");
+                  }
+                } catch (e) {}
+              }}
+              onShouldStartLoadWithRequest={(request) => {
+                const reqUrl = request.url || "";
+                if (reqUrl.includes("mobile-return") && reqUrl.includes("status=success")) {
+                  setPayfastModalVisible(false);
+                  finalizePaidAuction();
+                  Alert.alert(
+                    "Settlement Completed! 🏆",
+                    "Your payment has been successfully cleared with the Grand Store Vault. White-glove courier dispatch will begin shortly.",
+                    [{ text: "View Receipt", onPress: () => navigation.navigate("MyBids") }]
+                  );
+                  return false;
+                }
+                return true;
+              }}
               startInLoadingState={true}
               renderLoading={() => (
                 <View style={styles.webViewLoading}>

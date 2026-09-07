@@ -845,6 +845,37 @@ export default function AuctionLotDetails({ route, navigation }) {
                 </View>
               </View>
 
+              {/* Grand Store Security Watermark & Provenance Note */}
+              <View style={styles.certWatermarkRow}>
+                <Text style={styles.certWatermarkText}>THE GRAND STORE • VAULT ARCHIVE • CERTIFIED PROVENANCE</Text>
+              </View>
+
+              {/* Curatorial Signatures Representation */}
+              <View style={styles.certSignaturesContainer}>
+                <View style={styles.certSigCol}>
+                  <Text style={styles.certSigName}>Julian Vance-Montgomery</Text>
+                  <View style={styles.certSigLine} />
+                  <Text style={styles.certSigRole}>Curator of Acquisitions</Text>
+                </View>
+                <View style={styles.certSigCol}>
+                  <Text style={styles.certSigName}>Eleanor St. Claire</Text>
+                  <View style={styles.certSigLine} />
+                  <Text style={styles.certSigRole}>Chief Escrow Registrar</Text>
+                </View>
+              </View>
+
+              {/* Download Official Certificate PDF Button */}
+              <TouchableOpacity
+                style={styles.downloadCertBtn}
+                onPress={() => {
+                  const certUrl = `https://grandstoreglobal.com/api/auction/${lot._id}/certificate`;
+                  Linking.openURL(certUrl).catch(err => console.warn('Could not open certificate URL:', err));
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.downloadCertText}>📜 DOWNLOAD OFFICIAL PDF CERTIFICATE</Text>
+              </TouchableOpacity>
+
               {/* Action Button */}
               {lot.paymentStatus === "Paid" ? (
                 <View style={styles.settledBadgeBtn}>
@@ -1797,6 +1828,64 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "900",
     letterSpacing: 1.2,
+  },
+  certWatermarkRow: {
+    paddingVertical: 6,
+    alignItems: "center",
+    marginBottom: 10,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(212, 175, 55, 0.2)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(212, 175, 55, 0.2)",
+  },
+  certWatermarkText: {
+    color: "rgba(212, 175, 55, 0.5)",
+    fontSize: 9,
+    fontWeight: "bold",
+    letterSpacing: 1.5,
+  },
+  certSignaturesContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 14,
+    paddingHorizontal: 8,
+  },
+  certSigCol: {
+    alignItems: "center",
+    flex: 1,
+  },
+  certSigName: {
+    color: "#f5d77f",
+    fontSize: 11,
+    fontStyle: "italic",
+    marginBottom: 3,
+  },
+  certSigLine: {
+    width: "70%",
+    height: 1,
+    backgroundColor: "rgba(212, 175, 55, 0.4)",
+    marginBottom: 3,
+  },
+  certSigRole: {
+    color: "rgba(255, 255, 255, 0.6)",
+    fontSize: 8,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  downloadCertBtn: {
+    backgroundColor: "rgba(212, 175, 55, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(212, 175, 55, 0.4)",
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  downloadCertText: {
+    color: "#ffd700",
+    fontSize: 11,
+    fontWeight: "bold",
+    letterSpacing: 1,
   },
   settledBadgeBtn: {
     backgroundColor: "rgba(16, 185, 129, 0.2)",

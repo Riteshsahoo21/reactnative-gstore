@@ -1484,7 +1484,7 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.menuRow}
+            style={[styles.menuRow, { borderBottomWidth: 0 }]}
             activeOpacity={0.7}
             onPress={() => navigation.navigate("ContactUs")}
           >
@@ -1494,21 +1494,6 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
             <View style={{ flex: 1 }}>
               <Text style={styles.menuTitle}>Concierge Assistance & Support</Text>
               <Text style={styles.menuSubtitle}>Dedicated sommelier & delivery help</Text>
-            </View>
-            <Text style={styles.menuChevron}>›</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.menuRow, { borderBottomWidth: 0 }]}
-            activeOpacity={0.7}
-            onPress={() => navigation.navigate("AboutUs")}
-          >
-            <View style={styles.menuIconCircle}>
-              <Text style={styles.menuEmoji}>🏛️</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.menuTitle}>About The Grand Store Heritage</Text>
-              <Text style={styles.menuSubtitle}>Cellar provenance & international licenses</Text>
             </View>
             <Text style={styles.menuChevron}>›</Text>
           </TouchableOpacity>

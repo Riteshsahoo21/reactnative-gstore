@@ -216,7 +216,7 @@ export default function EventDetails({ route, navigation }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ bookingId: booking._id }),
+        body: JSON.stringify({ bookingId: booking._id, isMobile: true }),
       });
 
       if (!pfRes || !pfRes.ok) {
@@ -258,7 +258,8 @@ export default function EventDetails({ route, navigation }) {
       currentUrl.includes("status=success") ||
       currentUrl.includes("/finish") ||
       currentUrl.includes("/complete") ||
-      currentUrl.includes("paid=true");
+      currentUrl.includes("paid=true") ||
+      (currentUrl.includes("mobile-return") && currentUrl.includes("status=success"));
 
     if (isSuccess) {
       setShowPayfastModal(false);
@@ -306,7 +307,8 @@ export default function EventDetails({ route, navigation }) {
       currentUrl.includes("payment=cancel") ||
       currentUrl.includes("/cancel") ||
       currentUrl.includes("cancelled") ||
-      currentUrl.includes("cancel=true")
+      currentUrl.includes("cancel=true") ||
+      (currentUrl.includes("mobile-return") && currentUrl.includes("status=cancel"))
     ) {
       setShowPayfastModal(false);
       setIsPayfastLoading(false);
@@ -495,6 +497,76 @@ export default function EventDetails({ route, navigation }) {
             scalesPageToFit={true}
             onNavigationStateChange={handlePayfastNavStateChange}
             onLoadEnd={() => setIsPayfastLoading(false)}
+            onMessage={async (event) => {
+              try {
+                const msg = JSON.parse(event.nativeEvent.data);
+                if (msg.type === "PAYFAST_SUCCESS" || msg.status === "success") {
+                  setShowPayfastModal(false);
+                  setIsPayfastLoading(false);
+                  const booked = payfastModalData?.booking;
+                  const bookingTargetId = booked?._id || booked?.ticketId;
+                  try {
+                    const token = await AsyncStorage.getItem("userToken");
+                    if (bookingTargetId) {
+                      await safeFetch("/payfast/confirm-order", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        },
+                        body: JSON.stringify({ bookingId: bookingTargetId }),
+                      });
+                    }
+                  } catch (e) {}
+                  Alert.alert(
+                    "Payment Confirmed! 🥂",
+                    "Your PayFast payment has been processed successfully. Your tasting pass is now confirmed.",
+                    [
+                      {
+                        text: "View My Pass",
+                        onPress: () => {
+                          navigation.navigate("EventTicketPass", {
+                            bookingId: booked?._id,
+                            booking: { ...booked, paymentStatus: "Paid", ticketStatus: "Valid" },
+                            justBooked: true,
+                          });
+                        },
+                      },
+                    ]
+                  );
+                } else if (msg.type === "PAYFAST_CANCEL" || msg.status === "cancel") {
+                  setShowPayfastModal(false);
+                  setIsPayfastLoading(false);
+                  Alert.alert("Payment Cancelled", "The PayFast payment was cancelled.");
+                }
+              } catch (e) {}
+            }}
+            onShouldStartLoadWithRequest={(request) => {
+              const reqUrl = request.url || "";
+              if (reqUrl.includes("mobile-return") && reqUrl.includes("status=success")) {
+                setShowPayfastModal(false);
+                setIsPayfastLoading(false);
+                const booked = payfastModalData?.booking;
+                Alert.alert(
+                  "Payment Confirmed! 🥂",
+                  "Your PayFast payment has been processed successfully. Your tasting pass is now confirmed.",
+                  [
+                    {
+                      text: "View My Pass",
+                      onPress: () => {
+                        navigation.navigate("EventTicketPass", {
+                          bookingId: booked?._id,
+                          booking: { ...booked, paymentStatus: "Paid", ticketStatus: "Valid" },
+                          justBooked: true,
+                        });
+                      },
+                    },
+                  ]
+                );
+                return false;
+              }
+              return true;
+            }}
             style={{ flex: 1, backgroundColor: "#0b0907" }}
           />
         </SafeAreaView>
