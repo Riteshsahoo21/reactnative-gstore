@@ -302,8 +302,6 @@ const Home = ({ navigation, route }) => {
   const [mobileNumber, setMobileNumber] = useState("");
   const [fullName, setFullName] = useState("");
   const [comments, setComments] = useState("");
-  const [showPopup, setShowPopup] = useState(false);
-  const [popupMessage, setPopupMessage] = useState("Are You Over 18 years of Age?");
   const helpSheetRef = useRef();
 
   // Animation values for sleek hamburger & drawer interactions
@@ -793,50 +791,6 @@ const handleLogout = async () => {
         confirmationDecision={() => setConfirmationVisibility(false)}
       />
 
-      {/* Popup */}
-      <Modal transparent visible={showPopup} animationType="fade">
-        <View style={styles.popupContainer}>
-          <ImageBackground
-            source={{ uri: "https://ik.imagekit.io/thegrandstore/bg.webp" }}
-            style={styles.overlay}
-            resizeMode="cover"
-          >
-            <Image
-              source={require("../resources/assets/logo.webp")}
-              style={styles.logo}
-              resizeMode="contain"
-            />
-            <Text style={styles.popupTitle}>Welcome to Grand Store!</Text>
-            <Text style={styles.subtitle}>
-              You must be 18 years old to{"\n"} visit this site.
-            </Text>
-            <Text style={styles.message}>{popupMessage}</Text>
-
-            <View style={styles.buttonContainer}>
-              <TouchableOpacity
-                style={[styles.button, styles.yesButton]}
-                onPress={() => {
-                  setShowPopup(false);
-                  AsyncStorage.setItem("isAgeVerified", "true").catch(() => {});
-                }}
-              >
-                <Text style={styles.buttonText}>Yes</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.button, styles.noButton]}
-                onPress={() =>
-                  setPopupMessage(
-                    "You need to be 18 years or older to access this site."
-                  )
-                }
-              >
-                <Text style={styles.buttonText}>No</Text>
-              </TouchableOpacity>
-            </View>
-          </ImageBackground>
-        </View>
-      </Modal>
 
       {/* 💖 Isolated Flying Heart Overlay 💖 */}
       <FlyingHeartOverlay />

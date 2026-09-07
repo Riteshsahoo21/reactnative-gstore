@@ -183,7 +183,7 @@ const App = () => {
         <Rootstack.Screen
           name="AuctionLotDetails"
           component={AuctionLotDetails}
-          initialParams={{ lotId: "6a95896cd59ce399e7017eb7" }}
+          initialParams={{ lotId: "6a9edb94537d52a425cc4b5c" }}
           options={{ headerShown: false }}
         />
         <Rootstack.Screen

@@ -160,6 +160,7 @@ const LoginScreen = ({ navigation, route }) => {
           })
         );
         await AsyncStorage.setItem('isAgeVerified', 'true');
+        await AsyncStorage.setItem('grand-store-age-verified', 'true');
 
         DeviceEventEmitter.emit('userLoggedIn', data);
         DeviceEventEmitter.emit('cartUpdated', 0);

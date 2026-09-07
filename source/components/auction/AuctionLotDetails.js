@@ -24,16 +24,30 @@ import {
 import LinearGradient from "react-native-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import AppHeader from "../../widgets/AppHeader";
-import { API_BASE, getActiveServerHost } from "../../resources/data/Constants";
+import {
+  API_BASE,
+  getActiveServerHost,
+  getActiveApiBase,
+  getCandidateBases,
+} from "../../resources/data/Constants";
 
 const { width, height } = Dimensions.get("window");
 
-const API_CANDIDATES = [
-  API_BASE,
-  "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
-  "http://10.0.2.2:5000/api",
-];
+const getLotApiCandidates = () => {
+  const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : API_BASE;
+  const list = [active];
+  if (typeof getCandidateBases === "function") {
+    list.push(...getCandidateBases());
+  }
+  list.push(
+    API_BASE,
+    "http://127.0.0.1:5000/api",
+    "http://localhost:5000/api",
+    "http://10.0.2.2:5000/api",
+    "http://192.168.1.9:5000/api"
+  );
+  return [...new Set(list.filter(Boolean))];
+};
 
 const resolveImage = (img) => {
   if (!img) return "https://images.unsplash.com/photo-1527281400683-1aae777175f8?auto=format&fit=crop&q=80&w=1000";
@@ -330,16 +344,19 @@ export default function AuctionLotDetails({ route, navigation }) {
   }, []);
 
   const safeFetch = async (endpoint, options = {}) => {
-    for (const base of API_CANDIDATES) {
+    const candidates = getLotApiCandidates();
+    for (const base of candidates) {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
-        const url = `${base.replace(/\/$/, "")}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
+        const cleanBase = base.replace(/\/$/, "");
+        const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+        const url = `${cleanBase}${cleanEndpoint}`;
         const res = await fetch(url, { ...options, signal: controller.signal });
         clearTimeout(timer);
         if (res) return res;
       } catch (err) {
-        // try next
+        // try next candidate
       }
     }
     return null;
@@ -347,14 +364,48 @@ export default function AuctionLotDetails({ route, navigation }) {
 
   const loadStoredUser = async () => {
     try {
-      const stored = await AsyncStorage.getItem("userInfo");
+      const [stored, storedToken] = await Promise.all([
+        AsyncStorage.getItem("userInfo"),
+        AsyncStorage.getItem("userToken"),
+      ]);
+
+      let parsed = null;
       if (stored) {
-        const parsed = JSON.parse(stored);
+        parsed = JSON.parse(stored);
         setUser(parsed);
-        setToken(parsed.token);
         if (parsed.name) {
           setVerifyForm((prev) => ({ ...prev, legalName: parsed.name, phone: parsed.phone || "" }));
         }
+      }
+
+      const activeToken = parsed?.token || storedToken || null;
+      if (activeToken) {
+        setToken(activeToken);
+      }
+
+      // If user is already approved as a bidder or 18+ age verified in database session,
+      // bootstrap bidderProfile so bidding works immediately without delay or false prompts.
+      const isApproved =
+        parsed?.bidderApprovalStatus === "approved" ||
+        parsed?.isAgeVerified === true ||
+        (parsed?.bidderLevel && parsed.bidderLevel !== "none");
+
+      console.log('[AuctionLotDetails] loadStoredUser: parsed =', parsed ? { email: parsed.email, bidderApprovalStatus: parsed.bidderApprovalStatus, isAgeVerified: parsed.isAgeVerified, bidderLevel: parsed.bidderLevel } : 'NULL', 'storedToken =', storedToken ? 'YES' : 'NO');
+
+      if (isApproved) {
+        setBidderProfile((prev) => ({
+          ...(prev || {}),
+          isVerified: true,
+          bidderApprovalStatus: parsed?.bidderApprovalStatus || "approved",
+          biddingLimit: parsed?.biddingLimit || prev?.biddingLimit || 25000,
+          bidderLevel: parsed?.bidderLevel || prev?.bidderLevel || "level_2_verified",
+          bidderNumber: parsed?.bidderNumber || prev?.bidderNumber || null,
+          isBiddingSuspended: parsed?.isBiddingSuspended || false,
+        }));
+      }
+
+      if (activeToken) {
+        fetchBidderStatus(activeToken);
       }
     } catch (e) {
       // ignore
@@ -371,6 +422,25 @@ export default function AuctionLotDetails({ route, navigation }) {
       if (res && res.ok) {
         const data = await res.json();
         setBidderProfile(data);
+
+        // Synchronize local session with fresh server verification data
+        if (data.isVerified) {
+          AsyncStorage.setItem("isAgeVerified", "true").catch(() => {});
+          AsyncStorage.setItem("grand-store-age-verified", "true").catch(() => {});
+          try {
+            const raw = await AsyncStorage.getItem("userInfo");
+            if (raw) {
+              const u = JSON.parse(raw);
+              u.isAgeVerified = true;
+              u.bidderApprovalStatus = data.bidderApprovalStatus || "approved";
+              u.bidderLevel = data.bidderLevel || "level_2_verified";
+              u.biddingLimit = data.biddingLimit || 50000;
+              u.bidderNumber = data.bidderNumber;
+              await AsyncStorage.setItem("userInfo", JSON.stringify(u));
+              setUser(u);
+            }
+          } catch (storageErr) {}
+        }
       }
     } catch (e) {
       console.log("Error fetching bidder status:", e);
@@ -428,6 +498,19 @@ export default function AuctionLotDetails({ route, navigation }) {
   const isWinner = Boolean(
     user && lot?.winner && user._id === (typeof lot.winner === "object" ? lot.winner._id : lot.winner)
   );
+
+  const isUserVerified = Boolean(
+    bidderProfile?.isVerified === true ||
+    user?.bidderApprovalStatus === "approved" ||
+    user?.isAgeVerified === true ||
+    (user?.bidderLevel && user.bidderLevel !== "none" && user.bidderLevel !== "unregistered")
+  );
+
+  const isUserPending = Boolean(
+    bidderProfile?.isPending === true ||
+    user?.bidderApprovalStatus === "pending_approval"
+  );
+
   const activeIncrement = lot?.bidIncrement || getDynamicIncrement(lot?.currentBid || 0);
   const nextMinimum =
     lot?.currentBid === 0 ? lot?.startingBid || 0 : (lot?.currentBid || 0) + activeIncrement;
@@ -473,8 +556,19 @@ export default function AuctionLotDetails({ route, navigation }) {
       return;
     }
 
-    if (!bidderProfile || !bidderProfile.isVerified) {
-      if (bidderProfile?.isPending) {
+    // Check verification: profile status OR user status in session
+    const isVerified =
+      bidderProfile?.isVerified === true ||
+      user?.bidderApprovalStatus === "approved" ||
+      user?.isAgeVerified === true ||
+      (user?.bidderLevel && user.bidderLevel !== "none");
+
+    const isPending =
+      bidderProfile?.isPending === true ||
+      user?.bidderApprovalStatus === "pending_approval";
+
+    if (!isVerified) {
+      if (isPending) {
         Alert.alert(
           "Verification Pending",
           "Your 18+ bidder verification application is currently undergoing administrator review. You will be cleared to bid once approved."
@@ -485,15 +579,20 @@ export default function AuctionLotDetails({ route, navigation }) {
       return;
     }
 
-    if (bidderProfile.isBiddingSuspended) {
-      Alert.alert("Privileges Suspended", bidderProfile.biddingSuspensionReason || "Account under compliance review.");
+    const isSuspended = bidderProfile?.isBiddingSuspended || user?.isBiddingSuspended;
+    if (isSuspended) {
+      Alert.alert(
+        "Privileges Suspended",
+        bidderProfile?.biddingSuspensionReason || user?.biddingSuspensionReason || "Account under compliance review."
+      );
       return;
     }
 
-    if (bidderProfile.biddingLimit > 0 && amt > bidderProfile.biddingLimit) {
+    const effectiveLimit = bidderProfile?.biddingLimit || user?.biddingLimit || 25000;
+    if (effectiveLimit > 0 && amt > effectiveLimit) {
       Alert.alert(
         "Bidding Limit Exceeded",
-        `Your bid of R${amt.toLocaleString()} exceeds your current certified limit of R${bidderProfile.biddingLimit.toLocaleString()}. Upgrade to VIP Bidding to lift this ceiling.`
+        `Your bid of R${amt.toLocaleString()} exceeds your current certified limit of R${effectiveLimit.toLocaleString()}. Upgrade to VIP Bidding to lift this ceiling.`
       );
       return;
     }
@@ -510,11 +609,18 @@ export default function AuctionLotDetails({ route, navigation }) {
   const submitBid = async () => {
     setSubmitting(true);
     try {
+      const activeToken = token || (await AsyncStorage.getItem("userToken"));
+      if (!activeToken) {
+        Alert.alert("Authentication Required", "Session expired. Please sign in again.");
+        setConfirmModalOpen(false);
+        return;
+      }
+
       const res = await safeFetch(`/auction/${lot._id}/bid`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${activeToken}`,
         },
         body: JSON.stringify({
           amount: confirmedAmount,
@@ -532,12 +638,13 @@ export default function AuctionLotDetails({ route, navigation }) {
         setBidAmount("");
         await fetchLotDetails(true);
       } else {
-        const errData = res ? await res.json() : {};
-        Alert.alert("Bid Rejected", errData.message || "Could not place bid at this time.");
+        const errData = res ? await res.json().catch(() => ({})) : {};
+        const errorMsg = errData.message || "Could not place bid at this time.";
+        Alert.alert("Bid Not Accepted", errorMsg);
         setConfirmModalOpen(false);
       }
     } catch (e) {
-      Alert.alert("Error", "Network error placing bid. Please try again.");
+      Alert.alert("Connection Error", "Network error placing bid. Please try again.");
       setConfirmModalOpen(false);
     } finally {
       setSubmitting(false);
@@ -551,11 +658,12 @@ export default function AuctionLotDetails({ route, navigation }) {
     }
     setVerifying(true);
     try {
+      const activeToken = token || (await AsyncStorage.getItem("userToken"));
       const res = await safeFetch("/auction/bidder/verify", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${activeToken}`,
         },
         body: JSON.stringify(verifyForm),
       });
@@ -566,9 +674,9 @@ export default function AuctionLotDetails({ route, navigation }) {
           "Your 18+ legal bidder credentials have been submitted for compliance verification. You will receive an alert once verified."
         );
         setVerificationModalOpen(false);
-        fetchBidderStatus(token);
+        fetchBidderStatus(activeToken);
       } else {
-        const err = res ? await res.json() : {};
+        const err = res ? await res.json().catch(() => ({})) : {};
         Alert.alert("Submission Failed", err.message || "Could not submit verification.");
       }
     } catch (e) {
@@ -923,16 +1031,26 @@ export default function AuctionLotDetails({ route, navigation }) {
             </View>
 
             {/* Bidder Profile Status Banner */}
-            {bidderProfile?.isPending && (
+            {isUserVerified ? (
+              <View style={styles.verifiedBidderBox}>
+                <View style={styles.verifiedBidderHeader}>
+                  <Text style={styles.verifiedCheckmark}>✓</Text>
+                  <Text style={styles.verifiedTitle}>
+                    18+ Certified Bidder • Limit: R{(bidderProfile?.biddingLimit || user?.biddingLimit || 25000).toLocaleString("en-ZA")}
+                  </Text>
+                </View>
+                <Text style={styles.verifiedDesc}>
+                  Your account is fully authenticated for live auction bidding.
+                </Text>
+              </View>
+            ) : isUserPending ? (
               <View style={styles.pendingStatusBox}>
                 <Text style={styles.pendingStatusTitle}>⏳ Application Pending Review</Text>
                 <Text style={styles.pendingStatusDesc}>
                   Your 18+ verification is undergoing administrator compliance check.
                 </Text>
               </View>
-            )}
-
-            {(!bidderProfile || !bidderProfile.isVerified) && !bidderProfile?.isPending && (
+            ) : (
               <TouchableOpacity
                 style={styles.verificationPromptBox}
                 onPress={() => setVerificationModalOpen(true)}
@@ -1967,6 +2085,36 @@ const styles = StyleSheet.create({
   goldBold: {
     color: "#f5d77f",
     fontWeight: "bold",
+  },
+  verifiedBidderBox: {
+    backgroundColor: "rgba(34, 197, 94, 0.08)",
+    borderColor: "rgba(34, 197, 94, 0.3)",
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12,
+  },
+  verifiedBidderHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  verifiedCheckmark: {
+    color: "#4ade80",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  verifiedTitle: {
+    color: "#4ade80",
+    fontSize: 11,
+    fontWeight: "bold",
+    flex: 1,
+  },
+  verifiedDesc: {
+    color: "rgba(187, 247, 208, 0.7)",
+    fontSize: 10,
+    marginTop: 2,
+    paddingLeft: 18,
   },
   pendingStatusBox: {
     backgroundColor: "rgba(245, 158, 11, 0.12)",

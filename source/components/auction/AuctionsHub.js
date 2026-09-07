@@ -15,20 +15,35 @@ import {
   ScrollView,
   StatusBar,
   Platform,
+  DeviceEventEmitter,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import AppHeader from "../../widgets/AppHeader";
-import { API_BASE, getActiveServerHost } from "../../resources/data/Constants";
+import {
+  API_BASE,
+  getActiveServerHost,
+  getActiveApiBase,
+  getCandidateBases,
+} from "../../resources/data/Constants";
 
 const { width } = Dimensions.get("window");
 
-const API_CANDIDATES = [
-  API_BASE,
-  "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
-  "http://10.0.2.2:5000/api",
-];
+const getLotApiCandidates = () => {
+  const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : API_BASE;
+  const list = [active];
+  if (typeof getCandidateBases === "function") {
+    list.push(...getCandidateBases());
+  }
+  list.push(
+    API_BASE,
+    "http://127.0.0.1:5000/api",
+    "http://localhost:5000/api",
+    "http://10.0.2.2:5000/api",
+    "http://192.168.1.9:5000/api"
+  );
+  return [...new Set(list.filter(Boolean))];
+};
 
 const CATEGORIES = ["All", "Whisky", "Wine", "Champagne", "Cognac", "Rare Spirits"];
 
@@ -63,11 +78,14 @@ export default function AuctionsHub({ navigation }) {
   }, []);
 
   const safeFetch = async (endpoint, options = {}) => {
-    for (const base of API_CANDIDATES) {
+    const candidates = getLotApiCandidates();
+    for (const base of candidates) {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
-        const url = `${base.replace(/\/$/, "")}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
+        const cleanBase = base.replace(/\/$/, "");
+        const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+        const url = `${cleanBase}${cleanEndpoint}`;
         const res = await fetch(url, { ...options, signal: controller.signal });
         clearTimeout(timer);
         if (res) return res;
@@ -103,10 +121,36 @@ export default function AuctionsHub({ navigation }) {
 
   const fetchBidderStatus = useCallback(async () => {
     try {
-      const token = await AsyncStorage.getItem("userToken");
-      if (!token) return;
+      const [token, userInfoRaw] = await Promise.all([
+        AsyncStorage.getItem("userToken"),
+        AsyncStorage.getItem("userInfo"),
+      ]);
+
+      if (userInfoRaw) {
+        try {
+          const u = JSON.parse(userInfoRaw);
+          const isApproved =
+            u?.bidderApprovalStatus === "approved" ||
+            u?.isAgeVerified === true ||
+            (u?.bidderLevel && u.bidderLevel !== "none");
+
+          if (isApproved) {
+            setBidderStatus((prev) => prev || {
+              isVerified: true,
+              bidderApprovalStatus: u?.bidderApprovalStatus || "approved",
+              biddingLimit: u?.biddingLimit || 25000,
+              bidderLevel: u?.bidderLevel || "level_2_verified",
+              bidderNumber: u?.bidderNumber || null,
+            });
+          }
+        } catch (err) {}
+      }
+
+      const activeToken = token || (userInfoRaw ? JSON.parse(userInfoRaw)?.token : null);
+      if (!activeToken) return;
+
       const res = await safeFetch("/auction/bidder/status", {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${activeToken}` },
       });
       if (res && res.ok) {
         const data = await res.json();
@@ -120,11 +164,20 @@ export default function AuctionsHub({ navigation }) {
   useEffect(() => {
     fetchAuctions();
     fetchBidderStatus();
-    // Auto-poll live auctions every 5 seconds for real-time bids
+
+    const subLogin = DeviceEventEmitter.addListener("userLoggedIn", () => {
+      fetchBidderStatus();
+      fetchAuctions(true);
+    });
+
     const poller = setInterval(() => {
       fetchAuctions(true);
     }, 5000);
-    return () => clearInterval(poller);
+
+    return () => {
+      subLogin.remove();
+      clearInterval(poller);
+    };
   }, [fetchAuctions, fetchBidderStatus]);
 
   const onRefresh = () => {
