@@ -57,6 +57,9 @@ import Shop from "./Shop";
 import EventsHub from "./events/EventsHub";
 import CustomerDashboard from "./CustomerDashboard";
 import { API_BASE } from "../resources/data/Constants";
+import LinearGradient from "react-native-linear-gradient";
+
+const SOMMELIER_CREST = require("../resources/images/sommelier_crest.jpg");
 
 
 const { width, height } = Dimensions.get("window");
@@ -246,6 +249,7 @@ const HeaderWishlistIcon = React.memo(({ navigation }) => {
 
 const Home = ({ navigation, route }) => {
   const [userName, setUserName] = useState(null);
+  const [userRole, setUserRole] = useState(null);
   const [navigationIndex, setNavigationIndex] = useState(
     typeof route?.params?.tabIndex === "number" ? route.params.tabIndex : 0
   );
@@ -265,6 +269,68 @@ const Home = ({ navigation, route }) => {
   const [showPopup, setShowPopup] = useState(false);
   const [popupMessage, setPopupMessage] = useState("Are You Over 18 years of Age?");
   const helpSheetRef = useRef();
+
+  // Animation values for sleek hamburger & drawer interactions
+  const menuScaleAnim = useRef(new Animated.Value(1)).current;
+  const vipPulseAnim = useRef(new Animated.Value(1)).current;
+  const itemAnimations = useRef(
+    Array.from({ length: 13 }, () => new Animated.Value(0))
+  ).current;
+
+  // Staggered slide/fade entrance when drawer opens
+  useEffect(() => {
+    if (openDrawer) {
+      itemAnimations.forEach((anim) => anim.setValue(0));
+      const animations = itemAnimations.map((anim) =>
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: 250,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        })
+      );
+      Animated.stagger(28, animations).start();
+    }
+  }, [openDrawer]);
+
+  // Gentle breathing glow on profile badge
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(vipPulseAnim, {
+          toValue: 1.06,
+          duration: 1500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(vipPulseAnim, {
+          toValue: 1,
+          duration: 1500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
+  const handleOpenDrawer = () => {
+    Animated.sequence([
+      Animated.timing(menuScaleAnim, {
+        toValue: 0.82,
+        duration: 80,
+        useNativeDriver: true,
+      }),
+      Animated.spring(menuScaleAnim, {
+        toValue: 1,
+        friction: 4,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+    ]).start();
+    setOpenDrawer(true);
+  };
 
   // Dynamic sizes
   const headerHeight = Platform.OS === "android" ? 68 : 72;
@@ -352,6 +418,12 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
     try {
       const name = await AsyncStorage.getItem("userName");
       if (name) setUserName(name);
+      const userInfoStr = await AsyncStorage.getItem("userInfo");
+      if (userInfoStr) {
+        const parsed = JSON.parse(userInfoStr);
+        if (parsed?.name && !name) setUserName(parsed.name);
+        if (parsed?.role) setUserRole(parsed.role);
+      }
     } catch (error) {
       console.error("Failed to fetch user name:", error);
     }
@@ -369,15 +441,20 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
 
   const renderHomeScreenHeader = () => (
     <View style={[styles.customHeader, { height: headerHeight }]}>
-      <TouchableOpacity
-        style={styles.menuBtn}
-        onPress={() => setOpenDrawer(true)}
-      >
-        <Image
-          source={MENU_HAMBURGER}
-          style={{ width: 28, height: 28, resizeMode: "contain" }}
-        />
-      </TouchableOpacity>
+      <Animated.View style={{ transform: [{ scale: menuScaleAnim }] }}>
+        <TouchableOpacity
+          style={styles.menuBtn}
+          onPress={handleOpenDrawer}
+          activeOpacity={0.7}
+        >
+          <View style={styles.menuBtnInner}>
+            <Image
+              source={MENU_HAMBURGER}
+              style={styles.menuHamburgerIcon}
+            />
+          </View>
+        </TouchableOpacity>
+      </Animated.View>
 
       <View style={styles.centerContainer}>
         <Image
@@ -457,67 +534,194 @@ await AsyncStorage.multiRemove(["wishlistItemIds", "cartItems"]);
         })}
       </View>
 
-      {/* Drawer */}
+      {/* Sleek Animated Luxury Drawer */}
       <ModalRN
         isVisible={openDrawer}
         animationIn="slideInLeft"
         animationOut="slideOutLeft"
+        animationInTiming={320}
+        animationOutTiming={260}
+        backdropTransitionInTiming={320}
+        backdropTransitionOutTiming={260}
+        backdropOpacity={0.72}
         onBackdropPress={() => setOpenDrawer(false)}
         style={styles.drawerModal}
       >
-        <View style={styles.drawer}>
-          <View style={styles.drawerHeader}>
-            <TouchableOpacity
-              style={styles.closeBtn}
-              onPress={() => setOpenDrawer(false)}
+        <SafeAreaView style={styles.drawerSafeWrapper}>
+          <View style={styles.drawer}>
+            {/* Sleek Profile / Header Card */}
+            <LinearGradient
+              colors={["#1c1711", "#100e0b"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.drawerHeaderGradient}
             >
-              <Image
-                source={CLOSE_ICON_OUTLINE}
-                style={{ width: 25, height: 25 }}
-                resizeMode="contain"
-              />
-            </TouchableOpacity>
+              {/* Top Bar: Brand Pill & Close Button */}
+              <View style={styles.drawerTopBar}>
+                <View style={styles.brandPill}>
+                  <Text style={styles.brandPillText}>THE GRAND VAULT</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.drawerCloseBtn}
+                  onPress={() => setOpenDrawer(false)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.drawerCloseX}>✕</Text>
+                </TouchableOpacity>
+              </View>
 
-            <TouchableOpacity
-              onPress={() => navigation.navigate("LoginScreen")}
-              style={{ alignItems: "center", marginVertical: 10 }}
-            >
-              <Text style={styles.drawerWelcome}>
-                {userName ? `Welcome, ${userName}` : "Please sign in"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.drawerTabs}>
-            {[
-              { label: "Home", icon: HOME_ICON, onPress: () => setNavigationIndex(0) },
-              { label: "Shop", icon: require("../resources/images/store.png"), onPress: () => setNavigationIndex(1) },
-              { label: "Categories", icon: FILLER_ICON, onPress: () => setNavigationIndex(2) },
-              { label: "Customer Dashboard", icon: require("../resources/images/group.png"), onPress: () => setNavigationIndex(3) },
-              { label: "Live Auctions 🏛️", icon: require("../resources/images/event.png"), onPress: () => navigation.navigate("AuctionsHub") },
-              { label: "My Bids & Won Lots 🏆", icon: require("../resources/images/Order.png"), onPress: () => navigation.navigate("MyBids") },
-              { label: "Events & Tastings 🎟️", icon: EVENT_ICON, onPress: () => navigation.navigate("EventsHub") },
-              { label: "My Passes 🎟️", icon: require("../resources/images/event.png"), onPress: () => navigation.navigate("EventTicketPass") },
-              { label: "Offers", icon: require("../resources/images/offer.png"), onPress: () => navigation.navigate(Offers) },
-              { label: "My Orders", icon: require("../resources/images/Order.png"), onPress: () => navigation.navigate("MyOrders") },
-              { label: "Contact Us", icon: require("../resources/images/phone.png"), onPress: () => navigation.navigate("ContactUs") },
-              { label: "About Us", icon: require("../resources/images/group.png"), onPress: () => navigation.navigate("AboutUs") },
-              { label: "Logout", icon: require("../resources/images/logout_icon.png"), onPress: handleLogout },
-            ].map((item, i) => (
+              {/* Profile Card */}
               <TouchableOpacity
-                key={i}
-                style={styles.drawerTab}
                 onPress={() => {
                   setOpenDrawer(false);
-                  item.onPress();
+                  if (userName) {
+                    setNavigationIndex(3);
+                  } else {
+                    navigation.navigate("LoginScreen");
+                  }
                 }}
+                activeOpacity={0.82}
+                style={styles.drawerProfileRow}
               >
-                <Image source={item.icon} style={styles.drawerIcon} />
-                <Text style={styles.drawerLabel}>{item.label}</Text>
+                <Animated.View
+                  style={[
+                    styles.drawerAvatarContainer,
+                    { transform: [{ scale: vipPulseAnim }] },
+                  ]}
+                >
+                  <Image
+                    source={SOMMELIER_CREST}
+                    style={styles.drawerAvatarImage}
+                    resizeMode="cover"
+                  />
+                  <View style={styles.drawerAvatarBadge}>
+                    <Text style={styles.drawerAvatarBadgeText}>★</Text>
+                  </View>
+                </Animated.View>
+
+                <View style={styles.drawerProfileMeta}>
+                  <Text style={styles.drawerWelcomeName} numberOfLines={1}>
+                    {userName ? userName : "Distinguished Guest"}
+                  </Text>
+                  <View style={styles.drawerTierRow}>
+                    <View style={styles.drawerTierPill}>
+                      <Text style={styles.drawerTierText}>
+                        {userName ? "VIP CONNOISSEUR" : "SIGN IN / REGISTER"}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.drawerSubWelcome} numberOfLines={1}>
+                    {userName ? "Private Cellar & Vault Access" : "Tap to sign in to your vault"}
+                  </Text>
+                </View>
               </TouchableOpacity>
-            ))}
+            </LinearGradient>
+
+            {/* Scrollable Unified Navigation List with Staggered Entrance */}
+            <ScrollView
+              style={styles.drawerScrollView}
+              contentContainerStyle={styles.drawerScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {[
+                { label: "Home", icon: HOME_ICON, onPress: () => setNavigationIndex(0), subtitle: "Main Vault & Curated Releases" },
+                { label: "Shop", icon: require("../resources/images/store.png"), onPress: () => setNavigationIndex(1), subtitle: "Full Luxury Wine & Spirits Catalog" },
+                { label: "Categories", icon: FILLER_ICON, onPress: () => setNavigationIndex(2), subtitle: "Browse by Vintage, Region & Spirit" },
+                { label: "Customer Dashboard", icon: require("../resources/images/group.png"), onPress: () => setNavigationIndex(3), subtitle: "Your Private Collector Overview" },
+                { label: "Live Auctions 🏛️", icon: require("../resources/images/event.png"), onPress: () => navigation.navigate("AuctionsHub"), subtitle: "Bid on Rare & Allocated Lots" },
+                { label: "My Bids & Won Lots 🏆", icon: require("../resources/images/Order.png"), onPress: () => navigation.navigate("MyBids"), subtitle: "Track Active Bids & Lot Acquisitions" },
+                { label: "Events & Tastings 🎟️", icon: EVENT_ICON, onPress: () => navigation.navigate("EventsHub"), subtitle: "Curated Sommelier Cellar Tastings" },
+                { label: "Tasting Calendar 📅", icon: require("../resources/images/event.png"), onPress: () => { setOpenDrawer(false); navigation.navigate("EventsHub", { openCalendar: true }); }, subtitle: "Interactive Monthly Tasting & Masterclass Schedule" },
+                { label: "My Passes 🎟️", icon: require("../resources/images/event.png"), onPress: () => navigation.navigate("EventTicketPass"), subtitle: "Digital VIP Cellar Tasting Passes" },
+                { label: "Offers", icon: require("../resources/images/offer.png"), onPress: () => navigation.navigate(Offers), subtitle: "Exclusive Member Allocations" },
+                { label: "My Orders", icon: require("../resources/images/Order.png"), onPress: () => navigation.navigate("MyOrders"), subtitle: "Order History & Real-Time Tracking" },
+                { label: "Contact Us", icon: require("../resources/images/phone.png"), onPress: () => navigation.navigate("ContactUs"), subtitle: "Dedicated Private Sommelier & Support" },
+                { label: "About Us", icon: require("../resources/images/group.png"), onPress: () => navigation.navigate("AboutUs"), subtitle: "Heritage, Craftsmanship & Cellar Story" },
+                { label: "Logout", icon: require("../resources/images/logout_icon.png"), onPress: handleLogout, isLogout: true, subtitle: "Securely sign out of your account" },
+              ].map((item, i) => {
+                const anim = itemAnimations[i] || new Animated.Value(1);
+                const translateX = anim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-24, 0],
+                });
+                const opacity = anim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 1],
+                });
+
+                if (item.isLogout) {
+                  return (
+                    <Animated.View
+                      key={i}
+                      style={{ transform: [{ translateX }], opacity }}
+                    >
+                      <TouchableOpacity
+                        style={styles.drawerLogoutCard}
+                        onPress={() => {
+                          setOpenDrawer(false);
+                          item.onPress();
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <View style={styles.drawerLogoutIconWrap}>
+                          <Image
+                            source={item.icon}
+                            style={styles.drawerLogoutIcon}
+                          />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.drawerLogoutText}>{item.label}</Text>
+                          <Text style={styles.drawerItemSubtitle} numberOfLines={1}>
+                            {item.subtitle}
+                          </Text>
+                        </View>
+                        <Text style={styles.drawerLogoutArrow}>→</Text>
+                      </TouchableOpacity>
+                    </Animated.View>
+                  );
+                }
+
+                return (
+                  <Animated.View
+                    key={i}
+                    style={{ transform: [{ translateX }], opacity }}
+                  >
+                    <TouchableOpacity
+                      style={styles.drawerItemRow}
+                      onPress={() => {
+                        setOpenDrawer(false);
+                        item.onPress();
+                      }}
+                      activeOpacity={0.75}
+                    >
+                      <View style={styles.drawerIconBadge}>
+                        <Image source={item.icon} style={styles.drawerIconImg} />
+                      </View>
+                      <View style={styles.drawerItemTextCol}>
+                        <Text style={styles.drawerItemLabel}>{item.label}</Text>
+                        {item.subtitle ? (
+                          <Text style={styles.drawerItemSubtitle} numberOfLines={1}>
+                            {item.subtitle}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <Text style={styles.drawerChevron}>›</Text>
+                    </TouchableOpacity>
+                  </Animated.View>
+                );
+              })}
+
+              {/* Luxury Footer Brand Mark */}
+              <View style={styles.drawerFooter}>
+                <View style={styles.drawerFooterDivider} />
+                <Text style={styles.drawerFooterBrand}>THE GRAND STORE</Text>
+                <Text style={styles.drawerFooterSub}>
+                  FINE SPIRITS • PRIVATE CELLAR • RARE VAULT
+                </Text>
+              </View>
+            </ScrollView>
           </View>
-        </View>
+        </SafeAreaView>
       </ModalRN>
 
       {/* Confirmation Popup */}
@@ -592,7 +796,26 @@ const styles = StyleSheet.create({
   centerContainer: { flex: 1, alignItems: "center", justifyContent: "center" },
   headerLogo: { width: width * 0.48, height: 44, resizeMode: "contain" },
   headerIcon: { width: 28, height: 28, resizeMode: "contain", marginHorizontal: 6 },
-  menuBtn: { padding: 4 },
+  menuBtn: {
+    padding: 2,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  menuBtnInner: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(201, 151, 66, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.22)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  menuHamburgerIcon: {
+    width: 22,
+    height: 22,
+    resizeMode: "contain",
+  },
   wishlistHeaderTouch: {
     position: "relative",
     padding: 3,
@@ -630,33 +853,251 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === "android" ? 4 : 8,
   },
   tab: { flex: 1, alignItems: "center", justifyContent: "center" },
-  drawerModal: { margin: 0 },
-  drawer: { flex: 1, width: "75%", backgroundColor: "#0d0d0d" },
-  drawerHeader: { backgroundColor: "#c99742", paddingVertical: 15 },
-  closeBtn: { alignSelf: "flex-end", marginRight: 10 },
-  drawerWelcome: {
-    color: Colors.black_tmb,
-    fontWeight: "bold",
-    fontFamily: APP_FONT,
-    fontSize: 20,
+  drawerModal: {
+    margin: 0,
+    justifyContent: "flex-start",
   },
-  drawerTabs: { paddingVertical: 20 },
-  drawerTab: {
+  drawerSafeWrapper: {
+    flex: 1,
+    width: "82%",
+    maxWidth: 350,
+    backgroundColor: "#0d0b09",
+  },
+  drawer: {
+    flex: 1,
+    backgroundColor: "#0d0b09",
+    borderRightWidth: 1,
+    borderRightColor: "rgba(201, 151, 66, 0.22)",
+  },
+  drawerHeaderGradient: {
+    paddingTop: Platform.OS === "android" ? 14 : 8,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(201, 151, 66, 0.25)",
+  },
+  drawerTopBar: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  brandPill: {
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+    borderRadius: 4,
+    borderWidth: 0.5,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+  },
+  brandPillText: {
+    color: "#c99742",
+    fontSize: 8.5,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+  },
+  drawerCloseBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  drawerCloseX: {
+    color: "#e8c566",
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 15,
+  },
+  drawerProfileRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "#333",
   },
-  drawerIcon: {
-    width: 28,
-    height: 28,
+  drawerAvatarContainer: {
+    position: "relative",
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "#000",
+    borderWidth: 1.5,
+    borderColor: "#c99742",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  drawerAvatarImage: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+  },
+  drawerAvatarBadge: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#c99742",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#100e0b",
+  },
+  drawerAvatarBadgeText: {
+    color: "#0a0907",
+    fontSize: 8.5,
+    fontWeight: "900",
+  },
+  drawerProfileMeta: {
+    flex: 1,
+  },
+  drawerWelcomeName: {
+    color: "#ffffff",
+    fontSize: 15.5,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+  drawerTierRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 3,
+  },
+  drawerTierPill: {
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    borderWidth: 0.5,
+    borderColor: "rgba(201, 151, 66, 0.35)",
+  },
+  drawerTierText: {
+    color: "#f5c242",
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+  drawerSubWelcome: {
+    color: "#8a7e72",
+    fontSize: 10,
+    marginTop: 2.5,
+  },
+  drawerScrollView: {
+    flex: 1,
+  },
+  drawerScrollContent: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 28,
+  },
+  drawerItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 9,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginBottom: 2,
+  },
+  drawerIconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(201, 151, 66, 0.09)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  drawerIconImg: {
+    width: 17,
+    height: 17,
     resizeMode: "contain",
-    marginRight: 15,
     tintColor: "#c99742",
   },
-  drawerLabel: { color: "#fff", fontSize: 18, fontFamily: APP_FONT },
+  drawerItemTextCol: {
+    flex: 1,
+  },
+  drawerItemLabel: {
+    color: "#f0ece1",
+    fontSize: 13.5,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  drawerItemSubtitle: {
+    color: "#7a7267",
+    fontSize: 9.5,
+    marginTop: 1,
+  },
+  drawerChevron: {
+    color: "rgba(201, 151, 66, 0.5)",
+    fontSize: 16,
+    fontWeight: "600",
+    marginLeft: 6,
+  },
+  drawerLogoutCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(220, 53, 69, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(220, 53, 69, 0.3)",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  drawerLogoutIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(220, 53, 69, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  drawerLogoutIcon: {
+    width: 16,
+    height: 16,
+    resizeMode: "contain",
+    tintColor: "#ff6b6b",
+  },
+  drawerLogoutText: {
+    color: "#ff6b6b",
+    fontSize: 13.5,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+  },
+  drawerLogoutArrow: {
+    color: "#ff6b6b",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  drawerFooter: {
+    marginTop: 14,
+    paddingTop: 12,
+    alignItems: "center",
+  },
+  drawerFooterDivider: {
+    width: "55%",
+    height: 1,
+    backgroundColor: "rgba(201, 151, 66, 0.18)",
+    marginBottom: 10,
+  },
+  drawerFooterBrand: {
+    color: "#c99742",
+    fontSize: 9.5,
+    fontWeight: "900",
+    letterSpacing: 1.8,
+    marginBottom: 2,
+  },
+  drawerFooterSub: {
+    color: "#6b6255",
+    fontSize: 7.5,
+    letterSpacing: 0.6,
+  },
 
   // Popup styles
   popupContainer: {

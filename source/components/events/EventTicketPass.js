@@ -180,7 +180,7 @@ export default function EventTicketPass({ route, navigation }) {
   };
 
   // PayFast In-App Navigation Interceptor
-  const handlePayfastNavStateChange = (navState) => {
+  const handlePayfastNavStateChange = async (navState) => {
     const currentUrl = navState?.url || "";
 
     const isSuccess =
@@ -196,6 +196,23 @@ export default function EventTicketPass({ route, navigation }) {
     if (isSuccess) {
       setShowPayfastModal(false);
       setIsPayfastLoading(false);
+      const booked = payfastModalData?.booking;
+      const targetBookingId = booked?._id || booked?.ticketId;
+      try {
+        const token = await AsyncStorage.getItem("userToken");
+        if (targetBookingId) {
+          await safeFetch("/payfast/confirm-order", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ bookingId: targetBookingId }),
+          });
+        }
+      } catch (e) {
+        console.log("Error confirming event ticket in EventTicketPass:", e);
+      }
       Alert.alert("Payment Confirmed! 🥂", "Your ticket has been marked as PAID and your VIP pass is active.");
       fetchMyTickets();
       return;
@@ -211,6 +228,47 @@ export default function EventTicketPass({ route, navigation }) {
       setIsPayfastLoading(false);
       Alert.alert("Cancelled", "PayFast payment was cancelled.");
     }
+  };
+
+  const handleClosePayfastModal = () => {
+    const booked = payfastModalData?.booking;
+    const targetBookingId = booked?._id || booked?.ticketId;
+    Alert.alert(
+      "PayFast Gateway",
+      "Have you completed your payment on PayFast?",
+      [
+        {
+          text: "Yes, I Have Paid",
+          onPress: async () => {
+            setShowPayfastModal(false);
+            setIsPayfastLoading(false);
+            try {
+              const token = await AsyncStorage.getItem("userToken");
+              if (targetBookingId) {
+                await safeFetch("/payfast/confirm-order", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                  },
+                  body: JSON.stringify({ bookingId: targetBookingId }),
+                });
+              }
+            } catch (e) {}
+            fetchMyTickets();
+          },
+        },
+        {
+          text: "Leave as Pending",
+          style: "destructive",
+          onPress: () => {
+            setShowPayfastModal(false);
+            setIsPayfastLoading(false);
+          },
+        },
+        { text: "Stay in Gateway", style: "cancel" },
+      ]
+    );
   };
 
   // Render PayFast Modal
@@ -291,14 +349,14 @@ export default function EventTicketPass({ route, navigation }) {
         visible={showPayfastModal}
         animationType="slide"
         transparent={false}
-        onRequestClose={() => setShowPayfastModal(false)}
+        onRequestClose={handleClosePayfastModal}
       >
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>🔒 PayFast Secure Checkout</Text>
             <TouchableOpacity
               style={styles.modalCloseBtn}
-              onPress={() => setShowPayfastModal(false)}
+              onPress={handleClosePayfastModal}
             >
               <Text style={styles.modalCloseText}>✕</Text>
             </TouchableOpacity>

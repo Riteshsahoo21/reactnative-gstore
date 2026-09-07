@@ -19,7 +19,9 @@ import {
 import LinearGradient from "react-native-linear-gradient";
 import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_BASE } from "../../resources/data/Constants";
+import { API_BASE, getActiveServerHost } from "../../resources/data/Constants";
+
+const SOMMELIER_CREST = require("../../resources/images/sommelier_crest.jpg");
 
 const { width } = Dimensions.get("window");
 
@@ -33,7 +35,7 @@ const API_CANDIDATES = [
 const resolveEventImage = (img) => {
   if (!img) return "https://ik.imagekit.io/thegrandstore/bg.webp";
   if (img.startsWith("http")) return img;
-  return `http://192.168.1.9:5000/${img.replace(/^\//, "")}`;
+  return `${getActiveServerHost()}/${img.replace(/^\//, "")}`;
 };
 
 const getTierAvailability = (tier) => {
@@ -245,7 +247,7 @@ export default function EventDetails({ route, navigation }) {
   };
 
   // PayFast In-App Navigation Interceptor
-  const handlePayfastNavStateChange = (navState) => {
+  const handlePayfastNavStateChange = async (navState) => {
     const currentUrl = navState?.url || "";
 
     const isSuccess =
@@ -262,6 +264,25 @@ export default function EventDetails({ route, navigation }) {
       setShowPayfastModal(false);
       setIsPayfastLoading(false);
       const booked = payfastModalData?.booking;
+      const bookingTargetId = booked?._id || booked?.ticketId;
+
+      // Confirm payment directly with backend to update MongoDB & Admin
+      try {
+        const token = await AsyncStorage.getItem("userToken");
+        if (bookingTargetId) {
+          await safeFetch("/payfast/confirm-order", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ bookingId: bookingTargetId }),
+          });
+        }
+      } catch (e) {
+        console.log("Error confirming event payment on backend:", e);
+      }
+
       Alert.alert(
         "Payment Confirmed! 🥂",
         "Your PayFast payment has been processed successfully. Your tasting pass is now confirmed.",
@@ -294,19 +315,50 @@ export default function EventDetails({ route, navigation }) {
   };
 
   const handleClosePayfastModal = () => {
+    const booked = payfastModalData?.booking;
+    const bookingTargetId = booked?._id || booked?.ticketId;
     Alert.alert(
-      "Exit Payment Gateway?",
-      "Are you sure you want to close the PayFast gateway? Your ticket reservation will remain pending.",
+      "PayFast Gateway",
+      "Have you completed your payment on PayFast?",
       [
-        { text: "Stay", style: "cancel" },
         {
-          text: "Exit",
+          text: "Yes, I Have Paid",
+          onPress: async () => {
+            setShowPayfastModal(false);
+            setIsPayfastLoading(false);
+            try {
+              const token = await AsyncStorage.getItem("userToken");
+              if (bookingTargetId) {
+                await safeFetch("/payfast/confirm-order", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                  },
+                  body: JSON.stringify({ bookingId: bookingTargetId }),
+                });
+              }
+            } catch (e) {}
+            navigation.navigate("EventTicketPass", {
+              bookingId: booked?._id,
+              booking: { ...booked, paymentStatus: "Paid", ticketStatus: "Valid" },
+              justBooked: true,
+            });
+          },
+        },
+        {
+          text: "Leave as Pending",
           style: "destructive",
           onPress: () => {
             setShowPayfastModal(false);
             setIsPayfastLoading(false);
+            navigation.navigate("EventTicketPass", {
+              bookingId: booked?._id,
+              booking: booked,
+            });
           },
         },
+        { text: "Stay in Gateway", style: "cancel" },
       ]
     );
   };
@@ -464,7 +516,7 @@ export default function EventDetails({ route, navigation }) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
         <StatusBar barStyle="light-content" backgroundColor="#0a0907" />
-        <Text style={styles.errorIcon}>🍷</Text>
+        <Image source={SOMMELIER_CREST} style={styles.errorCrest} resizeMode="contain" />
         <Text style={styles.errorTitle}>Experience Not Found</Text>
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Text style={styles.backBtnText}>← Back to Events</Text>
@@ -486,8 +538,16 @@ export default function EventDetails({ route, navigation }) {
     (acc, tier) => acc + getTierAvailability(tier),
     0
   );
-  const isSoldOut = totalAvailableTickets === 0;
-  const isBookable = event.status !== "completed" && event.status !== "cancelled";
+  const isSoldOut = (event.ticketTiers && event.ticketTiers.length > 0) && totalAvailableTickets === 0;
+  const statusLower = String(event.status || "").toLowerCase();
+  const isPastDate = event.date && new Date(event.date) < new Date(new Date().setHours(0, 0, 0, 0)) && statusLower !== "ongoing";
+  const isEventClosed =
+    ["completed", "closed", "cancelled", "concluded", "ended"].includes(statusLower) ||
+    event.bookingClosed === true ||
+    event.isClosed === true ||
+    isPastDate ||
+    isSoldOut;
+  const isBookable = !isEventClosed;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -528,6 +588,13 @@ export default function EventDetails({ route, navigation }) {
                 {event.format === "Virtual" ? "🌐 VIRTUAL" : "📍 IN-PERSON"}
               </Text>
             </View>
+            {isEventClosed && (
+              <View style={styles.heroClosedBadge}>
+                <Text style={styles.heroClosedBadgeText}>
+                  {isSoldOut ? "SOLD OUT" : "BOOKING CLOSED"}
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* Hero Content Overlay */}
@@ -562,24 +629,76 @@ export default function EventDetails({ route, navigation }) {
 
         <View style={styles.bodyWrapper}>
           {/* HOST / SOMMELIER SPOTLIGHT */}
-          {(event.hostName || event.hostTitle) && (
-            <View style={styles.hostCard}>
-              <View style={styles.hostAvatar}>
-                <Text style={styles.hostAvatarIcon}>🍷</Text>
+          <LinearGradient
+            colors={["#1c1711", "#110f0c"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.hostCard}
+          >
+            <View style={styles.hostAvatarWrap}>
+              <Image
+                source={
+                  event.hostImage || event.hostAvatar
+                    ? { uri: resolveEventImage(event.hostImage || event.hostAvatar) }
+                    : SOMMELIER_CREST
+                }
+                style={styles.hostAvatarImage}
+                resizeMode="cover"
+              />
+              <View style={styles.hostVerifiedBadge}>
+                <Text style={styles.hostVerifiedText}>★</Text>
               </View>
-              <View style={styles.hostInfo}>
+            </View>
+            <View style={styles.hostInfo}>
+              <View style={styles.hostHeaderRow}>
                 <Text style={styles.hostLabel}>CURATED & HOSTED BY</Text>
-                <Text style={styles.hostName}>{event.hostName || "Grand Store Sommelier"}</Text>
-                <Text style={styles.hostTitle}>
-                  {event.hostTitle || "Master of Wine & Cellar Curator"}
+                <View style={styles.hostMasterBadge}>
+                  <Text style={styles.hostMasterBadgeText}>CELLAR MASTER</Text>
+                </View>
+              </View>
+              <Text style={styles.hostName}>{event.hostName || "Grand Store Sommelier"}</Text>
+              <Text style={styles.hostTitle}>
+                {event.hostTitle || "Master of Wine & Cellar Curator"}
+              </Text>
+              <View style={styles.hostPledge}>
+                <Text style={styles.hostPledgeText}>
+                  ⚜️ Guiding your exclusive tasting flight & vintage cellar pairings
                 </Text>
               </View>
             </View>
-          )}
+          </LinearGradient>
 
           {/* ABOUT THE EXPERIENCE */}
           <View style={styles.sectionCard}>
-            <Text style={styles.sectionHeading}>ABOUT THE EXPERIENCE</Text>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <Text style={styles.sectionHeading}>ABOUT THE EXPERIENCE</Text>
+              {isEventClosed && (
+                <View style={styles.closedStatusTag}>
+                  <Text style={styles.closedStatusTagText}>
+                    {isSoldOut ? "SOLD OUT" : "BOOKING CLOSED"}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {isEventClosed && (
+              <View style={styles.closedNoticeBox}>
+                <Text style={styles.closedNoticeIcon}>🔒</Text>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={styles.closedNoticeTitle}>
+                    {isSoldOut ? "Session Fully Booked" : "Booking Is Closed"}
+                  </Text>
+                  <Text style={styles.closedNoticeDesc}>
+                    {statusLower === "completed"
+                      ? "This cellar tasting experience has concluded and bookings are no longer accepted."
+                      : isSoldOut
+                      ? "All passes for this session are currently sold out. Join our exclusive waitlist below to be notified if spots open."
+                      : "Bookings for this session are currently closed. Please browse our other available cellar tastings."}
+                  </Text>
+                </View>
+              </View>
+            )}
+
             <Text style={styles.descriptionText}>{event.description}</Text>
 
             {event.capacity && (
@@ -618,9 +737,11 @@ export default function EventDetails({ route, navigation }) {
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionHeading}>SELECT TICKET TIER</Text>
-              {isSoldOut ? (
-                <View style={styles.soldOutBadge}>
-                  <Text style={styles.soldOutText}>SOLD OUT</Text>
+              {isEventClosed ? (
+                <View style={styles.closedTagPill}>
+                  <Text style={styles.closedTagPillText}>
+                    {isSoldOut ? "SOLD OUT" : "CLOSED"}
+                  </Text>
                 </View>
               ) : (
                 <Text style={styles.availabilityTotalText}>
@@ -633,7 +754,7 @@ export default function EventDetails({ route, navigation }) {
               event.ticketTiers.map((tier) => {
                 const available = getTierAvailability(tier);
                 const isSelected = selectedTicket?._id === tier._id;
-                const isTierSoldOut = available === 0;
+                const isTierSoldOut = available === 0 || isEventClosed;
 
                 return (
                   <TouchableOpacity
@@ -658,18 +779,21 @@ export default function EventDetails({ route, navigation }) {
                             style={[
                               styles.tierName,
                               isSelected && { color: "#f5c242" },
+                              isTierSoldOut && { color: "#888" },
                             ]}
                           >
                             {tier.name}
                           </Text>
                           {isTierSoldOut && (
                             <View style={styles.soldOutPill}>
-                              <Text style={styles.soldOutPillText}>SOLD OUT</Text>
+                              <Text style={styles.soldOutPillText}>
+                                {isSoldOut ? "SOLD OUT" : "CLOSED"}
+                              </Text>
                             </View>
                           )}
                         </View>
                         <Text style={styles.tierRemaining}>
-                          {isTierSoldOut ? "No passes remaining" : `${available} passes remaining`}
+                          {isTierSoldOut ? (isSoldOut ? "No passes remaining" : "Booking closed") : `${available} passes remaining`}
                         </Text>
                       </View>
 
@@ -795,7 +919,23 @@ export default function EventDetails({ route, navigation }) {
           )}
 
           {/* TOTAL & BOOKING CTA */}
-          {isSoldOut ? (
+          {isEventClosed && !isSoldOut ? (
+            <View style={styles.closedBottomBar}>
+              <View style={styles.closedBottomInfo}>
+                <Text style={styles.closedBottomTitle}>
+                  {statusLower === "completed" ? "EXPERIENCE CONCLUDED" : "BOOKING CLOSED"}
+                </Text>
+                <Text style={styles.closedBottomSub}>
+                  {statusLower === "completed"
+                    ? "This tasting has concluded. Tasting notes & flights are shown above."
+                    : "Passes for this session are currently closed."}
+                </Text>
+              </View>
+              <View style={styles.closedBottomBtn}>
+                <Text style={styles.closedBottomBtnText}>CLOSED</Text>
+              </View>
+            </View>
+          ) : isSoldOut ? (
             <TouchableOpacity
               style={styles.waitlistBtn}
               onPress={handleJoinWaitlist}
@@ -875,9 +1015,13 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginTop: 16,
   },
-  errorIcon: {
-    fontSize: 48,
+  errorCrest: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     marginBottom: 16,
+    borderWidth: 1.5,
+    borderColor: "rgba(201, 151, 66, 0.45)",
   },
   errorTitle: {
     color: "#f8f5ee",
@@ -1006,47 +1150,100 @@ const styles = StyleSheet.create({
   hostCard: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#13100c",
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "rgba(201, 151, 66, 0.25)",
+    borderColor: "rgba(201, 151, 66, 0.32)",
     padding: 14,
     marginBottom: 18,
   },
-  hostAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: "rgba(201, 151, 66, 0.12)",
+  hostAvatarWrap: {
+    position: "relative",
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: "#0d0b09",
     borderWidth: 1.5,
-    borderColor: "#c99742",
+    borderColor: "rgba(212, 175, 55, 0.55)",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 14,
   },
-  hostAvatarIcon: {
-    fontSize: 22,
+  hostAvatarImage: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#000",
+  },
+  hostVerifiedBadge: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#c99742",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "#13100c",
+  },
+  hostVerifiedText: {
+    color: "#0a0907",
+    fontSize: 9,
+    fontWeight: "900",
   },
   hostInfo: {
     flex: 1,
   },
+  hostHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 3,
+  },
   hostLabel: {
     color: "#c99742",
-    fontSize: 9.5,
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+  },
+  hostMasterBadge: {
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 0.5,
+    borderColor: "rgba(201, 151, 66, 0.35)",
+  },
+  hostMasterBadgeText: {
+    color: "#e8c566",
+    fontSize: 8,
     fontWeight: "800",
-    letterSpacing: 1,
-    marginBottom: 2,
+    letterSpacing: 0.5,
   },
   hostName: {
     color: "#ffffff",
-    fontSize: 15,
+    fontSize: 15.5,
     fontWeight: "800",
+    letterSpacing: 0.2,
   },
   hostTitle: {
-    color: "#8e867b",
+    color: "#a3998b",
     fontSize: 11.5,
     fontWeight: "500",
     marginTop: 2,
+  },
+  hostPledge: {
+    marginTop: 6,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.06)",
+  },
+  hostPledgeText: {
+    color: "#8a7e72",
+    fontSize: 10,
+    fontStyle: "italic",
+    lineHeight: 14,
   },
 
   // SECTION CARDS
@@ -1432,6 +1629,113 @@ const styles = StyleSheet.create({
     color: "#f5c242",
     fontSize: 13,
     fontWeight: "900",
+    letterSpacing: 1,
+  },
+
+  // CLOSED STATES
+  heroClosedBadge: {
+    backgroundColor: "rgba(180, 40, 40, 0.85)",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(255, 90, 90, 0.5)",
+  },
+  heroClosedBadgeText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+  },
+  closedStatusTag: {
+    backgroundColor: "rgba(180, 40, 40, 0.15)",
+    borderColor: "rgba(255, 80, 80, 0.4)",
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  closedStatusTagText: {
+    color: "#ff6b6b",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  closedNoticeBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "rgba(255, 80, 80, 0.08)",
+    borderLeftWidth: 3,
+    borderLeftColor: "#ff4d4d",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 14,
+  },
+  closedNoticeIcon: {
+    fontSize: 18,
+    marginTop: 1,
+  },
+  closedNoticeTitle: {
+    color: "#ff8080",
+    fontSize: 13,
+    fontWeight: "800",
+    marginBottom: 3,
+  },
+  closedNoticeDesc: {
+    color: "#c2b8aa",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  closedTagPill: {
+    backgroundColor: "rgba(120, 120, 120, 0.2)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  closedTagPillText: {
+    color: "#888",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  closedBottomBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#16130f",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    marginTop: 8,
+  },
+  closedBottomInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  closedBottomTitle: {
+    color: "#e8ded1",
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  closedBottomSub: {
+    color: "#8a7e72",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  closedBottomBtn: {
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+  },
+  closedBottomBtnText: {
+    color: "#888",
+    fontSize: 12,
+    fontWeight: "800",
     letterSpacing: 1,
   },
 

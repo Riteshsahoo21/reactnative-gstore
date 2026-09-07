@@ -23,7 +23,7 @@ import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { launchImageLibrary } from "react-native-image-picker";
 import AppHeader from "../../widgets/AppHeader";
-import { API_BASE } from "../../resources/data/Constants";
+import { API_BASE, getActiveServerHost } from "../../resources/data/Constants";
 
 const { width } = Dimensions.get("window");
 
@@ -37,7 +37,7 @@ const API_CANDIDATES = [
 const resolveImage = (img) => {
   if (!img) return "https://images.unsplash.com/photo-1527281400683-1aae777175f8?auto=format&fit=crop&q=80&w=1000";
   if (img.startsWith("http")) return img;
-  return `http://192.168.1.9:5000/${img.replace(/^\//, "")}`;
+  return `${getActiveServerHost()}/${img.replace(/^\//, "")}`;
 };
 
 export default function AuctionCheckout({ route, navigation }) {
@@ -73,6 +73,16 @@ export default function AuctionCheckout({ route, navigation }) {
   // PayFast In-App WebView Modal State
   const [payfastModalVisible, setPayfastModalVisible] = useState(false);
   const [payfastHtml, setPayfastHtml] = useState(null);
+
+  // Dynamic Grand Store Escrow Bank Details (from /settings/public)
+  const [storeBankDetails, setStoreBankDetails] = useState({
+    bankName: "Standard Bank",
+    accountName: "The Grand Store PTY LTD",
+    accountNumber: "0123456789",
+    branchCode: "051001",
+    accountType: "Business Cheque",
+    swiftCode: "SBZAJJ",
+  });
 
   const safeFetch = async (endpoint, options = {}) => {
     for (const base of API_CANDIDATES) {
@@ -129,6 +139,21 @@ export default function AuctionCheckout({ route, navigation }) {
 
   useEffect(() => {
     loadUser();
+  }, []);
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const res = await safeFetch("/settings/public");
+        if (res && res.ok) {
+          const data = await res.json();
+          if (data?.bankDetails) {
+            setStoreBankDetails(data.bankDetails);
+          }
+        }
+      } catch (e) {}
+    };
+    fetchSettings();
   }, []);
 
   useEffect(() => {
@@ -303,15 +328,88 @@ export default function AuctionCheckout({ route, navigation }) {
     }
   };
 
+  const finalizePaidAuction = async () => {
+    try {
+      const token = await AsyncStorage.getItem("userToken");
+      // 1. Ensure master order is recorded for this lot with shipping address
+      try {
+        await safeFetch(`/auction/${lot._id}/pay`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            shippingAddress: {
+              ...addressForm,
+              phoneNumber: addressForm.phone,
+            },
+            calculatedShipping: dynamicShipping,
+            paymentMethod: "PayFast",
+          }),
+        });
+      } catch (e) {}
+
+      // 2. Confirm auction payment directly via PayFast confirmation controller
+      try {
+        await safeFetch("/payfast/confirm-order", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ auctionId: lot._id }),
+        });
+      } catch (e) {
+        console.log("Error confirming auction payment on backend:", e);
+      }
+    } catch (err) {
+      console.log("Finalize auction payment error:", err);
+    }
+  };
+
+  const handleClosePayfastModal = () => {
+    Alert.alert(
+      "PayFast Gateway",
+      "Have you completed your payment on PayFast?",
+      [
+        {
+          text: "Yes, I Have Paid",
+          onPress: async () => {
+            setPayfastModalVisible(false);
+            await finalizePaidAuction();
+            Alert.alert(
+              "Settlement Completed! 🏆",
+              "Your payment has been successfully cleared with the Grand Store Vault. White-glove courier dispatch will begin shortly.",
+              [{ text: "View Receipt", onPress: () => navigation.navigate("MyBids") }]
+            );
+          },
+        },
+        {
+          text: "Leave as Pending",
+          style: "destructive",
+          onPress: () => {
+            setPayfastModalVisible(false);
+          },
+        },
+        { text: "Stay in Gateway", style: "cancel" },
+      ]
+    );
+  };
+
   const handleWebViewNavChange = async (navState) => {
     const { url } = navState;
     if (
       url.includes("payment=success") ||
       url.includes("status=complete") ||
+      url.includes("status=COMPLETE") ||
       url.includes("paid=true") ||
+      url.includes("/finish") ||
+      url.includes("/complete") ||
       url.includes("/checkout/success")
     ) {
       setPayfastModalVisible(false);
+      await finalizePaidAuction();
       Alert.alert(
         "Settlement Completed! 🏆",
         "Your payment has been successfully cleared with the Grand Store Vault. White-glove courier dispatch will begin shortly.",
@@ -563,20 +661,40 @@ export default function AuctionCheckout({ route, navigation }) {
                   <View style={styles.bankGrid}>
                     <View style={styles.bankGridItem}>
                       <Text style={styles.bankItemLabel}>BANK NAME</Text>
-                      <Text style={styles.bankItemVal}>Standard Bank</Text>
+                      <Text style={styles.bankItemVal}>
+                        {storeBankDetails.bankName || "Standard Bank"}
+                      </Text>
                     </View>
                     <View style={styles.bankGridItem}>
                       <Text style={styles.bankItemLabel}>ACCOUNT NAME</Text>
-                      <Text style={styles.bankItemVal}>The Grand Store PTY LTD</Text>
+                      <Text style={styles.bankItemVal}>
+                        {storeBankDetails.accountName || "The Grand Store PTY LTD"}
+                      </Text>
                     </View>
                     <View style={styles.bankGridItem}>
                       <Text style={styles.bankItemLabel}>ACCOUNT NUMBER</Text>
-                      <Text style={styles.bankItemValMono}>0123456789</Text>
+                      <Text style={styles.bankItemValMono}>
+                        {storeBankDetails.accountNumber || "0123456789"}
+                      </Text>
                     </View>
                     <View style={styles.bankGridItem}>
                       <Text style={styles.bankItemLabel}>BRANCH CODE</Text>
-                      <Text style={styles.bankItemValMono}>051001</Text>
+                      <Text style={styles.bankItemValMono}>
+                        {storeBankDetails.branchCode || "051001"}
+                      </Text>
                     </View>
+                    {storeBankDetails.accountType ? (
+                      <View style={styles.bankGridItem}>
+                        <Text style={styles.bankItemLabel}>ACCOUNT TYPE</Text>
+                        <Text style={styles.bankItemVal}>{storeBankDetails.accountType}</Text>
+                      </View>
+                    ) : null}
+                    {storeBankDetails.swiftCode ? (
+                      <View style={styles.bankGridItem}>
+                        <Text style={styles.bankItemLabel}>SWIFT / BIC</Text>
+                        <Text style={styles.bankItemValMono}>{storeBankDetails.swiftCode}</Text>
+                      </View>
+                    ) : null}
                   </View>
 
                   <View style={styles.referenceCopyRow}>
@@ -746,15 +864,19 @@ export default function AuctionCheckout({ route, navigation }) {
       </ScrollView>
 
       {/* PAYFAST EMBEDDED WEBVIEW MODAL */}
-      <Modal visible={payfastModalVisible} animationType="slide">
+      <Modal
+        visible={payfastModalVisible}
+        animationType="slide"
+        onRequestClose={handleClosePayfastModal}
+      >
         <SafeAreaView style={styles.webViewModalContainer}>
           <View style={styles.webViewHeader}>
             <Text style={styles.webViewTitle}>PayFast Encrypted Gateway</Text>
             <TouchableOpacity
-              onPress={() => setPayfastModalVisible(false)}
+              onPress={handleClosePayfastModal}
               style={styles.webViewCloseBtn}
             >
-              <Text style={styles.webViewCloseText}>✕ Cancel</Text>
+              <Text style={styles.webViewCloseText}>✕ Close</Text>
             </TouchableOpacity>
           </View>
           {payfastHtml && (

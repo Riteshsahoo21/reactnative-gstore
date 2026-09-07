@@ -40,7 +40,14 @@ const Profile = () => {
     return (
     <View style={styles.container}>
       <TouchableOpacity onPress={selectProfilePic}>
-          <Image source= {require('../resources/images/Male.jpg')} style={styles.profilePic} />
+        <Image
+          source={
+            profilePic && profilePic.uri
+              ? { uri: profilePic.uri }
+              : require('../resources/images/sommelier_crest.jpg')
+          }
+          style={styles.profilePic}
+        />
       </TouchableOpacity>
       <TextInput
         style={styles.input}
@@ -121,6 +128,8 @@ const styles = StyleSheet.create({
     height: 100,
     borderRadius: 50,
     marginBottom: 16,
+    borderWidth: 2,
+    borderColor: '#c99742',
   },
   profilePicPlaceholder: {
     width: 100,

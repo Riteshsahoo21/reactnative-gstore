@@ -1,7 +1,14 @@
-import { Platform } from 'react-native';
+import {
+  getActiveApiBase,
+  getActiveServerHost,
+  getCandidateBases,
+  setActiveApiBase,
+} from '../../helpers/networkConfig';
 
-// Default to localhost:5000 (forwarded via adb reverse on physical Android device & native on iOS)
+// Default base URL; dynamic interceptor in networkConfig will auto-resolve & retry across all candidates
 export const API_BASE = 'http://localhost:5000/api';
+export const SERVER_BASE = 'http://localhost:5000';
+export { getActiveApiBase, getActiveServerHost, getCandidateBases, setActiveApiBase };
 export const FAQ_URL = ''
 export const CONTACT_US_URL = ''
 export const PRIVACY_URL = ''

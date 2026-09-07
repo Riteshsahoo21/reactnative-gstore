@@ -19,7 +19,7 @@ import {
 import LinearGradient from "react-native-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import AppHeader from "../../widgets/AppHeader";
-import { API_BASE } from "../../resources/data/Constants";
+import { API_BASE, getActiveServerHost } from "../../resources/data/Constants";
 
 const { width } = Dimensions.get("window");
 
@@ -35,7 +35,7 @@ const CATEGORIES = ["All", "Whisky", "Wine", "Champagne", "Cognac", "Rare Spirit
 const resolveImage = (img) => {
   if (!img) return "https://images.unsplash.com/photo-1527281400683-1aae777175f8?auto=format&fit=crop&q=80&w=1000";
   if (img.startsWith("http")) return img;
-  return `http://192.168.1.9:5000/${img.replace(/^\//, "")}`;
+  return `${getActiveServerHost()}/${img.replace(/^\//, "")}`;
 };
 
 const getAuctionTime = (ms) => {

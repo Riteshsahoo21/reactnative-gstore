@@ -27,6 +27,7 @@ import LinearGradient from "react-native-linear-gradient";
 import AppHeader from "../widgets/AppHeader";
 import tmh_styles from "../styles/tmh_styles";
 import { HEADER_HEIGHT_THRESHOLD, API_BASE } from "../resources/data/Constants";
+import { APP_FONT } from "../resources/data/Fonts";
 import ImageViewer from "react-native-image-zoom-viewer";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
@@ -382,7 +383,7 @@ const ProductDetails = ({ navigation, route }) => {
 
                 {/* Tap to Zoom Prompt */}
                 <View style={styles.zoomBadge}>
-                  <Text style={styles.zoomText}>🔍 Tap to zoom</Text>
+                  <Text style={styles.zoomText}>Tap bottle to zoom</Text>
                 </View>
               </View>
             </LinearGradient>
@@ -519,8 +520,13 @@ const ProductDetails = ({ navigation, route }) => {
               disabled={isAddingToCart}
             >
               <View style={styles.addToCartBtn}>
+                <Image
+                  source={require("../resources/images/shopping-cart.png")}
+                  style={styles.addToCartBtnIcon}
+                  resizeMode="contain"
+                />
                 <Text style={styles.addToCartBtnText}>
-                  {isAddingToCart ? "Adding..." : "🛒  Add to Cart"}
+                  {isAddingToCart ? "Adding..." : "Add to Cart"}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -532,13 +538,18 @@ const ProductDetails = ({ navigation, route }) => {
               style={styles.buyNowTouch}
             >
               <LinearGradient
-                colors={["#ffd466", "#f5c242", "#c99742"]}
+                colors={["#241f1a", "#15120e", "#0a0907"]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={styles.buyNowBtn}
               >
+                <Image
+                  source={require("../resources/assets/bag.png")}
+                  style={styles.buyNowBtnIcon}
+                  resizeMode="contain"
+                />
                 <Text style={styles.buyNowBtnText}>
-                  🛍️  Buy Now
+                  Buy Now
                 </Text>
               </LinearGradient>
             </TouchableOpacity>
@@ -623,7 +634,9 @@ const ProductDetails = ({ navigation, route }) => {
         {/* Delivery & Fulfillment Card */}
         <View style={styles.deliveryCard}>
           <View style={styles.deliveryHeaderRow}>
-            <Text style={styles.deliveryIcon}>📦</Text>
+            <View style={styles.deliveryIconBadge}>
+              <Text style={styles.deliveryIconText}>◈</Text>
+            </View>
             <Text style={styles.deliveryHeaderTitle}>DELIVERY & FULFILLMENT</Text>
           </View>
           <View style={styles.deliveryGrid}>
@@ -643,7 +656,7 @@ const ProductDetails = ({ navigation, route }) => {
           <View style={styles.deliveryDivider} />
           <View style={styles.deliveryEstimateRow}>
             <Text style={styles.deliveryEstimateText}>
-              🌍 Delivery: <Text style={styles.deliveryEstimateBold}>Calculated at checkout</Text>
+              Delivery: <Text style={styles.deliveryEstimateBold}>Calculated at checkout</Text>
             </Text>
             <Text style={styles.deliveryFreeText}>Worldwide Insured Transit</Text>
           </View>
@@ -667,28 +680,36 @@ const ProductDetails = ({ navigation, route }) => {
           <Text style={styles.servingEyebrow}>SOMMELIER GUIDE</Text>
           <Text style={styles.servingTitle}>Serving & Cellar Care</Text>
           <View style={styles.servingRow}>
-            <Text style={styles.servingBullet}>🌡</Text>
+            <View style={styles.servingBulletBadge}>
+              <Text style={styles.servingBulletText}>◈</Text>
+            </View>
             <View style={styles.servingCol}>
               <Text style={styles.servingParam}>IDEAL TEMPERATURE</Text>
               <Text style={styles.servingVal}>{servingGuide.temp}</Text>
             </View>
           </View>
           <View style={styles.servingRow}>
-            <Text style={styles.servingBullet}>🍷</Text>
+            <View style={styles.servingBulletBadge}>
+              <Text style={styles.servingBulletText}>◈</Text>
+            </View>
             <View style={styles.servingCol}>
               <Text style={styles.servingParam}>RECOMMENDED GLASSWARE</Text>
               <Text style={styles.servingVal}>{servingGuide.glass}</Text>
             </View>
           </View>
           <View style={styles.servingRow}>
-            <Text style={styles.servingBullet}>🔒</Text>
+            <View style={styles.servingBulletBadge}>
+              <Text style={styles.servingBulletText}>◈</Text>
+            </View>
             <View style={styles.servingCol}>
               <Text style={styles.servingParam}>CELLAR STORAGE</Text>
               <Text style={styles.servingVal}>{servingGuide.cellar}</Text>
             </View>
           </View>
           <View style={styles.servingRow}>
-            <Text style={styles.servingBullet}>🍴</Text>
+            <View style={styles.servingBulletBadge}>
+              <Text style={styles.servingBulletText}>◈</Text>
+            </View>
             <View style={styles.servingCol}>
               <Text style={styles.servingParam}>PAIRING RECOMMENDATION</Text>
               <Text style={styles.servingVal}>{servingGuide.pairing}</Text>
@@ -817,7 +838,7 @@ const ProductDetails = ({ navigation, route }) => {
             </View>
           ) : (
             <View style={styles.emptyReviewsBox}>
-              <Text style={styles.emptyReviewIcon}>🍷</Text>
+              <Text style={styles.emptyReviewIcon}>◈</Text>
               <Text style={styles.emptyReviewTitle}>No Reviews Yet</Text>
               <Text style={styles.emptyReviewDesc}>
                 Be the first cellar connoisseur to taste and review this bottle!
@@ -1078,10 +1099,10 @@ const ProductDetails = ({ navigation, route }) => {
                 activeOpacity={0.85}
               >
                 <LinearGradient
-                  colors={["#f5c242", "#c99742"]}
+                  colors={["#28221b", "#16130f", "#0a0907"]}
                   style={styles.buyNowConfirmBtn}
                 >
-                  <Text style={styles.buyNowConfirmText}>Yes, Checkout →</Text>
+                  <Text style={styles.buyNowConfirmText}>Proceed to Checkout →</Text>
                 </LinearGradient>
               </TouchableOpacity>
             </View>
@@ -1423,44 +1444,63 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   addToCartBtn: {
-    height: 50,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: "#c99742",
-    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 1.2,
+    borderColor: "rgba(255, 255, 255, 0.18)",
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+    flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 8,
+    paddingHorizontal: 12,
+  },
+  addToCartBtnIcon: {
+    width: 16,
+    height: 16,
+    tintColor: "#c99742",
+    marginRight: 8,
   },
   addToCartBtnText: {
-    color: "#f5c242",
-    fontSize: 15,
-    fontWeight: "800",
-    letterSpacing: 0.3,
+    color: "#e2ded6",
+    fontSize: 14.5,
+    fontWeight: "700",
+    letterSpacing: 0.4,
     textAlign: "center",
+    fontFamily: APP_FONT,
   },
   buyNowTouch: {
     flex: 1,
     marginLeft: 6,
   },
   buyNowBtn: {
-    height: 50,
-    borderRadius: 12,
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 1.4,
+    borderColor: "#c99742",
+    flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 8,
-    elevation: 4,
-    shadowColor: "#f5c242",
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    paddingHorizontal: 12,
+    shadowColor: "#c99742",
+    shadowOpacity: 0.28,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 5,
+  },
+  buyNowBtnIcon: {
+    width: 15,
+    height: 15,
+    tintColor: "#f8f5ee",
+    marginRight: 8,
   },
   buyNowBtnText: {
-    color: "#0a0a0a",
-    fontSize: 15,
-    fontWeight: "900",
-    letterSpacing: 0.3,
+    color: "#f8f5ee",
+    fontSize: 14.5,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
     textAlign: "center",
+    fontFamily: APP_FONT,
   },
   buyNowCard: {
     width: "88%",
@@ -1551,15 +1591,18 @@ const styles = StyleSheet.create({
     flex: 1.4,
   },
   buyNowConfirmBtn: {
-    height: 44,
+    height: 46,
     borderRadius: 10,
+    borderWidth: 1.2,
+    borderColor: "#c99742",
     justifyContent: "center",
     alignItems: "center",
   },
   buyNowConfirmText: {
-    color: "#0a0a0a",
+    color: "#f8f5ee",
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "700",
+    letterSpacing: 0.5,
   },
   specsCard: {
     backgroundColor: "#13100c",
@@ -1702,8 +1745,21 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     gap: 8,
   },
-  deliveryIcon: {
-    fontSize: 16,
+  deliveryIconBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 8,
+  },
+  deliveryIconText: {
+    color: "#c99742",
+    fontSize: 10,
+    fontWeight: "700",
   },
   deliveryHeaderTitle: {
     color: "#d4af37",
@@ -1828,9 +1884,22 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     gap: 10,
   },
-  servingBullet: {
-    fontSize: 16,
-    marginTop: 1,
+  servingBulletBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.35)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+    marginTop: 2,
+  },
+  servingBulletText: {
+    color: "#c99742",
+    fontSize: 10,
+    fontWeight: "800",
   },
   servingCol: {
     flex: 1,

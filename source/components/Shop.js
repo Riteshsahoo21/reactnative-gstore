@@ -25,6 +25,7 @@ import LinearGradient from "react-native-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { API_BASE } from "../resources/data/Constants";
+import { getCategoryIcon } from "../helpers/categoryIcons";
 
 const { width } = Dimensions.get("window");
 const cardWidth = (width - 40) / 2;
@@ -369,6 +370,22 @@ const Shop = ({ navigation, onBack, route }) => {
       { id: "All", label: "All Sizes", count: products.length },
       ...sorted.map((name) => ({ id: name, label: name, count: counts[name] })),
     ];
+  }, [products]);
+
+  // 5. Category counts for rich filter cards
+  const categoryCounts = useMemo(() => {
+    const counts = {};
+    products.forEach((p) => {
+      const c = (p.category || "").trim();
+      if (c) {
+        const matched = CATEGORY_CHIPS.find(
+          (chip) => chip.toLowerCase() === c.toLowerCase()
+        );
+        const key = matched || c;
+        counts[key] = (counts[key] || 0) + 1;
+      }
+    });
+    return counts;
   }, [products]);
 
   // Active filter count
@@ -816,6 +833,11 @@ const Shop = ({ navigation, onBack, route }) => {
           columnWrapperStyle={styles.columnWrapper}
           contentContainerStyle={styles.listContainer}
           showsVerticalScrollIndicator={false}
+          initialNumToRender={6}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          updateCellsBatchingPeriod={50}
+          removeClippedSubviews={Platform.OS === 'android'}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyTitle}>No Bottles Found</Text>
@@ -841,7 +863,17 @@ const Shop = ({ navigation, onBack, route }) => {
         onRequestClose={() => setIsFilterModalVisible(false)}
       >
         <View style={styles.modalBackdrop}>
+          <TouchableOpacity
+            style={styles.modalBackdropDismiss}
+            activeOpacity={1}
+            onPress={() => setIsFilterModalVisible(false)}
+          />
           <View style={styles.filterModalCard}>
+            {/* Top Grab Handle */}
+            <View style={styles.modalHandleWrap}>
+              <View style={styles.modalHandleBar} />
+            </View>
+
             {/* Modal Header */}
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -941,36 +973,93 @@ const Shop = ({ navigation, onBack, route }) => {
 
             {/* Tab Body Contents */}
             <ScrollView
-              style={{ maxHeight: 300 }}
+              style={styles.modalTabScrollView}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingVertical: 6 }}
+              contentContainerStyle={{ paddingVertical: 8, paddingBottom: 24 }}
             >
               {/* Category Tab */}
               {activeFilterTab === "category" && (
-                <View style={styles.optionsWrap}>
+                <View style={styles.categoryGrid}>
                   {CATEGORY_CHIPS.filter((c) =>
                     !filterSearchQuery ||
                     c.toLowerCase().includes(filterSearchQuery.trim().toLowerCase())
                   ).map((cat) => {
                     const isSelected =
                       selectedCategory.toLowerCase() === cat.toLowerCase();
+                    const count = cat === "All" ? products.length : (categoryCounts[cat] || 0);
+                    const iconSource = cat === "All"
+                      ? require("../resources/assets/category_icon.png")
+                      : getCategoryIcon(cat);
+
                     return (
                       <TouchableOpacity
                         key={cat}
                         onPress={() => setSelectedCategory(cat)}
                         style={[
-                          styles.optionPill,
-                          isSelected && styles.optionPillSelected,
+                          styles.categoryFilterCard,
+                          isSelected && styles.categoryFilterCardSelected,
                         ]}
+                        activeOpacity={0.75}
                       >
-                        <Text
-                          style={[
-                            styles.optionPillText,
-                            isSelected && styles.optionPillTextSelected,
-                          ]}
+                        <LinearGradient
+                          colors={
+                            isSelected
+                              ? ["#332717", "#201810", "#130f0a"]
+                              : ["#211b15", "#15120e", "#0e0c09"]
+                          }
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                          style={styles.categoryCardGradient}
                         >
-                          {cat}
-                        </Text>
+                          <View
+                            style={[
+                              styles.categoryIconCircle,
+                              isSelected && styles.categoryIconCircleSelected,
+                            ]}
+                          >
+                            <Image
+                              source={iconSource}
+                              style={styles.categoryCardIcon}
+                              resizeMode="contain"
+                            />
+                          </View>
+
+                          <View style={styles.categoryCardContent}>
+                            <Text
+                              style={[
+                                styles.categoryCardTitle,
+                                isSelected && styles.categoryCardTitleSelected,
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {cat}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.categoryCardCount,
+                                isSelected && styles.categoryCardCountSelected,
+                              ]}
+                            >
+                              {count} {count === 1 ? "bottle" : "bottles"}
+                            </Text>
+                          </View>
+
+                          <View
+                            style={[
+                              styles.categoryCheckBadge,
+                              isSelected && styles.categoryCheckBadgeSelected,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.categoryCheckText,
+                                isSelected && styles.categoryCheckTextSelected,
+                              ]}
+                            >
+                              {isSelected ? "✓" : ""}
+                            </Text>
+                          </View>
+                        </LinearGradient>
                       </TouchableOpacity>
                     );
                   })}
@@ -1823,14 +1912,130 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.75)",
     justifyContent: "flex-end",
   },
+  modalBackdropDismiss: {
+    flex: 1,
+  },
   filterModalCard: {
     backgroundColor: "#14110d",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 34 : 18,
+    borderWidth: 1.2,
+    borderBottomWidth: 0,
+    borderColor: "rgba(201, 151, 66, 0.4)",
+    height: "92%",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    elevation: 20,
+  },
+  modalHandleWrap: {
+    alignItems: "center",
+    paddingVertical: 6,
+    marginBottom: 6,
+  },
+  modalHandleBar: {
+    width: 44,
+    height: 4.5,
+    borderRadius: 3,
+    backgroundColor: "rgba(201, 151, 66, 0.5)",
+  },
+  modalTabScrollView: {
+    flex: 1,
+  },
+  categoryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
+  categoryFilterCard: {
+    width: "48.5%",
+    marginBottom: 10,
+    borderRadius: 14,
+    overflow: "hidden",
+    borderWidth: 1.2,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+  },
+  categoryFilterCardSelected: {
+    borderColor: "#c99742",
+    shadowColor: "#c99742",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  categoryCardGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
+  categoryIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
     borderWidth: 1,
-    borderColor: "rgba(201, 151, 66, 0.3)",
-    maxHeight: "85%",
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 8,
+  },
+  categoryIconCircleSelected: {
+    backgroundColor: "rgba(201, 151, 66, 0.22)",
+    borderColor: "rgba(201, 151, 66, 0.6)",
+  },
+  categoryCardIcon: {
+    width: 22,
+    height: 22,
+  },
+  categoryCardContent: {
+    flex: 1,
+  },
+  categoryCardTitle: {
+    color: "#e8e5df",
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  categoryCardTitleSelected: {
+    color: "#f5c242",
+    fontWeight: "800",
+  },
+  categoryCardCount: {
+    color: "#888",
+    fontSize: 10,
+    marginTop: 2,
+    letterSpacing: 0.2,
+  },
+  categoryCardCountSelected: {
+    color: "#d4af37",
+    fontWeight: "600",
+  },
+  categoryCheckBadge: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 4,
+  },
+  categoryCheckBadgeSelected: {
+    backgroundColor: "#c99742",
+    borderColor: "#c99742",
+  },
+  categoryCheckText: {
+    color: "transparent",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  categoryCheckTextSelected: {
+    color: "#0a0a0a",
   },
   modalHeader: {
     flexDirection: "row",

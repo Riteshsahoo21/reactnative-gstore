@@ -37,6 +37,30 @@ export default function OrderDetails({ route, navigation }) {
   const initialOrder = route?.params?.order || null;
   const [order, setOrder] = useState(initialOrder);
   const [isLoading, setIsLoading] = useState(!initialOrder);
+  const [storeBankDetails, setStoreBankDetails] = useState({
+    bankName: "Standard Bank",
+    accountName: "The Grand Store PTY LTD",
+    accountNumber: "0123456789",
+    branchCode: "051001",
+  });
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      for (const base of API_CANDIDATES) {
+        try {
+          const res = await fetch(`${base}/settings/public`);
+          if (res && res.ok) {
+            const data = await res.json();
+            if (data?.bankDetails) {
+              setStoreBankDetails(data.bankDetails);
+              break;
+            }
+          }
+        } catch (e) {}
+      }
+    };
+    fetchSettings();
+  }, []);
 
   useEffect(() => {
     const syncPaidStatus = async (targetOrder) => {
@@ -319,6 +343,100 @@ export default function OrderDetails({ route, navigation }) {
           </View>
         </View>
 
+        {/* 6-Stage Delivery Tracking Timeline */}
+        <View style={styles.card}>
+          <View style={styles.timelineHeaderRow}>
+            <Text style={styles.sectionHeading}>6-STAGE TRACKING TIMELINE</Text>
+            <View style={styles.liveTrackingPill}>
+              <Text style={styles.liveTrackingPillText}>LIVE WAYBILL</Text>
+            </View>
+          </View>
+
+          <View style={styles.timelineList}>
+            {[
+              {
+                stage: 1,
+                name: "Payment Confirmed",
+                desc: isPaid ? "Payment verified via PayFast" : "Awaiting payment settlement",
+                done: isPaid,
+                active: !isPaid,
+              },
+              {
+                stage: 2,
+                name: "Order Confirmed",
+                desc: `Assigned order reference #${orderRefId}`,
+                done: true,
+                active: false,
+              },
+              {
+                stage: 3,
+                name: "Vendor Preparing",
+                desc: "Bottles inspected & sealed with tamper-proof security wax",
+                done: isPaid,
+                active: isPaid,
+              },
+              {
+                stage: 4,
+                name: "Collected by Courier",
+                desc: isPostNet ? "Handed over to PostNet Logistics" : "Collected by Courier Guy Express",
+                done: false,
+                active: false,
+              },
+              {
+                stage: 5,
+                name: "In Transit 🚚",
+                desc: "Secured transport via regional distribution hub",
+                done: false,
+                active: false,
+              },
+              {
+                stage: 6,
+                name: isPostNet ? "Ready for Collection 📍" : "Delivered ✅",
+                desc: isPostNet
+                  ? "Counter collection with SMS PIN & 18+ ID"
+                  : "Direct doorstep handover & signature",
+                done: false,
+                active: false,
+              },
+            ].map((step, sIdx, arr) => (
+              <View key={sIdx} style={styles.timelineStepRow}>
+                <View style={styles.timelineLeftCol}>
+                  <View
+                    style={[
+                      styles.timelineNode,
+                      step.done && styles.timelineNodeDone,
+                      step.active && styles.timelineNodeActive,
+                    ]}
+                  >
+                    <Text style={styles.timelineNodeText}>
+                      {step.done ? "✓" : step.stage}
+                    </Text>
+                  </View>
+                  {sIdx < arr.length - 1 && (
+                    <View
+                      style={[
+                        styles.timelineLine,
+                        step.done && styles.timelineLineDone,
+                      ]}
+                    />
+                  )}
+                </View>
+                <View style={styles.timelineRightCol}>
+                  <Text
+                    style={[
+                      styles.timelineStepName,
+                      (step.done || step.active) && styles.timelineStepNameActive,
+                    ]}
+                  >
+                    {step.name}
+                  </Text>
+                  <Text style={styles.timelineStepDesc}>{step.desc}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+
         {/* Ordered Products Section */}
         <View style={styles.card}>
           <Text style={styles.sectionHeading}>
@@ -385,13 +503,26 @@ export default function OrderDetails({ route, navigation }) {
               {isPostNet ? "PostNet Pickup Branch" : "Shipping Address"}
             </Text>
             <Text style={styles.infoValue}>
-              {recipient.address ||
+              {order.pickupStore?.address ||
+                recipient.address ||
                 [recipient.city, recipient.postalCode, recipient.country]
                   .filter(Boolean)
                   .join(", ") ||
                 "Destination registered on file"}
             </Text>
           </View>
+
+          {isPostNet && (
+            <View style={styles.postnetPinBox}>
+              <Text style={{ fontSize: 16, marginRight: 8 }}>📲</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.postnetPinTitle}>SMS Collection PIN & 18+ ID Required</Text>
+                <Text style={styles.postnetPinSub}>
+                  Bring your 6-digit SMS dispatch PIN and government ID (18+) to collect from the counter. Parcels are safely stored for 30 days in temperature-controlled holding.
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
 
         {/* Financial & Invoice Summary Card */}
@@ -417,12 +548,32 @@ export default function OrderDetails({ route, navigation }) {
             </View>
           )}
 
+          {order.superCoinsDiscount > 0 && (
+            <View style={styles.costRow}>
+              <Text style={[styles.costLabelDiscount, { color: "#f5c242" }]}>
+                🪙 Super Coins Redeemed ({order.superCoinsUsed || Math.round(order.superCoinsDiscount / 0.1)} coins)
+              </Text>
+              <Text style={[styles.costValueDiscount, { color: "#f5c242" }]}>
+                -R{Number(order.superCoinsDiscount).toFixed(2)}
+              </Text>
+            </View>
+          )}
+
           <View style={styles.divider} />
 
           <View style={styles.costRowTotal}>
             <Text style={styles.totalHeading}>GRAND TOTAL</Text>
             <Text style={styles.totalAmount}>R{grandTotal.toFixed(2)}</Text>
           </View>
+
+          {(order.superCoinsEarned > 0 || subtotal > 0) && (
+            <View style={styles.superCoinsEarnedBanner}>
+              <Text style={styles.superCoinsEarnedIcon}>🎉</Text>
+              <Text style={styles.superCoinsEarnedText}>
+                +{order.superCoinsEarned || Math.floor((subtotal / 100) * 10)} Super Coins (Value: R{((order.superCoinsEarned || Math.floor((subtotal / 100) * 10)) * 0.1).toFixed(2)}) will be credited post-delivery.
+              </Text>
+            </View>
+          )}
 
           <View style={styles.paymentMethodRow}>
             <Text style={styles.paymentMethodLabel}>Payment Method:</Text>
@@ -435,26 +586,36 @@ export default function OrderDetails({ route, navigation }) {
         {/* Bank Transfer Instructions (Only shown if pending bank transfer) */}
         {!isPaid && (
           <View style={[styles.card, styles.bankCard]}>
-            <Text style={styles.bankHeader}>🏦 Standard Bank Payment Instructions</Text>
+            <Text style={styles.bankHeader}>
+              🏦 {storeBankDetails.bankName || "Standard Bank"} Payment Instructions
+            </Text>
             <Text style={styles.bankSub}>
               Please transfer R{grandTotal.toFixed(2)} using your Order Reference:
             </Text>
 
             <View style={styles.bankDetailRow}>
               <Text style={styles.bankDetailLabel}>Bank:</Text>
-              <Text style={styles.bankDetailValue}>Standard Bank</Text>
+              <Text style={styles.bankDetailValue}>
+                {storeBankDetails.bankName || "Standard Bank"}
+              </Text>
             </View>
             <View style={styles.bankDetailRow}>
               <Text style={styles.bankDetailLabel}>Account Name:</Text>
-              <Text style={styles.bankDetailValue}>The Grand Store PTY LTD</Text>
+              <Text style={styles.bankDetailValue}>
+                {storeBankDetails.accountName || "The Grand Store PTY LTD"}
+              </Text>
             </View>
             <View style={styles.bankDetailRow}>
               <Text style={styles.bankDetailLabel}>Account Number:</Text>
-              <Text style={styles.bankDetailValue}>0123456789</Text>
+              <Text style={styles.bankDetailValue}>
+                {storeBankDetails.accountNumber || "0123456789"}
+              </Text>
             </View>
             <View style={styles.bankDetailRow}>
               <Text style={styles.bankDetailLabel}>Branch Code:</Text>
-              <Text style={styles.bankDetailValue}>051001</Text>
+              <Text style={styles.bankDetailValue}>
+                {storeBankDetails.branchCode || "051001"}
+              </Text>
             </View>
             <View style={styles.bankDetailRow}>
               <Text style={styles.bankDetailLabel}>Reference:</Text>
@@ -683,4 +844,137 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   secondaryActionBtnText: { color: "#ccc", fontWeight: "700", fontSize: 13 },
+
+  // Timeline Styles
+  timelineHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  liveTrackingPill: {
+    backgroundColor: "rgba(16, 185, 129, 0.15)",
+    borderWidth: 0.8,
+    borderColor: "#10b981",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  liveTrackingPillText: {
+    color: "#34d399",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  timelineList: {
+    paddingLeft: 4,
+    marginTop: 4,
+  },
+  timelineStepRow: {
+    flexDirection: "row",
+    minHeight: 48,
+  },
+  timelineLeftCol: {
+    alignItems: "center",
+    width: 28,
+    marginRight: 10,
+  },
+  timelineNode: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#1c1917",
+    borderWidth: 1.5,
+    borderColor: "#57534e",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 2,
+  },
+  timelineNodeDone: {
+    backgroundColor: "#10b981",
+    borderColor: "#10b981",
+  },
+  timelineNodeActive: {
+    backgroundColor: "rgba(201, 151, 66, 0.2)",
+    borderColor: "#f5c242",
+  },
+  timelineNodeText: {
+    color: "#ffffff",
+    fontSize: 9.5,
+    fontWeight: "800",
+  },
+  timelineLine: {
+    width: 2,
+    flex: 1,
+    backgroundColor: "#292524",
+    marginVertical: 2,
+  },
+  timelineLineDone: {
+    backgroundColor: "#10b981",
+  },
+  timelineRightCol: {
+    flex: 1,
+    paddingBottom: 12,
+  },
+  timelineStepName: {
+    color: "#78716c",
+    fontSize: 12,
+    fontWeight: "700",
+    marginBottom: 2,
+  },
+  timelineStepNameActive: {
+    color: "#f5c242",
+    fontWeight: "800",
+  },
+  timelineStepDesc: {
+    color: "#a8a29e",
+    fontSize: 10,
+    lineHeight: 14,
+  },
+
+  // PostNet PIN Box
+  postnetPinBox: {
+    flexDirection: "row",
+    backgroundColor: "rgba(201, 151, 66, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 8,
+    alignItems: "flex-start",
+  },
+  postnetPinTitle: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "800",
+    marginBottom: 2,
+  },
+  postnetPinSub: {
+    color: "#a8a29e",
+    fontSize: 10,
+    lineHeight: 14,
+  },
+
+  // Super Coins Banner
+  superCoinsEarnedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 10,
+  },
+  superCoinsEarnedIcon: {
+    fontSize: 16,
+    marginRight: 8,
+  },
+  superCoinsEarnedText: {
+    color: "#f5c242",
+    fontSize: 10.5,
+    fontWeight: "700",
+    flex: 1,
+    lineHeight: 14,
+  },
 });

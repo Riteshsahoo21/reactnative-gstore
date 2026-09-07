@@ -25,7 +25,7 @@ import VideoSlider from "./VideoSlider";
 import SearchBar from "./SearchBar";
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
-import { API_BASE } from "../resources/data/Constants";
+import { API_BASE, getActiveServerHost } from "../resources/data/Constants";
 import { getCategoryIcon } from "../helpers/categoryIcons";
 
 // === Constants ===
@@ -43,6 +43,24 @@ const showMessage = (message) => {
   } else {
     Alert.alert("", message);
   }
+};
+
+// === Price / Currency Formatter (ensures "R" and numbers never wrap) ===
+const formatPrice = (value) => {
+  if (value === null || value === undefined || value === "") return "0";
+  const cleaned =
+    typeof value === "number"
+      ? value
+      : parseFloat(String(value).replace(/[^0-9.-]+/g, ""));
+  if (isNaN(cleaned)) return String(value).replace(/^R\s*/i, "").trim();
+
+  if (cleaned % 1 === 0) {
+    return cleaned.toLocaleString("en-US");
+  }
+  return cleaned.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 };
 
 const DEFAULT_CATEGORIES = [
@@ -477,16 +495,24 @@ const handleAddToCartInstant = async (product) => {
         console.error("Failed to fetch products for categories:", prodErr?.message || prodErr);
       }
 
+      // Render products immediately without waiting for events & auctions
+      setSections({
+        newArrivals,
+        categorySections,
+      });
+      setLoading(false);
+
       try {
         const evtCandidates = [
           `${API_BASE}/events`,
           'http://localhost:5000/api/events',
-          'http://192.168.1.9:5000/api/events',
+          'http://127.0.0.1:5000/api/events',
           'http://10.0.2.2:5000/api/events',
+          'http://192.168.1.9:5000/api/events',
         ];
         for (const url of evtCandidates) {
           try {
-            const evtRes = await axios.get(url, { timeout: 3500 });
+            const evtRes = await axios.get(url, { timeout: 2000, _skipRewrite: true });
             if (evtRes?.data && Array.isArray(evtRes.data)) {
               setFeaturedEvents(evtRes.data.slice(0, 6));
               break;
@@ -499,17 +525,18 @@ const handleAddToCartInstant = async (product) => {
 
       try {
         const aucCandidates = [
-          'http://192.168.1.9:5000/api/auction',
           `${API_BASE}/auction`,
           'http://localhost:5000/api/auction',
+          'http://127.0.0.1:5000/api/auction',
           `${API_BASE}/auctions`,
           'http://10.0.2.2:5000/api/auction',
+          'http://192.168.1.9:5000/api/auction',
         ];
         for (const url of aucCandidates) {
           try {
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 4000);
-            const res = await fetch(url, { signal: controller.signal });
+            const timer = setTimeout(() => controller.abort(), 2000);
+            const res = await fetch(url, { signal: controller.signal, _skipRewrite: true });
             clearTimeout(timer);
             if (res && res.ok) {
               const data = await res.json();
@@ -530,17 +557,19 @@ const handleAddToCartInstant = async (product) => {
         const token = await AsyncStorage.getItem("userToken");
         if (token) {
           const dashCandidates = [
-            'http://192.168.1.9:5000/api/auction/user/dashboard',
             `${API_BASE}/auction/user/dashboard`,
             'http://localhost:5000/api/auction/user/dashboard',
+            'http://127.0.0.1:5000/api/auction/user/dashboard',
+            'http://192.168.1.9:5000/api/auction/user/dashboard',
           ];
           for (const url of dashCandidates) {
             try {
               const controller = new AbortController();
-              const timer = setTimeout(() => controller.abort(), 3500);
+              const timer = setTimeout(() => controller.abort(), 2000);
               const res = await fetch(url, {
                 headers: { Authorization: `Bearer ${token}` },
                 signal: controller.signal,
+                _skipRewrite: true,
               });
               clearTimeout(timer);
               if (res && res.ok) {
@@ -557,11 +586,6 @@ const handleAddToCartInstant = async (product) => {
           }
         }
       } catch (dashErr) {}
-
-      setSections({
-        newArrivals,
-        categorySections,
-      });
     } catch (err) {
       console.error("Error fetching data:", err);
     } finally {
@@ -739,10 +763,24 @@ const handleAddToCartInstant = async (product) => {
         {item.size && <Text style={styles.productSize}>{item.size}</Text>}
 
         <View style={styles.cardPriceRow}>
-          <View style={{ flex: 1, paddingRight: 4 }}>
-            <Text style={styles.productPrice}>R{displayPrice}</Text>
+          <View style={styles.cardPriceContainer}>
+            <Text
+              style={styles.productPrice}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+            >
+              R{formatPrice(displayPrice)}
+            </Text>
             {hasDiscount && (
-              <Text style={styles.oldPrice}>R{item.price}</Text>
+              <Text
+                style={styles.oldPrice}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.75}
+              >
+                R{formatPrice(item.price)}
+              </Text>
             )}
           </View>
 
@@ -791,10 +829,16 @@ const handleAddToCartInstant = async (product) => {
     );
   };
 
-  const renderVSectionTitle = (title, data, categoryFilter) => (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
+  const renderVSectionTitle = (title, data, categoryFilter, actionText = "View All →") => (
+    <View style={styles.centeredSectionHeader}>
+      <View style={styles.sectionHeaderRow}>
+        <View style={styles.sectionAccentLine} />
+        <Text style={styles.centeredSectionTitle}>{title}</Text>
+        <View style={styles.sectionAccentLine} />
+      </View>
       <TouchableOpacity
+        style={styles.centeredViewAllTouch}
+        activeOpacity={0.72}
         onPress={() =>
           navigation.navigate("ViewAll", {
             category_title: categoryFilter || title,
@@ -802,7 +846,7 @@ const handleAddToCartInstant = async (product) => {
           })
         }
       >
-        <Text style={styles.viewAll}>View All</Text>
+        <Text style={styles.centeredViewAllText}>{actionText}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -835,15 +879,18 @@ const handleAddToCartInstant = async (product) => {
       <ScrollView style={styles.container}>
         <TouchableOpacity
           activeOpacity={0.75}
+          style={styles.welcomeBannerTouch}
           onPress={() => {
             if (!userName) {
               navigation.navigate("LoginScreen");
             }
           }}
         >
-          <Text style={{ color: "#f5c242", fontSize: 20, fontWeight: "600", marginTop: 20, marginBottom: 10 }}>
-            {userName ? `Welcome, ${userName}` : "Please sign in →"}
-          </Text>
+          <View style={styles.welcomePillContainer}>
+            <Text style={styles.welcomeText}>
+              {userName ? `Welcome, ${userName}` : "Please sign in →"}
+            </Text>
+          </View>
         </TouchableOpacity>
 
         <View style={{ zIndex: 100 }}>
@@ -868,7 +915,9 @@ const handleAddToCartInstant = async (product) => {
                   <Image source={{ uri: getImageUrl(item.image) }} style={styles.searchResultImg} />
                   <View style={styles.searchResultTextContainer}>
                     <Text style={styles.searchResultName} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.searchResultPrice}>R{item.offer_active ? item.offer_price : item.price}</Text>
+                    <Text style={styles.searchResultPrice} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                      R{formatPrice(item.offer_active ? item.offer_price : item.price)}
+                    </Text>
                   </View>
                 </TouchableOpacity>
               ))}
@@ -894,8 +943,8 @@ const handleAddToCartInstant = async (product) => {
               <Text style={styles.wonAlertTitle}>
                 AUCTION WON • LOT #{wonAuctionAlert.lotNumber || (wonAuctionAlert._id && wonAuctionAlert._id.slice(-6).toUpperCase()) || "GS-LOT"}
               </Text>
-              <Text style={styles.wonAlertDesc} numberOfLines={1}>
-                {wonAuctionAlert.title} — Hammer: R{Number(wonAuctionAlert.winningBid || wonAuctionAlert.currentBid || 0).toLocaleString("en-ZA")}
+              <Text style={styles.wonAlertDesc} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                {wonAuctionAlert.title} — Hammer: R{formatPrice(wonAuctionAlert.winningBid || wonAuctionAlert.currentBid || 0)}
               </Text>
             </View>
             <View style={styles.wonAlertBtn}>
@@ -966,20 +1015,27 @@ const handleAddToCartInstant = async (product) => {
           keyExtractor={(item, index) => (item.id || item.productid || index).toString()}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ paddingVertical: 10 }}
+          initialNumToRender={4}
+          maxToRenderPerBatch={4}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS === 'android'}
         />
 
         {/* Exclusive Events & Tastings Spotlight */}
         {featuredEvents.length > 0 && (
           <View style={styles.eventsSection}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={styles.sectionTitle}>Cellar Tastings & Events</Text>
+            <View style={styles.centeredSectionHeader}>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionAccentLine} />
+                <Text style={styles.centeredSectionTitle}>Cellar Tastings & Events 🎟️</Text>
+                <View style={styles.sectionAccentLine} />
               </View>
               <TouchableOpacity
+                style={styles.centeredViewAllTouch}
                 onPress={() => navigation.navigate("EventsHub")}
-                activeOpacity={0.7}
+                activeOpacity={0.72}
               >
-                <Text style={styles.viewAll}>View All →</Text>
+                <Text style={styles.centeredViewAllText}>View All Events →</Text>
               </TouchableOpacity>
             </View>
 
@@ -1002,24 +1058,45 @@ const handleAddToCartInstant = async (product) => {
                 const imgUri = evt.image
                   ? evt.image.startsWith("http")
                     ? evt.image
-                    : `http://192.168.1.9:5000/${evt.image.replace(/^\//, "")}`
+                    : `${getActiveServerHost()}/${evt.image.replace(/^\//, "")}`
                   : "https://ik.imagekit.io/thegrandstore/bg.webp";
+
+                const statusLower = String(evt.status || "").toLowerCase();
+                const isPastDate = evt.date && new Date(evt.date) < new Date(new Date().setHours(0, 0, 0, 0)) && statusLower !== "ongoing";
+                const totalPasses = (evt.ticketTiers || []).reduce((acc, tier) => {
+                  const qty = Number(tier.quantity) || 0;
+                  const sold = Number(tier.sold) || 0;
+                  const res = Number(tier.reserved) || 0;
+                  return acc + Math.max(0, qty - sold - res);
+                }, 0);
+                const isSoldOut = (evt.ticketTiers && evt.ticketTiers.length > 0) && totalPasses === 0;
+                const isClosed = ["completed", "closed", "cancelled", "concluded", "ended"].includes(statusLower) || evt.bookingClosed === true || isPastDate || isSoldOut;
 
                 return (
                   <TouchableOpacity
                     key={evt._id}
-                    style={styles.eventHomeCard}
+                    style={[styles.eventHomeCard, isClosed && styles.eventHomeCardClosed]}
                     onPress={() => navigation.navigate("EventDetails", { eventId: evt._id, event: evt })}
                     activeOpacity={0.88}
                   >
-                    <Image source={{ uri: imgUri }} style={styles.eventHomeImage} resizeMode="cover" />
+                    <Image source={{ uri: imgUri }} style={[styles.eventHomeImage, isClosed && { opacity: 0.7 }]} resizeMode="cover" />
                     <LinearGradient
                       colors={["transparent", "rgba(10, 9, 7, 0.75)", "#0a0907"]}
                       style={styles.eventHomeGradient}
                     />
 
-                    <View style={styles.eventHomeBadge}>
-                      <Text style={styles.eventHomeBadgeText}>{evt.type || "TASTING"}</Text>
+                    {/* Top Badges */}
+                    <View style={styles.eventHomeBadgesRow}>
+                      <View style={styles.eventHomeBadge}>
+                        <Text style={styles.eventHomeBadgeText}>{evt.type || "TASTING"}</Text>
+                      </View>
+                      {isClosed && (
+                        <View style={styles.eventHomeClosedBadge}>
+                          <Text style={styles.eventHomeClosedBadgeText}>
+                            {isSoldOut ? "SOLD OUT" : "CLOSED"}
+                          </Text>
+                        </View>
+                      )}
                     </View>
 
                     <View style={styles.eventHomeInfo}>
@@ -1028,10 +1105,22 @@ const handleAddToCartInstant = async (product) => {
                         {evt.title}
                       </Text>
                       <View style={styles.eventHomeFooter}>
-                        <Text style={styles.eventHomePrice}>
-                          {startPrice === null ? "Complimentary" : `From R${startPrice.toLocaleString("en-ZA")}`}
+                        <Text
+                          style={[
+                            styles.eventHomePrice,
+                            isClosed && { color: "#8a7e72" }
+                          ]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.8}
+                        >
+                          {isClosed ? (isSoldOut ? "Passes Sold Out" : "Booking Closed") : (startPrice === null ? "Complimentary" : `From R${formatPrice(startPrice)}`)}
                         </Text>
-                        <Text style={styles.eventHomeArrow}>Book →</Text>
+                        <View style={[styles.eventHomeBookBtn, isClosed && styles.eventHomeBookBtnClosed]}>
+                          <Text style={[styles.eventHomeArrow, isClosed && styles.eventHomeArrowClosed]}>
+                            {isClosed ? "Closed" : "Book →"}
+                          </Text>
+                        </View>
                       </View>
                     </View>
                   </TouchableOpacity>
@@ -1044,15 +1133,18 @@ const handleAddToCartInstant = async (product) => {
         {/* Rare Vault Auctions Spotlight */}
         {displayedVaultAuctions && displayedVaultAuctions.length > 0 && (
           <View style={styles.eventsSection}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={styles.sectionTitle}>Rare Vault Auctions 🏛️</Text>
+            <View style={styles.centeredSectionHeader}>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionAccentLine} />
+                <Text style={styles.centeredSectionTitle}>Rare Vault Auctions 🏛️</Text>
+                <View style={styles.sectionAccentLine} />
               </View>
               <TouchableOpacity
+                style={styles.centeredViewAllTouch}
                 onPress={() => navigation.navigate("AuctionsHub")}
-                activeOpacity={0.7}
+                activeOpacity={0.72}
               >
-                <Text style={styles.viewAll}>Enter Vault Room →</Text>
+                <Text style={styles.centeredViewAllText}>Enter Vault Room →</Text>
               </TouchableOpacity>
             </View>
 
@@ -1063,7 +1155,7 @@ const handleAddToCartInstant = async (product) => {
             >
               {displayedVaultAuctions.map((lot) => {
                 const imgUri = lot.images && lot.images.length > 0
-                  ? (lot.images[0].startsWith("http") ? lot.images[0] : `http://192.168.1.9:5000/${lot.images[0].replace(/^\//, "")}`)
+                  ? (lot.images[0].startsWith("http") ? lot.images[0] : `${getActiveServerHost()}/${lot.images[0].replace(/^\//, "")}`)
                   : "https://ik.imagekit.io/thegrandstore/bg.webp";
                 const isSold = lot.status === "sold";
                 const isLive = lot.status === "live" || lot.status === "extended";
@@ -1103,12 +1195,12 @@ const handleAddToCartInstant = async (product) => {
                         {lot.title}
                       </Text>
                       <View style={styles.eventHomeFooter}>
-                        <View>
+                        <View style={{ flex: 1, paddingRight: 6 }}>
                           <Text style={{ color: "#8a7e72", fontSize: 9, textTransform: "uppercase", fontWeight: "700" }}>
                             {isSold ? "Hammer Price" : "Current Leading"}
                           </Text>
-                          <Text style={styles.eventHomePrice}>
-                            R{Number(displayPrice).toLocaleString("en-ZA")}
+                          <Text style={styles.eventHomePrice} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                            R{formatPrice(displayPrice)}
                           </Text>
                         </View>
                         <View style={styles.bidNowPill}>
@@ -1135,6 +1227,10 @@ const handleAddToCartInstant = async (product) => {
                 keyExtractor={(item, index) => (item.id || item.productid || index).toString()}
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={{ paddingVertical: 10, paddingLeft: 4 }}
+                initialNumToRender={4}
+                maxToRenderPerBatch={4}
+                windowSize={5}
+                removeClippedSubviews={Platform.OS === 'android'}
               />
             </View>
           ))}
@@ -1191,6 +1287,9 @@ const handleAddToCartInstant = async (product) => {
   {selectedProduct?.offer_active ? (
     <>
       <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.8}
         style={{
           textDecorationLine: "line-through",
           color: "#aaa",
@@ -1198,27 +1297,33 @@ const handleAddToCartInstant = async (product) => {
           marginRight: 8,
         }}
       >
-        R{selectedProduct?.price}
+        R{formatPrice(selectedProduct?.price)}
       </Text>
       <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.8}
         style={{
           color: "#f5c242",
           fontWeight: "bold",
           fontSize: 18,
         }}
       >
-        R{selectedProduct?.offer_price}
+        R{formatPrice(selectedProduct?.offer_price)}
       </Text>
     </>
   ) : (
     <Text
+      numberOfLines={1}
+      adjustsFontSizeToFit
+      minimumFontScale={0.8}
       style={{
         color: "#f5c242",
         fontWeight: "bold",
         fontSize: 18,
       }}
     >
-      R{selectedProduct?.price}
+      R{formatPrice(selectedProduct?.price)}
     </Text>
   )}
 </View>
@@ -1289,10 +1394,10 @@ const handleAddToCartInstant = async (product) => {
                 <Text style={styles.buyNowModalItemSub}>
                   {selectedProduct?.size || "750ml"} • 1 bottle
                 </Text>
-                <Text style={styles.buyNowModalItemPrice}>
-                  R{selectedProduct?.offer_active && Number(selectedProduct?.offer_price) > 0
-                    ? Number(selectedProduct?.offer_price).toFixed(2)
-                    : Number(selectedProduct?.final_price || selectedProduct?.price || 0).toFixed(2)}
+                <Text style={styles.buyNowModalItemPrice} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                  R{formatPrice(selectedProduct?.offer_active && Number(selectedProduct?.offer_price) > 0
+                    ? selectedProduct?.offer_price
+                    : (selectedProduct?.final_price || selectedProduct?.price || 0))}
                 </Text>
               </View>
             </View>
@@ -1352,17 +1457,18 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: "#1C1C1C",
     borderRadius: 8,
-    padding: 12,
-    marginHorizontal: 8,
-    width: 168,
+    padding: 10,
+    marginHorizontal: 6,
+    width: 176,
     borderWidth: 1,
     borderColor: "#c99742",
   },
   oldPrice: {
     color: "#888",
-    fontSize: 12,
+    fontSize: 11,
     textDecorationLine: "line-through",
-    marginLeft: 4,
+    marginTop: 1,
+    includeFontPadding: false,
   },
 
   wishlistIcon: {
@@ -1426,24 +1532,34 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   productImage: { width: "88%", height: 130, resizeMode: "contain" },
-  productName: { color: "#fff", fontWeight: "600", fontSize: 13, minHeight: 34 },
-  productSize: { color: "#aaa", fontSize: 11, marginBottom: 2 },
+  productName: { color: "#fff", fontWeight: "600", fontSize: 13, minHeight: 34, textAlign: "center" },
+  productSize: { color: "#aaa", fontSize: 11, marginBottom: 2, textAlign: "center" },
   cardPriceRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginTop: 6,
   },
-  productPrice: { color: "#f5c242", fontSize: 15, fontWeight: "800" },
+  cardPriceContainer: {
+    flex: 1,
+    paddingRight: 4,
+    justifyContent: "center",
+  },
+  productPrice: {
+    color: "#f5c242",
+    fontSize: 14,
+    fontWeight: "800",
+    includeFontPadding: false,
+  },
   cardIconActions: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 5,
   },
   cartIconOnlyBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
+    width: 30,
+    height: 30,
+    borderRadius: 8,
     backgroundColor: "rgba(201, 151, 66, 0.15)",
     borderWidth: 1.2,
     borderColor: "rgba(245, 194, 66, 0.5)",
@@ -1451,25 +1567,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   cartIconOnlyImg: {
-    width: 17,
-    height: 17,
+    width: 15,
+    height: 15,
     tintColor: "#f5c242",
   },
   shopIconOnlyBtn: {
-    width: 34,
-    height: 34,
+    width: 30,
+    height: 30,
   },
   shopIconOnlyGradient: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
+    width: 30,
+    height: 30,
+    borderRadius: 8,
     justifyContent: "center",
     alignItems: "center",
     elevation: 3,
   },
   shopIconOnlyImg: {
-    width: 17,
-    height: 17,
+    width: 15,
+    height: 15,
     tintColor: "#0a0a0a",
   },
   cartBtn: { backgroundColor: "#d19f42ff", padding: 8, borderRadius: 11 },
@@ -1570,6 +1686,70 @@ const styles = StyleSheet.create({
     color: "#0a0a0a",
     fontSize: 14,
     fontWeight: "800",
+  },
+  welcomeBannerTouch: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 18,
+    marginBottom: 12,
+  },
+  welcomePillContainer: {
+    backgroundColor: "rgba(201, 151, 66, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.45)",
+    borderRadius: 22,
+    paddingVertical: 8,
+    paddingHorizontal: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  welcomeText: {
+    color: "#f5c242",
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    textAlign: "center",
+    fontFamily: APP_FONT,
+  },
+  centeredSectionHeader: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 22,
+    marginBottom: 10,
+    paddingHorizontal: 8,
+  },
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+  },
+  sectionAccentLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "rgba(201, 151, 66, 0.4)",
+    marginHorizontal: 10,
+  },
+  centeredSectionTitle: {
+    color: "#f0ece3",
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: 1.1,
+    textTransform: "uppercase",
+    textAlign: "center",
+    fontFamily: APP_FONT,
+  },
+  centeredViewAllTouch: {
+    marginTop: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+  },
+  centeredViewAllText: {
+    color: "#c99742",
+    fontSize: 12.5,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    textAlign: "center",
   },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", marginVertical: 15 },
   sectionTitle: { fontWeight: "500", color: "#CCC", fontSize: 20, fontFamily: APP_FONT },
@@ -1826,6 +2006,48 @@ eventHomeArrow: {
   color: "#ffffff",
   fontSize: 12,
   fontWeight: "800",
+},
+eventHomeBadgesRow: {
+  position: "absolute",
+  top: 10,
+  left: 10,
+  flexDirection: "row",
+  gap: 6,
+  zIndex: 5,
+},
+eventHomeCardClosed: {
+  borderColor: "rgba(255, 255, 255, 0.1)",
+},
+eventHomeClosedBadge: {
+  backgroundColor: "rgba(180, 40, 40, 0.9)",
+  paddingHorizontal: 8,
+  paddingVertical: 3,
+  borderRadius: 6,
+  borderWidth: 1,
+  borderColor: "rgba(255, 90, 90, 0.4)",
+},
+eventHomeClosedBadgeText: {
+  color: "#ffffff",
+  fontSize: 9,
+  fontWeight: "900",
+  letterSpacing: 0.5,
+},
+eventHomeBookBtn: {
+  backgroundColor: "rgba(212, 175, 55, 0.18)",
+  borderWidth: 1,
+  borderColor: "rgba(212, 175, 55, 0.5)",
+  paddingHorizontal: 10,
+  paddingVertical: 4,
+  borderRadius: 6,
+},
+eventHomeBookBtnClosed: {
+  backgroundColor: "rgba(255, 255, 255, 0.06)",
+  borderColor: "rgba(255, 255, 255, 0.15)",
+},
+eventHomeArrowClosed: {
+  color: "#888",
+  fontSize: 11,
+  fontWeight: "700",
 },
 bidNowPill: {
   backgroundColor: "rgba(212, 175, 55, 0.15)",

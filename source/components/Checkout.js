@@ -121,6 +121,20 @@ const DEFAULT_SA_CITIES = [
   { description: "East London, South Africa", main_text: "East London" },
 ];
 
+// Top PostNet pickup hub cities in South Africa
+const POSTNET_AVAILABLE_CITIES = [
+  "Sandton",
+  "Johannesburg",
+  "Cape Town",
+  "Durban",
+  "Pretoria",
+  "Stellenbosch",
+  "Centurion",
+  "Gqeberha",
+  "Bloemfontein",
+  "East London",
+];
+
 // Rich mapping of cities to their various postal codes & areas
 const CITY_POSTAL_CODES_MAP = {
   sandton: [
@@ -515,6 +529,14 @@ const Checkout = ({ navigation, route }) => {
   const [isLoadingPostnet, setIsLoadingPostnet] = useState(false);
   const [branchSearch, setBranchSearch] = useState("");
   const [hasSelectedCityForPostnet, setHasSelectedCityForPostnet] = useState(false);
+  const [showAllPostnetCities, setShowAllPostnetCities] = useState(false);
+  const [showAllPostnetBranches, setShowAllPostnetBranches] = useState(false);
+  const [showAllCityDropdown, setShowAllCityDropdown] = useState(false);
+
+  // Super Coins Loyalty State (10 Super Coins = R1.00, Max 10% Redemption Cap, 15% Platform Margin Rule)
+  const [userSuperCoins, setUserSuperCoins] = useState(0);
+  const [useSuperCoins, setUseSuperCoins] = useState(true);
+  const [superCoinsQuote, setSuperCoinsQuote] = useState(null);
 
   // Delivery Quote State (from backend /api/checkout/quote)
   const [quote, setQuote] = useState(null);
@@ -533,6 +555,7 @@ const Checkout = ({ navigation, route }) => {
   const [showPayfastModal, setShowPayfastModal] = useState(false);
   const [payfastModalData, setPayfastModalData] = useState(null);
   const [isPayfastLoading, setIsPayfastLoading] = useState(true);
+  const activeOrderRef = useRef(null);
 
   const getImageUrl = (imagePath) => {
     if (!imagePath || typeof imagePath !== "string") return "";
@@ -568,6 +591,26 @@ const Checkout = ({ navigation, route }) => {
             }
           }
           if (user.postalCode) setPostalCode(user.postalCode);
+          if (user.superCoinsBalance !== undefined) {
+            setUserSuperCoins(Number(user.superCoinsBalance || 0));
+          }
+        }
+
+        // Fetch latest Super Coins wallet balance if authenticated
+        const userToken = await AsyncStorage.getItem("userToken");
+        if (userToken) {
+          try {
+            const coinRes = await safeApiFetch("/super-coins/wallet", {
+              headers: { Authorization: `Bearer ${userToken}` },
+            });
+            if (coinRes && coinRes.ok) {
+              const coinData = await coinRes.json();
+              const available = coinData.availableCoins ?? coinData.balance ?? 0;
+              setUserSuperCoins(Number(available));
+            }
+          } catch (cErr) {
+            console.log("Super Coins wallet fetch error:", cErr?.message || cErr);
+          }
         }
 
         // Load Items
@@ -674,6 +717,27 @@ const Checkout = ({ navigation, route }) => {
     } finally {
       setIsLoadingPostnet(false);
     }
+  };
+
+  // Select a city directly from PostNet city chips
+  const handleSelectPostnetCity = (selectedCityName) => {
+    setCity(selectedCityName);
+    setCountry("South Africa");
+    setHasSelectedCityForPostnet(true);
+    setPreferredPostnetStore(null);
+    setQuote(null);
+    setShowCityDropdown(false);
+    setShowAllPostnetBranches(false);
+
+    const lower = selectedCityName.toLowerCase();
+    const postalList = CITY_POSTAL_CODES_MAP[lower];
+    if (postalList && postalList.length > 0) {
+      setPostalCode(postalList[0].code);
+      setCurrentCityPostalCodes(postalList);
+    }
+
+    fetchPostnetBranches(selectedCityName, null, null);
+    showMessage(`📍 Selected ${selectedCityName} for PostNet pickup`);
   };
 
   // Google Places Street Address Autocomplete (Global for Door Delivery, ZA only for PostNet)
@@ -1083,6 +1147,23 @@ const Checkout = ({ navigation, route }) => {
 
       if (data && data.shipments && data.shipments.length > 0) {
         setQuote(data);
+        if (data.superCoins) {
+          setSuperCoinsQuote(data.superCoins);
+        } else {
+          const coinVal = 0.10;
+          const maxPct = 0.10;
+          const maxRand = Math.min(subtotal * maxPct, (userSuperCoins || 0) * coinVal);
+          const maxCoins = Math.floor(maxRand / coinVal);
+          setSuperCoinsQuote({
+            availableCoins: userSuperCoins || 0,
+            coinValue: coinVal,
+            maxRedeemableCoins: maxCoins,
+            maxDiscountRand: maxRand,
+            potentialCoinsToEarn: Math.floor((subtotal / 100) * 10),
+            isMarginCapped: (userSuperCoins || 0) * coinVal > subtotal * maxPct,
+            marginMessage: "Deduction capped at 10% to protect 15% platform margin",
+          });
+        }
         const shipment = data.shipments[0];
         const quotesList = shipment.shippingQuotes || [];
 
@@ -1135,12 +1216,28 @@ const Checkout = ({ navigation, route }) => {
               },
             ];
 
+        const coinVal = 0.10;
+        const maxPct = 0.10;
+        const maxRand = Math.min(subtotal * maxPct, (userSuperCoins || 0) * coinVal);
+        const maxCoins = Math.floor(maxRand / coinVal);
+        const fallbackSuperCoins = {
+          availableCoins: userSuperCoins || 0,
+          coinValue: coinVal,
+          maxRedeemableCoins: maxCoins,
+          maxDiscountRand: maxRand,
+          potentialCoinsToEarn: Math.floor((subtotal / 100) * 10),
+          isMarginCapped: (userSuperCoins || 0) * coinVal > subtotal * maxPct,
+          marginMessage: "Deduction capped at 10% to protect 15% platform margin",
+        };
+        setSuperCoinsQuote(fallbackSuperCoins);
+
         const fallbackQuote = {
           hasInternational: !isSouthAfrica,
           aggregatedTotals: {
             estimatedImportDuties: !isSouthAfrica ? Math.round(subtotal * 0.15) : 0,
             estimatedImportTaxes: !isSouthAfrica ? Math.round(subtotal * 0.20) : 0,
           },
+          superCoins: fallbackSuperCoins,
           shipments: [
             {
               shippingQuotes: fallbackQuotes,
@@ -1172,12 +1269,28 @@ const Checkout = ({ navigation, route }) => {
             },
           ];
 
+      const coinVal = 0.10;
+      const maxPct = 0.10;
+      const maxRand = Math.min(subtotal * maxPct, (userSuperCoins || 0) * coinVal);
+      const maxCoins = Math.floor(maxRand / coinVal);
+      const fallbackSuperCoins = {
+        availableCoins: userSuperCoins || 0,
+        coinValue: coinVal,
+        maxRedeemableCoins: maxCoins,
+        maxDiscountRand: maxRand,
+        potentialCoinsToEarn: Math.floor((subtotal / 100) * 10),
+        isMarginCapped: (userSuperCoins || 0) * coinVal > subtotal * maxPct,
+        marginMessage: "Deduction capped at 10% to protect 15% platform margin",
+      };
+      setSuperCoinsQuote(fallbackSuperCoins);
+
       setQuote({
         hasInternational: !isSouthAfrica,
         aggregatedTotals: {
           estimatedImportDuties: Math.round(subtotal * 0.15),
           estimatedImportTaxes: Math.round(subtotal * 0.20),
         },
+        superCoins: fallbackSuperCoins,
         shipments: [{ shippingQuotes: fallbackQuotes, selectedCourier: fallbackQuotes[0] }],
       });
       setSelectedCourier(fallbackQuotes[0]);
@@ -1212,6 +1325,16 @@ const Checkout = ({ navigation, route }) => {
   const subtotal = checkoutItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const discount = Number(paramDiscount) || 0;
 
+  // Super Coin discount calculation (10 Super Coins = R1.00, Max 10% Order Cap)
+  const superCoinDiscount =
+    useSuperCoins && (superCoinsQuote || quote?.superCoins)
+      ? Number(
+          superCoinsQuote?.maxDiscountRand ??
+          quote?.superCoins?.maxDiscountRand ??
+          0
+        )
+      : 0;
+
   // Dynamic shipping fee based on live calculated quote or standard fallback
   let shippingFee = 0;
   if (selectedCourier) {
@@ -1233,10 +1356,91 @@ const Checkout = ({ navigation, route }) => {
       ? Number(quote.shipments[0].landedCostEstimates.estimatedDuties || 0) + Number(quote.shipments[0].landedCostEstimates.estimatedTaxes || 0)
       : Math.round(subtotal * 0.35 * 100) / 100;
 
-  const grandTotal = Math.max(0, subtotal - discount + shippingFee);
+  const grandTotal = Math.max(0, subtotal - discount - superCoinDiscount + shippingFee);
+
+  const getItemKey = (item) => String(item.id || item.productid || item._id || "");
+
+  const persistCartIfApplicable = async (updatedItems) => {
+    if (!singleItemCheckout) {
+      try {
+        await AsyncStorage.setItem("grand-store-cart", JSON.stringify(updatedItems));
+        DeviceEventEmitter.emit("cartUpdated", updatedItems.length);
+      } catch (e) {
+        console.log("Error persisting cart from checkout:", e);
+      }
+    }
+  };
+
+  const handleIncrementItemQty = (itemKey) => {
+    const updated = checkoutItems.map((item) => {
+      if (getItemKey(item) === itemKey) {
+        return { ...item, quantity: (Number(item.quantity) || 1) + 1 };
+      }
+      return item;
+    });
+    setCheckoutItems(updated);
+    persistCartIfApplicable(updated);
+  };
+
+  const handleDecrementItemQty = (itemKey) => {
+    const target = checkoutItems.find((item) => getItemKey(item) === itemKey);
+    if (!target) return;
+
+    if ((Number(target.quantity) || 1) > 1) {
+      const updated = checkoutItems.map((item) => {
+        if (getItemKey(item) === itemKey) {
+          return { ...item, quantity: (Number(item.quantity) || 1) - 1 };
+        }
+        return item;
+      });
+      setCheckoutItems(updated);
+      persistCartIfApplicable(updated);
+    } else {
+      handleRemoveCheckoutItem(itemKey);
+    }
+  };
+
+  const handleRemoveCheckoutItem = (itemKey) => {
+    const target = checkoutItems.find((item) => getItemKey(item) === itemKey);
+    const itemName = target?.name || "this bottle";
+
+    Alert.alert(
+      "Remove Bottle",
+      `Remove "${itemName}" from your order?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => {
+            const updated = checkoutItems.filter(
+              (item) => getItemKey(item) !== itemKey
+            );
+            setCheckoutItems(updated);
+            persistCartIfApplicable(updated);
+
+            if (updated.length === 0) {
+              showMessage("Order reserve is empty");
+              if (navigation.canGoBack()) {
+                navigation.goBack();
+              } else {
+                navigation.navigate("Cart");
+              }
+            } else {
+              showMessage("Removed from reserve");
+            }
+          },
+        },
+      ]
+    );
+  };
 
   // Submit Order & Launch PayFast Sandbox or EFT Instructions
   const handlePlaceOrder = async () => {
+    if (!checkoutItems || checkoutItems.length === 0) {
+      showMessage("Your order reserve is empty. Please add bottles first.");
+      return;
+    }
     if (!fullName.trim()) {
       showMessage("Please enter recipient full name");
       return;
@@ -1334,7 +1538,9 @@ const Checkout = ({ navigation, route }) => {
               quote: finalQuote,
               shippingAddress: finalShippingAddress,
               deliveryPreference,
+              selectedPostnetStore: preferredPostnetStore,
               paymentMethod: paymentMethod === "payfast" ? "PayFast" : "Bank Transfer",
+              useSuperCoins: Boolean(useSuperCoins),
             };
 
             const orderRes = await safeApiFetch("/orders", {
@@ -1375,6 +1581,15 @@ const Checkout = ({ navigation, route }) => {
             subtotal,
             shippingFee,
             discount,
+            superCoinsDiscount,
+            superCoinsUsed: useSuperCoins
+              ? (superCoinsQuote?.maxRedeemableCoins || quote?.superCoins?.maxRedeemableCoins || 0)
+              : 0,
+            superCoinsEarned:
+              superCoinsQuote?.potentialCoinsToEarn ||
+              quote?.superCoins?.potentialCoinsToEarn ||
+              Math.floor((subtotal / 100) * 10),
+            deliveryPreference,
             grandTotal,
             paymentMethod:
               paymentMethod === "payfast"
@@ -1421,6 +1636,7 @@ const Checkout = ({ navigation, route }) => {
               if (pfRes && pfRes.ok) {
                 const pfData = await pfRes.json();
                 if (pfData && pfData.url && pfData.data) {
+                  activeOrderRef.current = orderSummary;
                   setCreatedOrder(orderSummary);
                   saveOrderToLocalStorage(orderSummary);
                   setPayfastModalData({
@@ -1470,6 +1686,15 @@ const Checkout = ({ navigation, route }) => {
         subtotal,
         shippingFee,
         discount,
+        superCoinsDiscount,
+        superCoinsUsed: useSuperCoins
+          ? (superCoinsQuote?.maxRedeemableCoins || quote?.superCoins?.maxRedeemableCoins || 0)
+          : 0,
+        superCoinsEarned:
+          superCoinsQuote?.potentialCoinsToEarn ||
+          quote?.superCoins?.potentialCoinsToEarn ||
+          Math.floor((subtotal / 100) * 10),
+        deliveryPreference,
         grandTotal,
         paymentMethod:
           paymentMethod === "payfast"
@@ -1512,7 +1737,6 @@ const Checkout = ({ navigation, route }) => {
   };
 
   // PayFast In-App Navigation Interceptor
-  // PayFast In-App Navigation Interceptor
   const handlePayfastNavStateChange = (navState) => {
     const currentUrl = navState?.url || "";
     console.log("PayFast In-App Navigation State:", currentUrl);
@@ -1537,7 +1761,7 @@ const Checkout = ({ navigation, route }) => {
     if (isSuccessUrl) {
       setShowPayfastModal(false);
       setIsPayfastLoading(false);
-      finalizePaidOrder();
+      finalizePaidOrder(activeOrderRef.current);
       return;
     }
 
@@ -1558,12 +1782,19 @@ const Checkout = ({ navigation, route }) => {
   // Close PayFast Modal Prompt
   const handleClosePayfastModal = () => {
     Alert.alert(
-      "Exit Payment Gateway?",
-      "Are you sure you want to exit the PayFast payment gateway?",
+      "PayFast Gateway",
+      "Have you completed your payment on PayFast?",
       [
-        { text: "Stay in Gateway", style: "cancel" },
         {
-          text: "Exit to Order",
+          text: "Yes, I Have Paid",
+          onPress: () => {
+            setShowPayfastModal(false);
+            setIsPayfastLoading(false);
+            finalizePaidOrder(activeOrderRef.current);
+          },
+        },
+        {
+          text: "Leave as Pending",
           style: "destructive",
           onPress: () => {
             setShowPayfastModal(false);
@@ -1572,6 +1803,7 @@ const Checkout = ({ navigation, route }) => {
             showMessage("Payment pending. You can complete payment with PayFast anytime.");
           },
         },
+        { text: "Stay in Gateway", style: "cancel" },
       ]
     );
   };
@@ -1584,19 +1816,19 @@ const Checkout = ({ navigation, route }) => {
         DeviceEventEmitter.emit("cartUpdated", 0);
       }
 
-      const activeOrd = orderParam || createdOrder || payfastModalData?.orderSummary;
-      const targetId = activeOrd?.orderMongoId || activeOrd?._id || activeOrd?.id || activeOrd?.orderId;
-      if (targetId) {
+      const activeOrd = orderParam || activeOrderRef.current || createdOrder || payfastModalData?.orderSummary;
+      const candidateIds = [
+        activeOrd?.orderMongoId,
+        activeOrd?._id,
+        activeOrd?.orderId,
+        activeOrd?.id,
+      ].filter(Boolean);
+
+      const token = await AsyncStorage.getItem("userToken");
+
+      // Loop through candidate IDs to ensure MongoDB confirms payment
+      for (const targetId of [...new Set(candidateIds)]) {
         try {
-          const token = await AsyncStorage.getItem("userToken");
-          await safeApiFetch(`/orders/${targetId}/pay`, {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-            body: JSON.stringify({ paymentMethod: "PayFast" }),
-          });
           await safeApiFetch(`/payfast/confirm-order`, {
             method: "POST",
             headers: {
@@ -1604,6 +1836,14 @@ const Checkout = ({ navigation, route }) => {
               ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
             body: JSON.stringify({ orderId: targetId }),
+          });
+          await safeApiFetch(`/orders/${targetId}/pay`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ paymentMethod: "PayFast" }),
           });
         } catch (apiErr) {
           console.log("Error marking order as paid on backend:", apiErr);
@@ -1623,11 +1863,11 @@ const Checkout = ({ navigation, route }) => {
 
         // Record in paid order IDs list so it never reverts to pending on refresh
         const keys = [
+          ...candidateIds,
           updated.orderId,
           updated.id,
           updated._id,
           updated.orderMongoId,
-          targetId,
         ].filter(Boolean);
 
         AsyncStorage.getItem("grand_store_paid_order_ids").then((raw) => {
@@ -1867,7 +2107,7 @@ const Checkout = ({ navigation, route }) => {
                 if (data && data.type === "PAYFAST_SUCCESS") {
                   setShowPayfastModal(false);
                   setIsPayfastLoading(false);
-                  finalizePaidOrder();
+                  finalizePaidOrder(activeOrderRef.current);
                 }
               } catch (e) {}
             }}
@@ -1888,7 +2128,7 @@ const Checkout = ({ navigation, route }) => {
               ) {
                 setShowPayfastModal(false);
                 setIsPayfastLoading(false);
-                finalizePaidOrder();
+                finalizePaidOrder(activeOrderRef.current);
                 return false;
               }
               return true;
@@ -1908,7 +2148,7 @@ const Checkout = ({ navigation, route }) => {
               ) {
                 setShowPayfastModal(false);
                 setIsPayfastLoading(false);
-                finalizePaidOrder();
+                finalizePaidOrder(activeOrderRef.current);
               }
             }}
             onNavigationStateChange={handlePayfastNavStateChange}
@@ -2043,6 +2283,120 @@ const Checkout = ({ navigation, route }) => {
             </View>
           )}
 
+          {/* PostNet Store Collection Banner */}
+          {(createdOrder.pickupStore || isPostNet) && (
+            <View style={styles.postnetPickupConfirmCard}>
+              <View style={styles.postnetPickupHeader}>
+                <Text style={styles.postnetPickupIcon}>📍</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.postnetPickupBadge}>YOUR POSTNET COLLECTION POINT</Text>
+                  <Text style={styles.postnetPickupName}>
+                    {createdOrder.pickupStore?.name || "PostNet Collection Branch"}
+                  </Text>
+                  <Text style={styles.postnetPickupAddress}>
+                    {createdOrder.pickupStore?.address || createdOrder.recipient?.address}
+                  </Text>
+                  {createdOrder.pickupStore?.telephone ? (
+                    <Text style={styles.postnetPickupPhone}>
+                      📞 Contact: {createdOrder.pickupStore.telephone}
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+              <View style={styles.postnetPinNotice}>
+                <Text style={styles.postnetPinNoticeText}>
+                  📲 An SMS alert containing your unique collection PIN and required ID verification will be sent to {phone || "your phone"} when the package arrives at the branch.
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* 6-Stage PostNet & Delivery Tracking Timeline */}
+          <View style={styles.timelineCard}>
+            <Text style={styles.timelineTitle}>DELIVERY & TRACKING TIMELINE</Text>
+            <View style={styles.timelineList}>
+              {[
+                {
+                  stage: 1,
+                  name: "Payment Confirmed",
+                  desc: isPaid ? "Payment verified via PayFast" : "Awaiting payment settlement",
+                  done: isPaid,
+                  active: !isPaid,
+                },
+                {
+                  stage: 2,
+                  name: "Order Confirmed",
+                  desc: `Assigned reference #${createdOrder.orderId}`,
+                  done: true,
+                  active: false,
+                },
+                {
+                  stage: 3,
+                  name: "Vendor Preparing",
+                  desc: "Bottles inspected & sealed with tamper-proof security wax",
+                  done: isPaid,
+                  active: isPaid,
+                },
+                {
+                  stage: 4,
+                  name: "Collected by Courier",
+                  desc: isPostNet ? "Collected by PostNet Logistics" : "Collected by Courier Guy Express",
+                  done: false,
+                  active: false,
+                },
+                {
+                  stage: 5,
+                  name: "In Transit 🚚",
+                  desc: "Secured transport via regional distribution hub",
+                  done: false,
+                  active: false,
+                },
+                {
+                  stage: 6,
+                  name: isPostNet ? "Ready for Collection 📍" : "Delivered ✅",
+                  desc: isPostNet ? "Counter collection with SMS PIN & 18+ ID" : "Direct doorstep handover & signature",
+                  done: false,
+                  active: false,
+                },
+              ].map((step, sIdx, arr) => (
+                <View key={sIdx} style={styles.timelineStepRow}>
+                  <View style={styles.timelineLeftCol}>
+                    <View
+                      style={[
+                        styles.timelineNode,
+                        step.done && styles.timelineNodeDone,
+                        step.active && styles.timelineNodeActive,
+                      ]}
+                    >
+                      <Text style={styles.timelineNodeText}>
+                        {step.done ? "✓" : step.stage}
+                      </Text>
+                    </View>
+                    {sIdx < arr.length - 1 && (
+                      <View
+                        style={[
+                          styles.timelineLine,
+                          step.done && styles.timelineLineDone,
+                        ]}
+                      />
+                    )}
+                  </View>
+                  <View style={styles.timelineRightCol}>
+                    <Text
+                      style={[
+                        styles.timelineStepName,
+                        (step.done || step.active) && styles.timelineStepNameActive,
+                      ]}
+                    >
+                      {step.name}
+                    </Text>
+                    <Text style={styles.timelineStepDesc}>{step.desc}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+
           {/* FULL ITEMIZED TAX INVOICE / BILL RECEIPT */}
           <View style={styles.invoiceBillCard}>
             <View style={styles.invoiceBillHeader}>
@@ -2112,7 +2466,7 @@ const Checkout = ({ navigation, route }) => {
 
             <View style={styles.invoiceDivider} />
 
-            {/* Subtotal, Shipping, and Total Due */}
+            {/* Subtotal, Shipping, Super Coins, and Total Due */}
             <View style={styles.invoiceTotalRow}>
               <Text style={styles.invoiceTotalLabel}>Subtotal</Text>
               <Text style={styles.invoiceTotalVal}>R{createdOrder.subtotal.toFixed(2)}</Text>
@@ -2127,9 +2481,19 @@ const Checkout = ({ navigation, route }) => {
             </View>
             {createdOrder.discount > 0 && (
               <View style={styles.invoiceTotalRow}>
-                <Text style={styles.invoiceTotalLabel}>Discount</Text>
+                <Text style={styles.invoiceTotalLabel}>Voucher Discount</Text>
                 <Text style={[styles.invoiceTotalVal, { color: "#4ade80" }]}>
                   -R{createdOrder.discount.toFixed(2)}
+                </Text>
+              </View>
+            )}
+            {createdOrder.superCoinsDiscount > 0 && (
+              <View style={styles.invoiceTotalRow}>
+                <Text style={[styles.invoiceTotalLabel, { color: "#f5c242" }]}>
+                  🪙 Super Coins Redeemed ({createdOrder.superCoinsUsed || Math.round(createdOrder.superCoinsDiscount / 0.1)} coins)
+                </Text>
+                <Text style={[styles.invoiceTotalVal, { color: "#f5c242", fontWeight: "700" }]}>
+                  -R{Number(createdOrder.superCoinsDiscount).toFixed(2)}
                 </Text>
               </View>
             )}
@@ -2140,6 +2504,15 @@ const Checkout = ({ navigation, route }) => {
                 R{createdOrder.grandTotal.toFixed(2)}
               </Text>
             </View>
+
+            {createdOrder.superCoinsEarned > 0 && (
+              <View style={styles.superCoinsEarnedReceiptRow}>
+                <Text style={styles.superCoinsEarnedReceiptIcon}>🎉</Text>
+                <Text style={styles.superCoinsEarnedReceiptText}>
+                  +{createdOrder.superCoinsEarned} Super Coins (Value: R{(createdOrder.superCoinsEarned * 0.1).toFixed(2)}) will be credited upon order delivery!
+                </Text>
+              </View>
+            )}
 
             <View style={styles.invoicePaymentTagRow}>
               <Text style={styles.invoicePaymentTagLabel}>Payment Status:</Text>
@@ -2432,42 +2805,63 @@ const Checkout = ({ navigation, route }) => {
                         <Text style={{ color: "#aaa", fontSize: 11 }}>✕ Close</Text>
                       </TouchableOpacity>
                     </View>
-                    {(cityPredictions.length > 0 ? cityPredictions : DEFAULT_SA_CITIES).map(
-                      (p, idx) => {
-                        const cityName =
-                          p.structured_formatting?.main_text ||
-                          p.main_text ||
-                          p.description?.split(",")[0] ||
-                          "";
-                        const subName =
-                          p.structured_formatting?.secondary_text ||
-                          p.description ||
-                          "";
-                        return (
-                          <TouchableOpacity
-                            key={p.place_id || idx}
-                            style={[
-                              styles.predictionItem,
-                              idx === cityPredictions.length - 1 && { borderBottomWidth: 0 },
-                            ]}
-                            onPress={() => handleSelectCity(p)}
-                            activeOpacity={0.7}
-                          >
-                            <Text style={styles.predictionPinIcon}>🏙️</Text>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.predictionMainText} numberOfLines={1}>
-                                {cityName}
+                    {(() => {
+                      const allCityList = cityPredictions.length > 0 ? cityPredictions : DEFAULT_SA_CITIES;
+                      const displayedCities = showAllCityDropdown ? allCityList : allCityList.slice(0, 3);
+
+                      return (
+                        <>
+                          {displayedCities.map((p, idx) => {
+                            const cityName =
+                              p.structured_formatting?.main_text ||
+                              p.main_text ||
+                              p.description?.split(",")[0] ||
+                              "";
+                            const subName =
+                              p.structured_formatting?.secondary_text ||
+                              p.description ||
+                              "";
+                            return (
+                              <TouchableOpacity
+                                key={p.place_id || idx}
+                                style={[
+                                  styles.predictionItem,
+                                  idx === displayedCities.length - 1 && !allCityList.length > 3 && { borderBottomWidth: 0 },
+                                ]}
+                                onPress={() => handleSelectCity(p)}
+                                activeOpacity={0.7}
+                              >
+                                <Text style={styles.predictionPinIcon}>🏙️</Text>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.predictionMainText} numberOfLines={1}>
+                                    {cityName}
+                                  </Text>
+                                  {subName ? (
+                                    <Text style={styles.predictionSubText} numberOfLines={1}>
+                                      {subName}
+                                    </Text>
+                                  ) : null}
+                                </View>
+                              </TouchableOpacity>
+                            );
+                          })}
+
+                          {allCityList.length > 3 && (
+                            <TouchableOpacity
+                              style={styles.dropdownShowMoreBtn}
+                              onPress={() => setShowAllCityDropdown(!showAllCityDropdown)}
+                              activeOpacity={0.75}
+                            >
+                              <Text style={styles.dropdownShowMoreBtnText}>
+                                {showAllCityDropdown
+                                  ? "▴ Show Fewer Cities"
+                                  : `▾ Show More Cities (${allCityList.length - 3} More)`}
                               </Text>
-                              {subName ? (
-                                <Text style={styles.predictionSubText} numberOfLines={1}>
-                                  {subName}
-                                </Text>
-                              ) : null}
-                            </View>
-                          </TouchableOpacity>
-                        );
-                      }
-                    )}
+                            </TouchableOpacity>
+                          )}
+                        </>
+                      );
+                    })()}
                   </View>
                 )}
               </View>
@@ -2527,14 +2921,87 @@ const Checkout = ({ navigation, route }) => {
             {/* AVAILABLE POSTNET PICKUP LOCATIONS: SHOWS ONLY WHEN A CITY IS SELECTED IN CITY DROPDOWN */}
             {deliveryPreference === "postnet" && (
               <View style={styles.postnetStoresSection}>
+                {/* 1. PostNet City Quick-Selector with "Show More" if > 3 cities */}
+                <View style={styles.postnetCitiesBox}>
+                  <View style={styles.postnetCitiesHeader}>
+                    <Text style={styles.postnetCitiesTitle}>
+                      🏙️ AVAILABLE POSTNET CITIES ({POSTNET_AVAILABLE_CITIES.length})
+                    </Text>
+                    <Text style={styles.postnetCitiesSub}>
+                      Select your city to view local PostNet counter collection points:
+                    </Text>
+                  </View>
+
+                  <View style={styles.postnetCitiesGrid}>
+                    {(showAllPostnetCities
+                      ? POSTNET_AVAILABLE_CITIES
+                      : POSTNET_AVAILABLE_CITIES.slice(0, 3)
+                    ).map((cName) => {
+                      const isSelected =
+                        city.trim().toLowerCase() === cName.toLowerCase() &&
+                        hasSelectedCityForPostnet;
+                      return (
+                        <TouchableOpacity
+                          key={cName}
+                          style={[
+                            styles.postnetCityCard,
+                            isSelected && styles.postnetCityCardActive,
+                          ]}
+                          onPress={() => handleSelectPostnetCity(cName)}
+                          activeOpacity={0.8}
+                        >
+                          <View style={styles.postnetCityIconBadge}>
+                            <Text style={{ fontSize: 13 }}>{isSelected ? "📍" : "🏢"}</Text>
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text
+                              style={[
+                                styles.postnetCityName,
+                                isSelected && styles.postnetCityNameActive,
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {cName}
+                            </Text>
+                            <Text style={styles.postnetCitySub}>
+                              {FALLBACK_POSTNET_STORES[cName.toLowerCase()]?.length || 3}+ Branches
+                            </Text>
+                          </View>
+                          {isSelected && (
+                            <View style={styles.citySelectedCheck}>
+                              <Text style={styles.citySelectedCheckText}>✓</Text>
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  {/* Show More / Fewer Cities Button if > 3 cities */}
+                  {POSTNET_AVAILABLE_CITIES.length > 3 && (
+                    <TouchableOpacity
+                      style={styles.showMoreCitiesBtn}
+                      onPress={() => setShowAllPostnetCities(!showAllPostnetCities)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.showMoreCitiesBtnText}>
+                        {showAllPostnetCities
+                          ? "▴ Show Fewer Cities"
+                          : `▾ Show More Cities (${POSTNET_AVAILABLE_CITIES.length - 3} More)`}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* 2. Available PostNet Branches in Selected City */}
                 {!hasSelectedCityForPostnet ? (
                   <View style={styles.selectCityPromptBox}>
                     <Text style={styles.selectCityPromptIcon}>📍</Text>
                     <Text style={styles.selectCityPromptTitle}>
-                      SELECT YOUR CITY ABOVE
+                      CHOOSE A CITY ABOVE
                     </Text>
                     <Text style={styles.selectCityPromptSub}>
-                      Select a city from the City dropdown above to view available PostNet branches.
+                      Select one of the cities above to view available PostNet branch counters.
                     </Text>
                   </View>
                 ) : (
@@ -2598,44 +3065,64 @@ const Checkout = ({ navigation, route }) => {
 
                     {/* Branch Cards List */}
                     {filteredPostnetStores.length > 0 ? (
-                      filteredPostnetStores.map((store, idx) => {
-                        const isSelected = preferredPostnetStore?.id === store.id;
-                        return (
+                      <>
+                        {(showAllPostnetBranches || branchSearch.trim().length > 0
+                          ? filteredPostnetStores
+                          : filteredPostnetStores.slice(0, 3)
+                        ).map((store, idx) => {
+                          const isSelected = preferredPostnetStore?.id === store.id;
+                          return (
+                            <TouchableOpacity
+                              key={store.id || idx}
+                              style={[
+                                styles.postnetStoreCard,
+                                isSelected && styles.postnetStoreCardSelected,
+                              ]}
+                              onPress={() => {
+                                setPreferredPostnetStore(store);
+                                if (store.postalCode) setPostalCode(store.postalCode);
+                                showMessage(`📍 Selected ${store.name}`);
+                              }}
+                              activeOpacity={0.8}
+                            >
+                              <View style={styles.radioCircle}>
+                                {isSelected && <View style={styles.radioDot} />}
+                              </View>
+                              <View style={{ flex: 1, marginLeft: 10 }}>
+                                <View style={styles.storeNameRow}>
+                                  <Text style={styles.storeName}>{store.name}</Text>
+                                  {store.distance !== null && store.distance !== undefined && (
+                                    <View style={styles.distanceBadge}>
+                                      <Text style={styles.distanceBadgeText}>
+                                        {store.distance} km away
+                                      </Text>
+                                    </View>
+                                  )}
+                                </View>
+                                <Text style={styles.storeAddress}>{store.address}</Text>
+                                {store.telephone ? (
+                                  <Text style={styles.storePhone}>📞 {store.telephone}</Text>
+                                ) : null}
+                              </View>
+                            </TouchableOpacity>
+                          );
+                        })}
+
+                        {/* Show More / Show Fewer Branches Button if > 3 branches */}
+                        {filteredPostnetStores.length > 3 && !branchSearch.trim() && (
                           <TouchableOpacity
-                            key={store.id || idx}
-                            style={[
-                              styles.postnetStoreCard,
-                              isSelected && styles.postnetStoreCardSelected,
-                            ]}
-                            onPress={() => {
-                              setPreferredPostnetStore(store);
-                              if (store.postalCode) setPostalCode(store.postalCode);
-                              showMessage(`📍 Selected ${store.name}`);
-                            }}
+                            style={styles.showMoreBranchesBtn}
+                            onPress={() => setShowAllPostnetBranches(!showAllPostnetBranches)}
                             activeOpacity={0.8}
                           >
-                            <View style={styles.radioCircle}>
-                              {isSelected && <View style={styles.radioDot} />}
-                            </View>
-                            <View style={{ flex: 1, marginLeft: 10 }}>
-                              <View style={styles.storeNameRow}>
-                                <Text style={styles.storeName}>{store.name}</Text>
-                                {store.distance !== null && store.distance !== undefined && (
-                                  <View style={styles.distanceBadge}>
-                                    <Text style={styles.distanceBadgeText}>
-                                      {store.distance} km away
-                                    </Text>
-                                  </View>
-                                )}
-                              </View>
-                              <Text style={styles.storeAddress}>{store.address}</Text>
-                              {store.telephone ? (
-                                <Text style={styles.storePhone}>📞 {store.telephone}</Text>
-                              ) : null}
-                            </View>
+                            <Text style={styles.showMoreBranchesBtnText}>
+                              {showAllPostnetBranches
+                                ? "▴ Show Fewer Branches"
+                                : `▾ Show More Branches (${filteredPostnetStores.length - 3} More)`}
+                            </Text>
                           </TouchableOpacity>
-                        );
-                      })
+                        )}
+                      </>
                     ) : (
                       <View style={styles.emptyStoresBox}>
                         <Text style={styles.emptyStoresText}>
@@ -2752,6 +3239,48 @@ const Checkout = ({ navigation, route }) => {
               </View>
             )}
 
+            {/* 🔒 THE CONFIDENCE SECTION (PostNet & Door Delivery Security) */}
+            <View style={styles.confidenceCard}>
+              <View style={styles.confidenceHeader}>
+                <Text style={styles.confidenceShieldIcon}>🔒</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.confidenceTitle}>Secure & Trackable Delivery</Text>
+                  <Text style={styles.confidenceSub}>
+                    {deliveryPreference === "postnet"
+                      ? "Direct vault dispatch to your chosen PostNet collection branch with PIN verification."
+                      : "Insured courier dispatch with tamper-proof packaging & real-time tracking."}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.confidenceGrid}>
+                <View style={styles.confidenceGridItem}>
+                  <Text style={styles.confidenceCheck}>✓</Text>
+                  <Text style={styles.confidenceItemText}>Live Waybill Tracking</Text>
+                </View>
+                <View style={styles.confidenceGridItem}>
+                  <Text style={styles.confidenceCheck}>✓</Text>
+                  <Text style={styles.confidenceItemText}>SMS Dispatch PIN</Text>
+                </View>
+                <View style={styles.confidenceGridItem}>
+                  <Text style={styles.confidenceCheck}>✓</Text>
+                  <Text style={styles.confidenceItemText}>Fragile Handling</Text>
+                </View>
+                <View style={styles.confidenceGridItem}>
+                  <Text style={styles.confidenceCheck}>✓</Text>
+                  <Text style={styles.confidenceItemText}>18+ ID Verification</Text>
+                </View>
+              </View>
+
+              <View style={styles.liquorComplianceBox}>
+                <Text style={styles.liquorComplianceIcon}>⚖️</Text>
+                <Text style={styles.liquorComplianceText}>
+                  <Text style={styles.liquorComplianceBold}>South African Liquor Compliance: </Text>
+                  Recipients must present a valid National ID or Passport upon delivery or PostNet branch collection.
+                </Text>
+              </View>
+            </View>
+
             {/* IMPORTANT: International Delivery Disclaimer & Checkbox (Matching Web Version) */}
             {!isSouthAfrica && (
               <View style={styles.internationalDeliveryCard}>
@@ -2791,24 +3320,83 @@ const Checkout = ({ navigation, route }) => {
               <Text style={styles.stepTitle}>Bottle Reserve ({checkoutItems.length})</Text>
             </View>
 
-            {checkoutItems.map((item, idx) => (
-              <View key={idx} style={styles.itemRow}>
-                <Image
-                  source={{ uri: getImageUrl(item.image) }}
-                  style={styles.itemThumb}
-                  resizeMode="contain"
-                />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={styles.itemName} numberOfLines={2}>
-                    {item.name}
-                  </Text>
-                  <Text style={styles.itemQty}>
-                    {item.size || "750ml"} • Qty: {item.quantity}
-                  </Text>
-                  <Text style={styles.itemPrice}>R{(item.price * item.quantity).toFixed(2)}</Text>
-                </View>
+            {checkoutItems.length === 0 ? (
+              <View style={styles.emptyCheckoutReserve}>
+                <Text style={styles.emptyCheckoutText}>No bottles in reserve</Text>
+                <TouchableOpacity
+                  style={styles.emptyCheckoutBtn}
+                  onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate("Cart"))}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.emptyCheckoutBtnText}>Return to Selection</Text>
+                </TouchableOpacity>
               </View>
-            ))}
+            ) : (
+              checkoutItems.map((item, idx) => {
+                const key = getItemKey(item) || String(idx);
+                const lineTotal = Number(item.price || 0) * Number(item.quantity || 1);
+                return (
+                  <View key={key} style={styles.itemRow}>
+                    <Image
+                      source={{ uri: getImageUrl(item.image) }}
+                      style={styles.itemThumb}
+                      resizeMode="contain"
+                    />
+                    <View style={styles.itemDetailsCol}>
+                      <View style={styles.itemTopRow}>
+                        <Text style={styles.itemName} numberOfLines={2}>
+                          {item.name}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => handleRemoveCheckoutItem(key)}
+                          style={styles.itemRemoveTouch}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.itemRemoveIcon}>✕</Text>
+                        </TouchableOpacity>
+                      </View>
+
+                      <View style={styles.itemMetaRow}>
+                        <Text style={styles.itemSizeBadge}>{item.size || "750ml"}</Text>
+                        <Text style={styles.itemUnitPrice}>
+                          R{Number(item.price || 0).toFixed(2)} each
+                        </Text>
+                      </View>
+
+                      <View style={styles.itemControlsRow}>
+                        {/* Stepper controls: - / qty / + */}
+                        <View style={styles.itemStepper}>
+                          <TouchableOpacity
+                            onPress={() => handleDecrementItemQty(key)}
+                            style={styles.stepperActionBtn}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={styles.stepperActionMinus}>−</Text>
+                          </TouchableOpacity>
+                          <View style={styles.stepperQtyBox}>
+                            <Text style={styles.stepperQtyText}>{item.quantity || 1}</Text>
+                          </View>
+                          <TouchableOpacity
+                            onPress={() => handleIncrementItemQty(key)}
+                            style={styles.stepperActionBtn}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={styles.stepperActionPlus}>+</Text>
+                          </TouchableOpacity>
+                        </View>
+
+                        {/* Item line total */}
+                        <View style={styles.itemTotalCol}>
+                          <Text style={styles.itemTotalLabel}>Total</Text>
+                          <Text style={styles.itemPrice}>R{lineTotal.toFixed(2)}</Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })
+            )}
           </View>
 
           {/* Step 3: Payment Method Selection */}
@@ -2870,6 +3458,69 @@ const Checkout = ({ navigation, route }) => {
             </TouchableOpacity>
           </View>
 
+          {/* ⭐ SUPER COINS REDEMPTION CARD (10 Super Coins = R1.00, Max 10% Margin-Safe Cap) */}
+          <View style={styles.superCoinsCheckoutCard}>
+            <View style={styles.superCoinsCardHeader}>
+              <View style={styles.superCoinsIconBox}>
+                <Text style={styles.superCoinsIconText}>🪙</Text>
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <View style={styles.superCoinsTitleRow}>
+                  <Text style={styles.superCoinsCardTitle}>Grand Store Super Coins</Text>
+                  <View style={styles.superCoinsRateBadge}>
+                    <Text style={styles.superCoinsRateBadgeText}>10 COINS = R1.00</Text>
+                  </View>
+                </View>
+                <Text style={styles.superCoinsBalanceSub}>
+                  Available: <Text style={styles.superCoinsBalanceGold}>{(userSuperCoins || 0).toLocaleString()} Coins</Text> (Value: R{((userSuperCoins || 0) * 0.1).toFixed(2)})
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[
+                  styles.superCoinsToggle,
+                  useSuperCoins && (userSuperCoins || 0) > 0 && styles.superCoinsToggleActive,
+                ]}
+                onPress={() => {
+                  if ((userSuperCoins || 0) <= 0) {
+                    showMessage("You currently have 0 Super Coins. Earn 10 coins per R100 on this order!");
+                    return;
+                  }
+                  setUseSuperCoins(!useSuperCoins);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.superCoinsToggleCheck}>
+                  {useSuperCoins && (userSuperCoins || 0) > 0 ? "✓" : ""}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {useSuperCoins && (userSuperCoins || 0) > 0 && superCoinDiscount > 0 ? (
+              <View style={styles.superCoinsAppliedRow}>
+                <View style={styles.superCoinsAppliedLeft}>
+                  <Text style={styles.superCoinsAppliedCheck}>✓</Text>
+                  <Text style={styles.superCoinsAppliedText}>
+                    Margin-Safe Deduction: <Text style={styles.superCoinsAppliedAmount}>-R{superCoinDiscount.toFixed(2)}</Text> ({Math.round(superCoinDiscount / 0.1)} coins)
+                  </Text>
+                </View>
+                {superCoinsQuote?.isMarginCapped ? (
+                  <Text style={styles.superCoinsMarginNote}>
+                    🛡️ {superCoinsQuote.marginMessage || "10% max order redemption cap (protects 15% platform margin)"}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+
+            {/* Potential Coins to Earn Banner */}
+            <View style={styles.superCoinsEarnBanner}>
+              <Text style={styles.superCoinsEarnIcon}>🎉</Text>
+              <Text style={styles.superCoinsEarnText}>
+                Earn <Text style={styles.superCoinsEarnGold}>+{superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)} Super Coins</Text> (R{((superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)) * 0.1).toFixed(2)}) upon order delivery!
+              </Text>
+            </View>
+          </View>
+
           {/* Step 4: Final Financial Breakdown */}
           <View style={styles.breakdownCard}>
             <Text style={styles.breakdownTitle}>TOTAL BREAKDOWN</Text>
@@ -2883,6 +3534,15 @@ const Checkout = ({ navigation, route }) => {
               <View style={styles.breakdownRow}>
                 <Text style={[styles.breakdownLabel, { color: "#4cd964" }]}>Voucher Discount</Text>
                 <Text style={[styles.breakdownVal, { color: "#4cd964" }]}>-R{discount.toFixed(2)}</Text>
+              </View>
+            )}
+
+            {superCoinDiscount > 0 && (
+              <View style={styles.breakdownRow}>
+                <Text style={[styles.breakdownLabel, { color: "#f5c242" }]}>🪙 Super Coins Redeemed</Text>
+                <Text style={[styles.breakdownVal, { color: "#f5c242", fontWeight: "700" }]}>
+                  -R{superCoinDiscount.toFixed(2)}
+                </Text>
               </View>
             )}
 
@@ -3269,6 +3929,132 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 
+  // PostNet Cities Grid & Show More Controls
+  postnetCitiesBox: {
+    backgroundColor: "#110e0c",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    padding: 12,
+    marginBottom: 12,
+  },
+  postnetCitiesHeader: {
+    marginBottom: 10,
+  },
+  postnetCitiesTitle: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+  },
+  postnetCitiesSub: {
+    color: "#888",
+    fontSize: 10,
+    marginTop: 2,
+  },
+  postnetCitiesGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  postnetCityCard: {
+    width: "31%",
+    backgroundColor: "#16130f",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    padding: 8,
+    alignItems: "center",
+    position: "relative",
+  },
+  postnetCityCardActive: {
+    backgroundColor: "rgba(201, 151, 66, 0.2)",
+    borderColor: "#c99742",
+  },
+  postnetCityIconBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  postnetCityName: {
+    color: "#ccc",
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  postnetCityNameActive: {
+    color: "#f5c242",
+    fontWeight: "800",
+  },
+  postnetCitySub: {
+    color: "#666",
+    fontSize: 8.5,
+    textAlign: "center",
+    marginTop: 1,
+  },
+  citySelectedCheck: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: "#10b981",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  citySelectedCheckText: {
+    color: "#0a0a0a",
+    fontSize: 8.5,
+    fontWeight: "900",
+  },
+  showMoreCitiesBtn: {
+    marginTop: 8,
+    paddingVertical: 7,
+    backgroundColor: "rgba(201, 151, 66, 0.1)",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+    alignItems: "center",
+  },
+  showMoreCitiesBtnText: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  showMoreBranchesBtn: {
+    marginTop: 4,
+    marginBottom: 10,
+    paddingVertical: 9,
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.35)",
+    alignItems: "center",
+  },
+  showMoreBranchesBtnText: {
+    color: "#f5c242",
+    fontSize: 11.5,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  dropdownShowMoreBtn: {
+    paddingVertical: 8,
+    backgroundColor: "rgba(201, 151, 66, 0.08)",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.06)",
+    alignItems: "center",
+  },
+  dropdownShowMoreBtnText: {
+    color: "#f5c242",
+    fontSize: 10.5,
+    fontWeight: "800",
+  },
+
   // Inputs
   inputGroup: {
     marginBottom: 12,
@@ -3541,34 +4327,162 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  // Step 2 Item Row
+  // Step 2 Item Row & Interactive Controls
   itemRow: {
     flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
+    alignItems: "flex-start",
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(255, 255, 255, 0.06)",
+    borderBottomColor: "rgba(255, 255, 255, 0.07)",
   },
   itemThumb: {
-    width: 48,
-    height: 60,
-    borderRadius: 6,
-    backgroundColor: "rgba(255, 255, 255, 0.03)",
+    width: 54,
+    height: 70,
+    borderRadius: 8,
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+    marginRight: 12,
+  },
+  itemDetailsCol: {
+    flex: 1,
+  },
+  itemTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
   },
   itemName: {
+    flex: 1,
     color: "#fff",
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
+    letterSpacing: 0.2,
+    paddingRight: 8,
+    lineHeight: 18,
   },
-  itemQty: {
-    color: "#777",
+  itemRemoveTouch: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 75, 75, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 75, 75, 0.25)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  itemRemoveIcon: {
+    color: "#ff6b6b",
     fontSize: 11,
-    marginVertical: 2,
+    fontWeight: "800",
+    lineHeight: 12,
+  },
+  itemMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  itemSizeBadge: {
+    color: "#d4af37",
+    fontSize: 11,
+    fontWeight: "600",
+    backgroundColor: "rgba(212, 175, 55, 0.12)",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginRight: 8,
+    overflow: "hidden",
+  },
+  itemUnitPrice: {
+    color: "#8e867b",
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  itemControlsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 2,
+  },
+  itemStepper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+    padding: 2,
+  },
+  stepperActionBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepperActionMinus: {
+    color: "#e8c37d",
+    fontSize: 16,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  stepperActionPlus: {
+    color: "#e8c37d",
+    fontSize: 16,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  stepperQtyBox: {
+    minWidth: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+  },
+  stepperQtyText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  itemTotalCol: {
+    alignItems: "flex-end",
+  },
+  itemTotalLabel: {
+    color: "#6c665e",
+    fontSize: 9,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   itemPrice: {
     color: "#f5c242",
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "800",
+  },
+  emptyCheckoutReserve: {
+    paddingVertical: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyCheckoutText: {
+    color: "#888",
+    fontSize: 13,
+    fontStyle: "italic",
+    marginBottom: 12,
+  },
+  emptyCheckoutBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: "rgba(245, 194, 66, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 194, 66, 0.3)",
+  },
+  emptyCheckoutBtnText: {
+    color: "#f5c242",
+    fontSize: 12,
+    fontWeight: "700",
   },
 
   // Step 3 Payment Options
@@ -4231,6 +5145,387 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     letterSpacing: 0.5,
+  },
+
+  // 🔒 Confidence & Compliance Section Styles
+  confidenceCard: {
+    backgroundColor: "#110e0b",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    padding: 16,
+    marginBottom: 16,
+  },
+  confidenceHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 12,
+  },
+  confidenceShieldIcon: {
+    fontSize: 22,
+    marginRight: 10,
+    marginTop: 2,
+  },
+  confidenceTitle: {
+    color: "#f8f5ee",
+    fontSize: 14,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    marginBottom: 3,
+  },
+  confidenceSub: {
+    color: "#999",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  confidenceGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.06)",
+    paddingTop: 10,
+    gap: 8,
+    marginBottom: 12,
+  },
+  confidenceGridItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "48%",
+  },
+  confidenceCheck: {
+    color: "#10b981",
+    fontSize: 12,
+    fontWeight: "900",
+    marginRight: 6,
+  },
+  confidenceItemText: {
+    color: "#ccc",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  liquorComplianceBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "rgba(245, 194, 66, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 194, 66, 0.25)",
+    borderRadius: 10,
+    padding: 10,
+  },
+  liquorComplianceIcon: {
+    fontSize: 16,
+    marginRight: 8,
+    marginTop: 1,
+  },
+  liquorComplianceText: {
+    flex: 1,
+    color: "#e2d2a4",
+    fontSize: 10.5,
+    lineHeight: 15,
+  },
+  liquorComplianceBold: {
+    color: "#f5c242",
+    fontWeight: "800",
+  },
+
+  // ⭐ Super Coins Loyalty Card Styles
+  superCoinsCheckoutCard: {
+    backgroundColor: "#16130e",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.35)",
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: "#c99742",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  superCoinsCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  superCoinsIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  superCoinsIconText: {
+    fontSize: 20,
+  },
+  superCoinsTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 2,
+  },
+  superCoinsCardTitle: {
+    color: "#f8f5ee",
+    fontSize: 14,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  superCoinsRateBadge: {
+    backgroundColor: "rgba(201, 151, 66, 0.2)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  superCoinsRateBadgeText: {
+    color: "#f5c242",
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  superCoinsBalanceSub: {
+    color: "#aaa",
+    fontSize: 11.5,
+  },
+  superCoinsBalanceGold: {
+    color: "#f5c242",
+    fontWeight: "800",
+  },
+  superCoinsToggle: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: "rgba(201, 151, 66, 0.4)",
+    backgroundColor: "#0e0c0a",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  superCoinsToggleActive: {
+    backgroundColor: "#c99742",
+    borderColor: "#f5c242",
+  },
+  superCoinsToggleCheck: {
+    color: "#0c0a08",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  superCoinsAppliedRow: {
+    borderTopWidth: 1,
+    borderTopColor: "rgba(201, 151, 66, 0.15)",
+    marginTop: 12,
+    paddingTop: 10,
+  },
+  superCoinsAppliedLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  superCoinsAppliedCheck: {
+    color: "#10b981",
+    fontSize: 13,
+    fontWeight: "900",
+    marginRight: 6,
+  },
+  superCoinsAppliedText: {
+    color: "#e5e5e5",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  superCoinsAppliedAmount: {
+    color: "#10b981",
+    fontWeight: "800",
+  },
+  superCoinsMarginNote: {
+    color: "#f5c242",
+    fontSize: 10.5,
+    fontStyle: "italic",
+    paddingLeft: 19,
+  },
+  superCoinsEarnBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(201, 151, 66, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.2)",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginTop: 10,
+  },
+  superCoinsEarnIcon: {
+    fontSize: 15,
+    marginRight: 8,
+  },
+  superCoinsEarnText: {
+    flex: 1,
+    color: "#ddd",
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  superCoinsEarnGold: {
+    color: "#f5c242",
+    fontWeight: "800",
+  },
+
+  // PostNet Pickup Confirmation Card Styles
+  postnetPickupConfirmCard: {
+    backgroundColor: "#16130e",
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: "#c99742",
+    padding: 16,
+    marginBottom: 16,
+  },
+  postnetPickupHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+  postnetPickupIcon: {
+    fontSize: 22,
+    marginRight: 10,
+    marginTop: 2,
+  },
+  postnetPickupBadge: {
+    color: "#10b981",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+    marginBottom: 2,
+  },
+  postnetPickupName: {
+    color: "#f8f5ee",
+    fontSize: 15,
+    fontWeight: "800",
+    marginBottom: 3,
+  },
+  postnetPickupAddress: {
+    color: "#aaa",
+    fontSize: 11.5,
+    lineHeight: 16,
+    marginBottom: 4,
+  },
+  postnetPickupPhone: {
+    color: "#f5c242",
+    fontSize: 11.5,
+    fontWeight: "600",
+  },
+  postnetPinNotice: {
+    backgroundColor: "rgba(201, 151, 66, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 12,
+  },
+  postnetPinNoticeText: {
+    color: "#e2d2a4",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+
+  // 6-Stage Delivery Tracking Timeline Styles
+  timelineCard: {
+    backgroundColor: "#13100c",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    padding: 16,
+    marginBottom: 16,
+  },
+  timelineTitle: {
+    color: "#f5c242",
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 1,
+    marginBottom: 16,
+  },
+  timelineList: {
+    paddingLeft: 4,
+  },
+  timelineStepRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    minHeight: 48,
+  },
+  timelineLeftCol: {
+    alignItems: "center",
+    width: 28,
+    marginRight: 12,
+  },
+  timelineNode: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#221e18",
+    borderWidth: 1.5,
+    borderColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  timelineNodeDone: {
+    backgroundColor: "#10b981",
+    borderColor: "#10b981",
+  },
+  timelineNodeActive: {
+    backgroundColor: "#c99742",
+    borderColor: "#f5c242",
+  },
+  timelineNodeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  timelineLine: {
+    width: 2,
+    flex: 1,
+    minHeight: 24,
+    backgroundColor: "rgba(255, 255, 255, 0.12)",
+    marginVertical: 2,
+  },
+  timelineLineDone: {
+    backgroundColor: "#10b981",
+  },
+  timelineRightCol: {
+    flex: 1,
+    paddingBottom: 14,
+  },
+  timelineStepName: {
+    color: "#888",
+    fontSize: 12.5,
+    fontWeight: "700",
+    marginBottom: 2,
+  },
+  timelineStepNameActive: {
+    color: "#f8f5ee",
+  },
+  timelineStepDesc: {
+    color: "#777",
+    fontSize: 10.5,
+    lineHeight: 14,
+  },
+
+  // Receipt Super Coins Row
+  superCoinsEarnedReceiptRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  superCoinsEarnedReceiptIcon: {
+    fontSize: 16,
+    marginRight: 8,
+  },
+  superCoinsEarnedReceiptText: {
+    flex: 1,
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 15,
   },
 });
 

@@ -1,4 +1,9 @@
 /* eslint-disable prettier/prettier */
+import { initNetworkResilience } from './source/helpers/networkConfig';
+
+// Initialize network auto-detection & resilient candidate fallbacks
+initNetworkResilience();
+
 import React from 'react';
 import { AppRegistry } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
