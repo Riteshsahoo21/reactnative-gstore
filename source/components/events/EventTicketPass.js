@@ -73,6 +73,7 @@ export default function EventTicketPass({ route, navigation }) {
   const [showPayfastModal, setShowPayfastModal] = useState(false);
   const [payfastModalData, setPayfastModalData] = useState(null);
   const [isPayfastLoading, setIsPayfastLoading] = useState(true);
+  const [enlargedQrTicket, setEnlargedQrTicket] = useState(null);
 
   const safeFetch = async (endpoint, options = {}) => {
     const candidates = getEventApiCandidates();
@@ -220,51 +221,80 @@ export default function EventTicketPass({ route, navigation }) {
     }
   };
 
-  // Share or Download Ticket Pass
-  const handleShareOrDownloadTicket = async (b) => {
-    Alert.alert(
-      "VIP Access Pass Options",
-      `Ticket ID: ${b.ticketId}\nChoose an action:`,
-      [
-        {
-          text: "Download PDF Pass 📄",
-          onPress: () => handleDownloadPdf(b),
-        },
-        {
-          text: "Email PDF Pass to Gmail ✉️",
-          onPress: () => handleResendEmail(b),
-        },
-        {
-          text: "Share Pass Details 📲",
-          onPress: async () => {
-            try {
-              const eventTitle = b.event?.title || "Private Cellar Tasting";
-              const dateStr = b.event?.date ? new Date(b.event.date).toLocaleDateString("en-ZA") : "";
-              const timeStr = b.event?.startTime || "18:00";
-              const venueStr = b.event?.location || "The Grand Store Private Vault";
-              let host = typeof getActiveServerHost === "function" ? getActiveServerHost() : "https://api.grandstoreglobal.com";
-              if (!host || host === "https://grandstoreglobal.com" || host === "http://grandstoreglobal.com") {
-                host = "https://api.grandstoreglobal.com";
-              }
-              const qrVerificationUrl = `${host}/api/events/bookings/${b._id || b.ticketId}/ticket-pdf`;
-              const shareMsg = `🏆 THE GRAND STORE • VIP PASS\nEvent: ${eventTitle}\nDate: ${dateStr} at ${timeStr}\nVenue: ${venueStr}\nTicket ID: ${b.ticketId}\nBooking Ref: ${b.gsReference || "N/A"}\nTier: ${b.ticketType} (Qty: ${b.quantity})\n\nOfficial PDF Pass & QR Verification Link:\n${qrVerificationUrl}\n\nPresent this pass at reception for cellar access.`;
+  // Share VIP Pass with Generated QR Image & Message
+  const handleSharePass = async (b) => {
+    try {
+      const eventObj = b.event || {};
+      const eventTitle = eventObj.title || "Exclusive Tasting Experience";
+      const dateStr = eventObj.date
+        ? new Date(eventObj.date).toLocaleDateString("en-US", {
+            weekday: "short",
+            day: "numeric",
+            month: "short",
+            year: "numeric",
+          })
+        : "Confirmed Date";
+      const timeStr = eventObj.startTime || "18:00";
+      const venueStr = eventObj.location || "The Grand Store Private Vault";
 
-              await Share.share({
-                title: `The Grand Store VIP Pass - ${b.ticketId}`,
-                message: shareMsg,
-              });
-            } catch (e) {
-              console.log("Error sharing pass:", e);
-            }
-          },
-        },
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-      ]
-    );
+      const qrPayload = JSON.stringify({
+        ticketId: b.ticketId,
+        gsReference: b.gsReference,
+        event: eventTitle,
+        date: eventObj.date,
+        tier: b.ticketType,
+        quantity: b.quantity,
+      });
+
+      const qrImageUri =
+        b.qrCodeData ||
+        `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(qrPayload)}`;
+
+      const shareMessage =
+        `🏆 THE GRAND STORE • VIP CELLAR PASS\n\n` +
+        `Event: ${eventTitle}\n` +
+        `Date: ${dateStr} • ${timeStr}\n` +
+        `Venue: ${venueStr}\n` +
+        `Ticket ID: ${b.ticketId}\n` +
+        `Tier: ${b.ticketType} (${b.quantity} ${b.quantity === 1 ? "Guest" : "Guests"})\n` +
+        `Booking Ref: ${b.gsReference || "N/A"}\n\n` +
+        `Official scannable QR ticket attached. Present at reception for VIP cellar admission.`;
+
+      let RNShareModule = null;
+      try {
+        RNShareModule = require("react-native-share").default || require("react-native-share");
+      } catch (e) {
+        RNShareModule = null;
+      }
+
+      if (RNShareModule && typeof RNShareModule.open === "function") {
+        await RNShareModule.open({
+          title: `VIP Pass - ${b.ticketId}`,
+          subject: `VIP Event Pass • ${eventTitle}`,
+          message: shareMessage,
+          url: qrImageUri,
+          type: "image/png",
+          failOnCancel: false,
+        });
+      } else {
+        await Share.share({
+          title: `VIP Pass - ${b.ticketId}`,
+          message: shareMessage,
+        });
+      }
+    } catch (err) {
+      if (
+        err?.message &&
+        !err.message.includes("User did not share") &&
+        !err.message.includes("dismissed") &&
+        !err.message.includes("cancelled")
+      ) {
+        console.log("Error sharing pass:", err);
+      }
+    }
   };
+
+  const handleShareOrDownloadTicket = (b) => handleSharePass(b);
 
   // Relaunch PayFast for a pending ticket
   const handlePayPendingTicket = async (booking) => {
@@ -564,6 +594,123 @@ export default function EventTicketPass({ route, navigation }) {
     );
   };
 
+  const renderEnlargedQrModal = () => {
+    if (!enlargedQrTicket) return null;
+    const b = enlargedQrTicket;
+    const eventObj = b.event || {};
+    const eventTitle = eventObj.title || "Exclusive Tasting Experience";
+    const eventDate = eventObj.date
+      ? new Date(eventObj.date).toLocaleDateString("en-US", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+      : "Confirmed Date";
+
+    const qrPayload = JSON.stringify({
+      ticketId: b.ticketId,
+      gsReference: b.gsReference,
+      event: eventTitle,
+      date: eventObj.date,
+      tier: b.ticketType,
+      quantity: b.quantity,
+    });
+
+    const qrImageUri =
+      b.qrCodeData ||
+      `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(qrPayload)}`;
+
+    return (
+      <Modal
+        visible={!!enlargedQrTicket}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setEnlargedQrTicket(null)}
+      >
+        <SafeAreaView style={styles.enlargedModalOverlay}>
+          <TouchableOpacity
+            style={styles.enlargedModalBackdropTouch}
+            activeOpacity={1}
+            onPress={() => setEnlargedQrTicket(null)}
+          >
+            <View style={styles.enlargedCardContainer} onStartShouldSetResponder={() => true}>
+              {/* HEADER */}
+              <View style={styles.enlargedCardHeader}>
+                <View>
+                  <Text style={styles.enlargedBrandTitle}>THE GRAND STORE</Text>
+                  <Text style={styles.enlargedBrandSubtitle}>OFFICIAL VIP CELLAR ACCESS PASS</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.enlargedCloseBtn}
+                  onPress={() => setEnlargedQrTicket(null)}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                  <Text style={styles.enlargedCloseBtnText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* EVENT TITLE & META */}
+              <Text style={styles.enlargedEventTitle} numberOfLines={2}>
+                {eventTitle}
+              </Text>
+
+              <View style={styles.enlargedMetaRow}>
+                <Text style={styles.enlargedMetaText}>{eventDate}</Text>
+                {eventObj.startTime && (
+                  <Text style={styles.enlargedMetaText}> • {eventObj.startTime}</Text>
+                )}
+              </View>
+
+              {/* CRISP WHITE QR CODE CONTAINER */}
+              <View style={styles.enlargedQrBox}>
+                <Image
+                  source={{ uri: qrImageUri }}
+                  style={styles.enlargedQrImage}
+                  resizeMode="contain"
+                />
+              </View>
+
+              {/* TICKET ID & BADGE */}
+              <Text style={styles.enlargedTicketId}>{b.ticketId || "TKT-VERIFIED"}</Text>
+              <Text style={styles.enlargedTierBadge}>
+                {b.ticketType || "General Reserve"} • {b.quantity} {b.quantity === 1 ? "Guest" : "Guests"}
+              </Text>
+
+              {/* BRIGHTNESS / SCANNER HINT */}
+              <View style={styles.enlargedScannerHintRow}>
+                <Text style={styles.enlargedScannerHintText}>
+                  💡 Please maximize screen brightness for optimal scanner recognition at reception.
+                </Text>
+              </View>
+
+              {/* QUICK ACTION BUTTONS */}
+              <View style={styles.enlargedActionsRow}>
+                <TouchableOpacity
+                  style={styles.enlargedActionBtn}
+                  onPress={() => handleDownloadPdf(b)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.enlargedActionBtnIcon}>📄</Text>
+                  <Text style={styles.enlargedActionBtnText}>Download PDF</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.enlargedActionBtn, styles.enlargedShareBtn]}
+                  onPress={() => handleSharePass(b)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.enlargedActionBtnIcon}>📲</Text>
+                  <Text style={[styles.enlargedActionBtnText, { color: "#110e08" }]}>Share QR</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </Modal>
+    );
+  };
+
   const renderTicketCard = (b) => {
     const isPaid = b.paymentStatus === "Paid" || b.paymentStatus === "Completed" || b.ticketStatus === "Valid";
     const isBankTransfer = b.paymentMethod === "Bank Transfer";
@@ -680,7 +827,11 @@ export default function EventTicketPass({ route, navigation }) {
 
           {/* REAL VIP QR CODE & DOWNLOAD/SHARE */}
           <View style={styles.qrCodeSection}>
-            <View style={styles.qrWrapper}>
+            <TouchableOpacity
+              style={styles.qrWrapper}
+              onPress={() => setEnlargedQrTicket(b)}
+              activeOpacity={0.88}
+            >
               <Image
                 source={{
                   uri:
@@ -698,38 +849,53 @@ export default function EventTicketPass({ route, navigation }) {
                 style={styles.qrImage}
                 resizeMode="contain"
               />
-            </View>
+              <View style={styles.tapToEnlargeBadge}>
+                <Text style={styles.tapToEnlargeText}>🔍 Tap to enlarge</Text>
+              </View>
+            </TouchableOpacity>
+
             <Text style={styles.barcodeText}>{b.ticketId || b._id}</Text>
             <Text style={styles.qrScanKicker}>OFFICIAL CELLAR VIP ADMISSION PASS</Text>
 
             {isPaid && (
-              <View style={{ width: "100%", gap: 8, marginTop: 14 }}>
+              <View style={{ width: "100%", gap: 10, marginTop: 14 }}>
+                {/* 1. DOWNLOAD VIP PASS (PDF) */}
                 <TouchableOpacity
                   style={styles.downloadTicketBtn}
-                  onPress={() => handleShareOrDownloadTicket(b)}
+                  onPress={() => handleDownloadPdf(b)}
+                  activeOpacity={0.8}
+                >
+                  <LinearGradient
+                    colors={["#2e2416", "#17130b"]}
+                    style={styles.downloadGradient}
+                  >
+                    <Text style={styles.downloadTicketIcon}>📄</Text>
+                    <Text style={styles.downloadTicketText}>DOWNLOAD VIP PASS (PDF)</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+
+                {/* 2. SHARE VIP PASS (WITH GENERATED QR IMAGE & MESSAGE) */}
+                <TouchableOpacity
+                  style={[styles.downloadTicketBtn, { borderColor: "#c9a35b" }]}
+                  onPress={() => handleSharePass(b)}
                   activeOpacity={0.8}
                 >
                   <LinearGradient
                     colors={["#2b2214", "#15120c"]}
                     style={styles.downloadGradient}
                   >
-                    <Text style={styles.downloadTicketIcon}>📥</Text>
-                    <Text style={styles.downloadTicketText}>DOWNLOAD / SHARE VIP PASS</Text>
+                    <Text style={styles.downloadTicketIcon}>📲</Text>
+                    <Text style={styles.downloadTicketText}>SHARE VIP PASS & QR</Text>
                   </LinearGradient>
                 </TouchableOpacity>
 
+                {/* EMAIL BACKUP LINK */}
                 <TouchableOpacity
-                  style={[styles.downloadTicketBtn, { borderColor: "rgba(16, 185, 129, 0.4)", marginTop: 0 }]}
+                  style={styles.resendEmailLink}
                   onPress={() => handleResendEmail(b)}
-                  activeOpacity={0.8}
+                  activeOpacity={0.7}
                 >
-                  <LinearGradient
-                    colors={["#0c251a", "#071710"]}
-                    style={styles.downloadGradient}
-                  >
-                    <Text style={styles.downloadTicketIcon}>✉️</Text>
-                    <Text style={[styles.downloadTicketText, { color: "#34d399" }]}>EMAIL PDF PASS TO ME (GMAIL)</Text>
-                  </LinearGradient>
+                  <Text style={styles.resendEmailLinkText}>✉️ Need a copy in inbox? Email PDF Pass to Gmail</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -874,6 +1040,7 @@ export default function EventTicketPass({ route, navigation }) {
       </ScrollView>
 
       {renderPayfastModal()}
+      {renderEnlargedQrModal()}
     </SafeAreaView>
   );
 }
@@ -1380,5 +1547,196 @@ const styles = StyleSheet.create({
     color: "#f5c242",
     fontSize: 11,
     fontWeight: "700",
+  },
+  tapToEnlargeBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    marginTop: 6,
+    borderWidth: 0.5,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+  },
+  tapToEnlargeText: {
+    color: "#b88a38",
+    fontSize: 9.5,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+  resendEmailLink: {
+    paddingVertical: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 4,
+  },
+  resendEmailLinkText: {
+    color: "#a39580",
+    fontSize: 11,
+    fontWeight: "600",
+    textDecorationLine: "underline",
+  },
+
+  // ENLARGED QR MODAL STYLES
+  enlargedModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(5, 4, 3, 0.94)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  enlargedModalBackdropTouch: {
+    flex: 1,
+    width: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 18,
+  },
+  enlargedCardContainer: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "#14110c",
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: "rgba(201, 151, 66, 0.6)",
+    padding: 20,
+    alignItems: "center",
+    elevation: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.7,
+    shadowRadius: 16,
+  },
+  enlargedCardHeader: {
+    width: "100%",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 10,
+  },
+  enlargedBrandTitle: {
+    color: "#f5c242",
+    fontSize: 15,
+    fontWeight: "900",
+    letterSpacing: 1.5,
+  },
+  enlargedBrandSubtitle: {
+    color: "#aaa",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1,
+    marginTop: 1,
+  },
+  enlargedCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  enlargedCloseBtnText: {
+    color: "#f5c242",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  enlargedEventTitle: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "800",
+    textAlign: "center",
+    marginBottom: 4,
+  },
+  enlargedMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  enlargedMetaText: {
+    color: "#c99742",
+    fontSize: 11.5,
+    fontWeight: "600",
+  },
+  enlargedQrBox: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 2,
+    borderColor: "#c99742",
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.6,
+    shadowRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  enlargedQrImage: {
+    width: 240,
+    height: 240,
+    borderRadius: 8,
+  },
+  enlargedTicketId: {
+    color: "#f5c242",
+    fontSize: 14,
+    fontWeight: "900",
+    fontFamily: Platform.OS === "android" ? "monospace" : "Menlo",
+    letterSpacing: 2,
+    marginTop: 14,
+  },
+  enlargedTierBadge: {
+    color: "#4cd964",
+    fontSize: 11.5,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    marginTop: 3,
+  },
+  enlargedScannerHintRow: {
+    backgroundColor: "rgba(201, 151, 66, 0.1)",
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    width: "100%",
+  },
+  enlargedScannerHintText: {
+    color: "#ddd",
+    fontSize: 10.5,
+    textAlign: "center",
+    lineHeight: 15,
+  },
+  enlargedActionsRow: {
+    flexDirection: "row",
+    width: "100%",
+    gap: 10,
+    marginTop: 16,
+  },
+  enlargedActionBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#201a11",
+    borderWidth: 1,
+    borderColor: "#c99742",
+    borderRadius: 10,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  enlargedShareBtn: {
+    backgroundColor: "#c99742",
+    borderColor: "#e5b85c",
+  },
+  enlargedActionBtnIcon: {
+    fontSize: 14,
+  },
+  enlargedActionBtnText: {
+    color: "#f5c242",
+    fontSize: 11.5,
+    fontWeight: "800",
+    letterSpacing: 0.5,
   },
 });
