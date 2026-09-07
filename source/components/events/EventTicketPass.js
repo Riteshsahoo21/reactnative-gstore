@@ -80,6 +80,7 @@ export default function EventTicketPass({ route, navigation }) {
 
   const safeFetch = async (endpoint, options = {}) => {
     const candidates = getEventApiCandidates();
+    let lastRes = null;
     for (const base of candidates) {
       try {
         const controller = new AbortController();
@@ -87,12 +88,13 @@ export default function EventTicketPass({ route, navigation }) {
         const url = `${base.replace(/\/$/, "")}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
         const res = await fetch(url, { ...options, signal: controller.signal });
         clearTimeout(timer);
-        if (res) return res;
+        if (res && res.ok) return res;
+        if (res) lastRes = res;
       } catch (err) {
         // try next
       }
     }
-    return null;
+    return lastRes;
   };
 
   const fetchMyTickets = useCallback(async () => {
@@ -353,6 +355,7 @@ export default function EventTicketPass({ route, navigation }) {
           url: pdfDataUrl,
           filename: `TheGrandStore-VIP-Pass-${b.ticketId}`,
           type: "application/pdf",
+          useInternalStorage: true,
           message: captionMessage,
           failOnCancel: false,
         });
@@ -368,6 +371,7 @@ export default function EventTicketPass({ route, navigation }) {
           url: finalQrBase64,
           filename: `VIP-Pass-QR-${b.ticketId}`,
           type: "image/png",
+          useInternalStorage: true,
           message: captionMessage,
           failOnCancel: false,
         });
@@ -384,6 +388,7 @@ export default function EventTicketPass({ route, navigation }) {
                 `VIP-Pass-QR-${b.ticketId}.png`,
               ],
               type: "*/*",
+              useInternalStorage: true,
               message: captionMessage,
               failOnCancel: false,
             });
@@ -395,6 +400,7 @@ export default function EventTicketPass({ route, navigation }) {
               url: pdfDataUrl,
               filename: `TheGrandStore-VIP-Pass-${b.ticketId}`,
               type: "application/pdf",
+              useInternalStorage: true,
               message: captionMessage,
               failOnCancel: false,
             });
@@ -406,6 +412,7 @@ export default function EventTicketPass({ route, navigation }) {
             url: pdfDataUrl,
             filename: `TheGrandStore-VIP-Pass-${b.ticketId}`,
             type: "application/pdf",
+            useInternalStorage: true,
             message: captionMessage,
             failOnCancel: false,
           });
@@ -416,6 +423,7 @@ export default function EventTicketPass({ route, navigation }) {
             url: finalQrBase64,
             filename: `VIP-Pass-QR-${b.ticketId}`,
             type: "image/png",
+            useInternalStorage: true,
             message: captionMessage,
             failOnCancel: false,
           });

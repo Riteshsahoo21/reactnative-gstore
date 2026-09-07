@@ -19,18 +19,33 @@ import {
 import LinearGradient from "react-native-linear-gradient";
 import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_BASE, getActiveServerHost } from "../../resources/data/Constants";
+import {
+  API_BASE,
+  getActiveServerHost,
+  getActiveApiBase,
+  getCandidateBases,
+} from "../../resources/data/Constants";
 
 const SOMMELIER_CREST = require("../../resources/images/sommelier_crest.jpg");
 
 const { width } = Dimensions.get("window");
 
-const API_CANDIDATES = [
-  API_BASE,
-  "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
-  "http://10.0.2.2:5000/api",
-];
+const getEventApiCandidates = () => {
+  const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : API_BASE;
+  const list = [active];
+  if (typeof getCandidateBases === "function") {
+    list.push(...getCandidateBases());
+  }
+  list.push(
+    API_BASE,
+    "http://127.0.0.1:5000/api",
+    "http://192.168.1.102:5000/api",
+    "http://localhost:5000/api",
+    "http://10.0.2.2:5000/api",
+    "http://192.168.1.9:5000/api"
+  );
+  return [...new Set(list.filter(Boolean))];
+};
 
 const resolveEventImage = (img) => {
   if (!img) return "https://ik.imagekit.io/thegrandstore/bg.webp";
@@ -73,21 +88,24 @@ export default function EventDetails({ route, navigation }) {
   const [isPayfastLoading, setIsPayfastLoading] = useState(true);
   const webViewRef = useRef(null);
 
-  // Safe API helper
+  // Safe API helper (probes candidates until a successful response is found)
   const safeFetch = async (endpoint, options = {}) => {
-    for (const base of API_CANDIDATES) {
+    const candidates = getEventApiCandidates();
+    let lastRes = null;
+    for (const base of candidates) {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
         const url = `${base.replace(/\/$/, "")}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
         const res = await fetch(url, { ...options, signal: controller.signal });
         clearTimeout(timer);
-        if (res) return res;
+        if (res && res.ok) return res;
+        if (res) lastRes = res;
       } catch (err) {
         // try next candidate
       }
     }
-    return null;
+    return lastRes;
   };
 
   const fetchEventDetails = useCallback(async () => {

@@ -17,19 +17,34 @@ import {
 } from "react-native";
 import tmh_styles from "../../styles/tmh_styles";
 import AppHeader from "../../widgets/AppHeader";
-import { API_BASE, getActiveServerHost } from "../../resources/data/Constants";
+import {
+  API_BASE,
+  getActiveServerHost,
+  getActiveApiBase,
+  getCandidateBases,
+} from "../../resources/data/Constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const SOMMELIER_CREST = require("../../resources/images/sommelier_crest.jpg");
 
 const { width } = Dimensions.get("window");
 
-const API_CANDIDATES = [
-  API_BASE,
-  "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
-  "http://10.0.2.2:5000/api",
-];
+const getEventApiCandidates = () => {
+  const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : API_BASE;
+  const list = [active];
+  if (typeof getCandidateBases === "function") {
+    list.push(...getCandidateBases());
+  }
+  list.push(
+    API_BASE,
+    "http://127.0.0.1:5000/api",
+    "http://192.168.1.102:5000/api",
+    "http://localhost:5000/api",
+    "http://10.0.2.2:5000/api",
+    "http://192.168.1.9:5000/api"
+  );
+  return [...new Set(list.filter(Boolean))];
+};
 
 const CATEGORIES = [
   "All",
@@ -164,7 +179,7 @@ export default function EventsHub({ navigation, route }) {
 
   const fetchEvents = useCallback(async () => {
     let loaded = false;
-    for (const base of API_CANDIDATES) {
+    for (const base of getEventApiCandidates()) {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 4000);
