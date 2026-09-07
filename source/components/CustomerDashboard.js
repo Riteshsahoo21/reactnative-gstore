@@ -36,21 +36,16 @@ const showMessage = (msg) => {
 };
 
 const CustomerDashboard = ({ navigation, onBack, isActive }) => {
-  const [user, setUser] = useState({
-    name: "Collector",
-    email: "customer@thegrandstore.co.za",
-    phone: "+27 82 000 0000",
-    referralCode: "GRANDVIP88",
-    rewardBalance: 500,
-  });
+  const [user, setUser] = useState(null);
   const [userToken, setUserToken] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   // Quick stats
   const [ordersCount, setOrdersCount] = useState(0);
   const [wishlistCount, setWishlistCount] = useState(0);
-  const [bidsCount, setBidsCount] = useState(1);
-  const [ticketsCount, setTicketsCount] = useState(1);
+  const [bidsCount, setBidsCount] = useState(0);
+  const [ticketsCount, setTicketsCount] = useState(0);
 
   // Edit Profile Modal (Includes Name, Phone, and Password Update)
   const [isEditProfileVisible, setIsEditProfileVisible] = useState(false);
@@ -109,19 +104,13 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
   // Super Coins Loyalty State (Matches Super Coins.docx & Web SuperCoinsWallet.jsx)
   const [isSuperCoinsModalVisible, setIsSuperCoinsModalVisible] = useState(false);
   const [superCoinsWallet, setSuperCoinsWallet] = useState({
-    availableCoins: 2450,
-    availableRandValue: 245.0,
-    pendingCoins: 350,
-    pendingRandValue: 35.0,
-    expiringSoonCoins: 100,
-    expiringSoonDays: 14,
-    transactions: [
-      { id: "tx-1", type: "earned", description: "Order #GS-89104 Delivered (10% Earn Rate)", amount: 240, date: "Sep 4, 2026", status: "Available" },
-      { id: "tx-2", type: "redeemed", description: "Checkout Discount on Order #GS-78210", amount: -150, date: "Aug 28, 2026", status: "Redeemed" },
-      { id: "tx-3", type: "pending", description: "Order #GS-99321 In Transit (PostNet Sandton)", amount: 180, date: "Sep 6, 2026", status: "Pending Delivery" },
-      { id: "tx-4", type: "earned", description: "VIP Welcome Bonus & Tasting Profile Completion", amount: 200, date: "Aug 15, 2026", status: "Available" },
-      { id: "tx-5", type: "earned", description: "Rare Vault Review: 1982 Chateau Margaux", amount: 50, date: "Aug 10, 2026", status: "Available" },
-    ],
+    availableCoins: 0,
+    availableRandValue: 0,
+    pendingCoins: 0,
+    pendingRandValue: 0,
+    expiringSoonCoins: 0,
+    expiringSoonDays: 0,
+    transactions: [],
   });
   const [coinsLedgerFilter, setCoinsLedgerFilter] = useState("all"); // 'all' | 'earned' | 'redeemed' | 'pending'
   const [loadingCoins, setLoadingCoins] = useState(false);
@@ -298,13 +287,18 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
 
   const loadUserData = useCallback(async () => {
     try {
+      setInitialLoading(true);
       const storedUserInfo = await AsyncStorage.getItem("userInfo");
       const storedToken = await AsyncStorage.getItem("userToken");
       const storedName = await AsyncStorage.getItem("userName");
       const storedPhone = await AsyncStorage.getItem("userPhone");
       const storedEmail = await AsyncStorage.getItem("userEmail");
 
-      if (storedToken) setUserToken(storedToken);
+      if (storedToken) {
+        setUserToken(storedToken);
+      } else {
+        setUserToken(null);
+      }
 
       let parsedUser = null;
       if (storedUserInfo) {
@@ -313,18 +307,20 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
         } catch (e) {}
       }
 
-      const name = parsedUser?.name || parsedUser?.userName || storedName || "Collector User";
-      const email = parsedUser?.email || storedEmail || "customer@thegrandstore.co.za";
-      const phone = parsedUser?.phone || parsedUser?.phoneNumber || storedPhone || "+27 82 912 3456";
-      const referralCode = parsedUser?.referralCode || "GRANDVIP88";
-      const rewardBalance = parsedUser?.rewardBalance ?? 500;
+      const isAuthenticated = Boolean(storedToken && (parsedUser || storedName || storedEmail));
 
-      setUser({ name, email, phone, referralCode, rewardBalance });
-      setEditName(name);
-      setEditEmail(email);
-      setEditPhone(phone);
+      if (isAuthenticated) {
+        const name = parsedUser?.name || parsedUser?.userName || storedName || "Collector";
+        const email = parsedUser?.email || storedEmail || "";
+        const phone = parsedUser?.phone || parsedUser?.phoneNumber || storedPhone || "";
+        const referralCode = parsedUser?.referralCode || "";
+        const rewardBalance = parsedUser?.rewardBalance ?? 0;
 
-      if (storedToken) {
+        setUser({ name, email, phone, referralCode, rewardBalance });
+        setEditName(name);
+        setEditEmail(email);
+        setEditPhone(phone);
+
         try {
           const profileRes = await axios.get(`${API_BASE}/auth/profile`, {
             headers: { Authorization: `Bearer ${storedToken}` },
@@ -334,11 +330,11 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
             const p = profileRes.data;
             setUser((prev) => ({
               ...prev,
-              name: p.name || prev.name,
-              email: p.email || prev.email,
-              phone: p.phone || p.phoneNumber || prev.phone,
-              referralCode: p.referralCode || prev.referralCode,
-              rewardBalance: p.rewardBalance ?? prev.rewardBalance,
+              name: p.name || prev?.name || name,
+              email: p.email || prev?.email || email,
+              phone: p.phone || p.phoneNumber || prev?.phone || phone,
+              referralCode: p.referralCode || prev?.referralCode || referralCode,
+              rewardBalance: p.rewardBalance ?? prev?.rewardBalance ?? rewardBalance,
             }));
             setEditName(p.name || name);
             setEditEmail(p.email || email);
@@ -357,8 +353,63 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
         fetchReferralDetails(storedToken);
         fetchBankingData(storedToken);
         fetchSuperCoinsWallet(storedToken);
+
+        // Fetch real auction bids count
+        try {
+          const bidRes = await axios.get(`${API_BASE}/auction/user/dashboard`, {
+            headers: { Authorization: `Bearer ${storedToken}` },
+            timeout: 5000,
+          });
+          if (bidRes.data) {
+            const total = (bidRes.data.activeLots?.length || 0) + (bidRes.data.wonLots?.length || 0);
+            setBidsCount(total);
+          }
+        } catch (bErr) {
+          // keep 0
+        }
+
+        // Fetch real tickets count
+        try {
+          const tRes = await axios.get(`${API_BASE}/events/bookings/my-tickets`, {
+            headers: { Authorization: `Bearer ${storedToken}` },
+            timeout: 5000,
+          });
+          if (tRes.data && Array.isArray(tRes.data)) {
+            setTicketsCount(tRes.data.length);
+          }
+        } catch (tErr) {
+          // keep 0
+        }
+
+        // Fetch real orders count
+        try {
+          const ordRes = await axios.get(`${API_BASE}/orders/myorders`, {
+            headers: { Authorization: `Bearer ${storedToken}` },
+            timeout: 5000,
+          });
+          if (ordRes.data && Array.isArray(ordRes.data)) {
+            setOrdersCount(ordRes.data.length);
+          }
+        } catch (oErr) {
+          // fallback to cached orders
+        }
       } else {
-        fetchBankingData(null);
+        // GUEST: Clear all user state and counts
+        setUser(null);
+        setUserToken(null);
+        setOrdersCount(0);
+        setWishlistCount(0);
+        setBidsCount(0);
+        setTicketsCount(0);
+        setSuperCoinsWallet({
+          availableCoins: 0,
+          availableRandValue: 0,
+          pendingCoins: 0,
+          pendingRandValue: 0,
+          expiringSoonCoins: 0,
+          expiringSoonDays: 0,
+          transactions: [],
+        });
       }
 
       // Load Wishlist count
@@ -370,28 +421,20 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
         } catch (e) {}
       }
 
-      // Load Orders count
-      const storedOrders = await AsyncStorage.getItem("userOrders");
-      if (storedOrders) {
-        try {
-          const ords = JSON.parse(storedOrders);
-          if (Array.isArray(ords)) setOrdersCount(ords.length);
-        } catch (e) {}
-      }
-
-      // Load Bank info from local cache
-      const storedBank = await AsyncStorage.getItem("customerBankDetails");
-      if (storedBank) {
-        try {
-          const b = JSON.parse(storedBank);
-          if (b && (b.bankName || b.accountNumber)) {
-            setBankDetails(b);
-            setTempBankDetails(b);
-          }
-        } catch (e) {}
+      // If authenticated and ordersCount still 0, check userOrders cached in AsyncStorage
+      if (isAuthenticated) {
+        const storedOrders = await AsyncStorage.getItem("userOrders");
+        if (storedOrders) {
+          try {
+            const ords = JSON.parse(storedOrders);
+            if (Array.isArray(ords) && ords.length > 0) setOrdersCount(ords.length);
+          } catch (e) {}
+        }
       }
     } catch (err) {
       console.log("Error loading customer data:", err);
+    } finally {
+      setInitialLoading(false);
     }
   }, [fetchReferralDetails, fetchBankingData, fetchSuperCoinsWallet]);
 
@@ -410,12 +453,19 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
     const subUserLogout = DeviceEventEmitter.addListener("userLoggedOut", () => {
       console.log("[CustomerDashboard] userLoggedOut event received! Resetting dashboard...");
       setUserToken(null);
-      setUser({
-        name: "Collector",
-        email: "customer@thegrandstore.co.za",
-        phone: "+27 82 000 0000",
-        referralCode: "GRANDVIP88",
-        rewardBalance: 0,
+      setUser(null);
+      setOrdersCount(0);
+      setWishlistCount(0);
+      setBidsCount(0);
+      setTicketsCount(0);
+      setSuperCoinsWallet({
+        availableCoins: 0,
+        availableRandValue: 0,
+        pendingCoins: 0,
+        pendingRandValue: 0,
+        expiringSoonCoins: 0,
+        expiringSoonDays: 0,
+        transactions: [],
       });
       loadUserData();
     });
@@ -531,7 +581,7 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
       showMessage("Please provide Bank Name and Account Number");
       return;
     }
-    const accHolder = (tempBankDetails.accountHolder || user.name || "Collector User").trim();
+    const accHolder = (tempBankDetails.accountHolder || user?.name || "").trim();
 
     setSavingBank(true);
     try {
@@ -637,8 +687,8 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
   };
 
   // Refer & Earn Helpers
-  const activeReferralCode = referralSummary?.referralCode || user?.referralCode || "GRANDVIP88";
-  const referralLink = `https://thegrandstore.co.za/register?ref=${encodeURIComponent(activeReferralCode)}`;
+  const activeReferralCode = referralSummary?.referralCode || user?.referralCode || "";
+  const referralLink = activeReferralCode ? `https://thegrandstore.co.za/register?ref=${encodeURIComponent(activeReferralCode)}` : "https://thegrandstore.co.za/register";
   const programRewardAmount = referralSummary?.program?.rewardAmount ?? 500;
   const programWelcomeDiscount = referralSummary?.program?.welcomeDiscount ?? 250;
 
@@ -904,6 +954,147 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
     setSelectedCalendarDate(now.getDate());
   };
 
+  if (initialLoading) {
+    return (
+      <View style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
+        <ActivityIndicator size="large" color="#f5c242" />
+      </View>
+    );
+  }
+
+  if (!userToken || !user) {
+    return (
+      <View style={styles.container}>
+        {/* Fixed Luxury Header */}
+        <View style={styles.topBar}>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            {(onBack || (navigation?.canGoBack && navigation.canGoBack())) && (
+              <TouchableOpacity
+                onPress={() => {
+                  if (onBack) onBack();
+                  else if (navigation?.canGoBack && navigation.canGoBack()) navigation.goBack();
+                  else navigation.navigate("Home");
+                }}
+                style={{ marginRight: 12, padding: 4 }}
+              >
+                <Image
+                  source={require("../resources/images/back_icon.png")}
+                  style={{ width: 20, height: 18, tintColor: "#f5c242", resizeMode: "contain" }}
+                />
+              </TouchableOpacity>
+            )}
+            <Text style={styles.topBarTitle}>Customer Dashboard</Text>
+          </View>
+        </View>
+
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.guestScrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Luxury Guest Lock Card */}
+          <LinearGradient
+            colors={["#2a2216", "#17130e", "#0e0c09"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.guestHeroCard}
+          >
+            <View style={styles.guestIconCircle}>
+              <Text style={{ fontSize: 34 }}>🔒</Text>
+            </View>
+
+            <View style={styles.guestTierBadge}>
+              <Text style={styles.guestTierBadgeText}>PATRON SIGN IN REQUIRED</Text>
+            </View>
+
+            <Text style={styles.guestHeroTitle}>Private Collector Vault</Text>
+            <Text style={styles.guestHeroSub}>
+              You are currently browsing as a guest. Sign in or create an account to access your personal dashboard, track live orders, view auction bids, and redeem Super Coins rewards.
+            </Text>
+
+            {/* Primary Action: Sign In */}
+            <TouchableOpacity
+              style={styles.guestPrimaryBtn}
+              activeOpacity={0.88}
+              onPress={() => navigation.navigate("LoginScreen")}
+            >
+              <LinearGradient
+                colors={["#f5c242", "#d4a228", "#aa7c11"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.guestPrimaryBtnGrad}
+              >
+                <Text style={styles.guestPrimaryBtnText}>SIGN IN / CREATE ACCOUNT</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+
+            {/* Secondary Action: Explore Shop */}
+            <TouchableOpacity
+              style={styles.guestSecondaryBtn}
+              activeOpacity={0.8}
+              onPress={() => {
+                if (onBack) onBack();
+                else navigation.navigate("Shop");
+              }}
+            >
+              <Text style={styles.guestSecondaryBtnText}>Explore Wine & Spirits Collection →</Text>
+            </TouchableOpacity>
+          </LinearGradient>
+
+          {/* Member Privileges Preview */}
+          <Text style={styles.guestBenefitsHeading}>PATRON PRIVILEGES</Text>
+          <View style={styles.guestBenefitsCard}>
+            <View style={styles.guestBenefitRow}>
+              <Text style={styles.guestBenefitIcon}>📦</Text>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.guestBenefitTitle}>Order Tracking & Logistics</Text>
+                <Text style={styles.guestBenefitDesc}>
+                  Live courier tracking for door-to-door deliveries and PostNet branch pickups.
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.guestBenefitDivider} />
+
+            <View style={styles.guestBenefitRow}>
+              <Text style={styles.guestBenefitIcon}>🪙</Text>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.guestBenefitTitle}>Super Coins Loyalty Wallet</Text>
+                <Text style={styles.guestBenefitDesc}>
+                  Earn 10% cash-back coins on every purchase with instant checkout redemption.
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.guestBenefitDivider} />
+
+            <View style={styles.guestBenefitRow}>
+              <Text style={styles.guestBenefitIcon}>🏛️</Text>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.guestBenefitTitle}>Live Auction Bidding</Text>
+                <Text style={styles.guestBenefitDesc}>
+                  Verified 18+ patron bidding on allocated grand cru bottles and rare whiskies.
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.guestBenefitDivider} />
+
+            <View style={styles.guestBenefitRow}>
+              <Text style={styles.guestBenefitIcon}>🎟️</Text>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.guestBenefitTitle}>VIP Cellar Tasting Passes</Text>
+                <Text style={styles.guestBenefitDesc}>
+                  Digital QR event passes for exclusive cellar tastings and masterclasses.
+                </Text>
+              </View>
+            </View>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       {/* Fixed Luxury Header */}
@@ -963,12 +1154,12 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
               <Text style={styles.vipBadgeText}>👑 GRAND CELLAR VIP</Text>
             </View>
             <Text style={styles.profileName} numberOfLines={1}>
-              {user.name}
+              {user?.name || "Collector"}
             </Text>
             <Text style={styles.profileEmail} numberOfLines={1}>
-              {user.email}
+              {user?.email || ""}
             </Text>
-            <Text style={styles.profilePhone}>{user.phone}</Text>
+            <Text style={styles.profilePhone}>{user?.phone || ""}</Text>
           </View>
         </LinearGradient>
 
@@ -1267,7 +1458,7 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
             </View>
             <View style={styles.rewardPill}>
               <Text style={styles.rewardPillText}>
-                R{referralSummary?.rewardBalance ?? user.rewardBalance ?? 500}
+                R{referralSummary?.rewardBalance ?? user?.rewardBalance ?? 0}
               </Text>
             </View>
             <Text style={styles.menuChevron}>›</Text>
@@ -1603,7 +1794,7 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
                         <View>
                           <Text style={styles.metallicCardMetaLabel}>ACCOUNT HOLDER</Text>
                           <Text style={styles.metallicCardMetaValue}>
-                            {bankDetails.accountHolder || user.name || "Collector"}
+                            {bankDetails.accountHolder || user?.name || "Collector"}
                           </Text>
                         </View>
                         <View style={{ alignItems: "flex-end" }}>
@@ -4695,6 +4886,133 @@ const styles = StyleSheet.create({
     color: "#8a7e72",
     fontSize: 9.5,
     lineHeight: 13.5,
+  },
+  // Guest Screen Luxury Styles
+  guestScrollContent: {
+    padding: 16,
+    paddingBottom: 40,
+  },
+  guestHeroCard: {
+    borderRadius: 20,
+    padding: 24,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(245, 194, 66, 0.25)",
+    marginBottom: 20,
+    marginTop: 8,
+  },
+  guestIconCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: "rgba(245, 194, 66, 0.12)",
+    borderWidth: 1.5,
+    borderColor: "rgba(245, 194, 66, 0.35)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  guestTierBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 20,
+    backgroundColor: "rgba(245, 194, 66, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 194, 66, 0.3)",
+    marginBottom: 10,
+  },
+  guestTierBadgeText: {
+    color: "#f5c242",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+  },
+  guestHeroTitle: {
+    color: "#ffffff",
+    fontSize: 20,
+    fontWeight: "800",
+    marginBottom: 8,
+    textAlign: "center",
+    letterSpacing: 0.5,
+  },
+  guestHeroSub: {
+    color: "#a8a29e",
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+    marginBottom: 22,
+    paddingHorizontal: 10,
+  },
+  guestPrimaryBtn: {
+    width: "100%",
+    borderRadius: 14,
+    overflow: "hidden",
+    marginBottom: 12,
+    shadowColor: "#f5c242",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  guestPrimaryBtnGrad: {
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  guestPrimaryBtnText: {
+    color: "#000000",
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: 1,
+  },
+  guestSecondaryBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  guestSecondaryBtnText: {
+    color: "#f5c242",
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  guestBenefitsHeading: {
+    color: "#8a7e72",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+  guestBenefitsCard: {
+    backgroundColor: "#13100c",
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+  },
+  guestBenefitRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+  guestBenefitIcon: {
+    fontSize: 20,
+    marginTop: 2,
+  },
+  guestBenefitTitle: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 3,
+  },
+  guestBenefitDesc: {
+    color: "#8a7e72",
+    fontSize: 11.5,
+    lineHeight: 16,
+  },
+  guestBenefitDivider: {
+    height: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    marginVertical: 14,
   },
 });
 

@@ -77,15 +77,17 @@ const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
 
 // Resilient API candidates for Android physical device (reverse proxy, LAN Wi-Fi, emulator)
 const API_CANDIDATES = [
-  API_BASE,
   "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
+  "http://127.0.0.1:5000/api",
   "http://10.0.2.2:5000/api",
+  "http://192.168.1.9:5000/api",
+  API_BASE,
 ];
 const getApiBaseCandidates = () => [...new Set(API_CANDIDATES.filter(Boolean))];
 
 const safeApiFetch = async (path, options = {}, timeoutMs = 4000) => {
   const candidates = getApiBaseCandidates();
+  let lastRes = null;
   for (const base of candidates) {
     try {
       const controller = new AbortController();
@@ -95,12 +97,18 @@ const safeApiFetch = async (path, options = {}, timeoutMs = 4000) => {
         signal: controller.signal,
       });
       clearTimeout(id);
-      if (res && res.status < 500) return res;
+      if (res && res.ok) return res;
+      if (res && res.status < 500) {
+        lastRes = res;
+        // If 404 Not Found, try next candidate host that may have the route implemented
+        if (res.status === 404) continue;
+        return res;
+      }
     } catch (e) {
       // try next candidate
     }
   }
-  return null;
+  return lastRes;
 };
 
 const showMessage = (msg) => {
@@ -610,6 +618,9 @@ const Checkout = ({ navigation, route }) => {
   const [isSearchingPostal, setIsSearchingPostal] = useState(false);
   const postalSearchTimeout = useRef(null);
 
+  // Destination Mode: 'domestic_sa' | 'international_dhl'
+  const [destinationMode, setDestinationMode] = useState("domestic_sa");
+
   // Delivery Preference: 'home' (Door Courier), 'postnet' (PostNet Pickup), 'best' (Compare All)
   const [deliveryPreference, setDeliveryPreference] = useState("home");
 
@@ -637,6 +648,9 @@ const Checkout = ({ navigation, route }) => {
   // Payment Method: 'payfast' or 'bank_transfer'
   const [paymentMethod, setPaymentMethod] = useState("payfast");
 
+  // Multi-step Checkout Progress State (1: Delivery Details, 2: Delivery Method, 3: Payment)
+  const [checkoutStep, setCheckoutStep] = useState(1);
+
   // Order Completion State
   const [orderCompleted, setOrderCompleted] = useState(false);
   const [createdOrder, setCreatedOrder] = useState(null);
@@ -652,9 +666,58 @@ const Checkout = ({ navigation, route }) => {
     return imagePath.startsWith("http") ? imagePath : `${IMAGE_BASE_URL}${imagePath}`;
   };
 
+  const selectDeliveryMode = (mode) => {
+    setQuote(null);
+    setDutiesAccepted(false);
+    if (mode === "domestic_home") {
+      setDestinationMode("domestic_sa");
+      setDeliveryPreference("home");
+      setCountry("South Africa");
+    } else if (mode === "domestic_postnet") {
+      setDestinationMode("domestic_sa");
+      setDeliveryPreference("postnet");
+      setCountry("South Africa");
+    } else if (mode === "international_dhl") {
+      setDestinationMode("international_dhl");
+      setDeliveryPreference("home");
+      const currentCountry =
+        country && !["south africa", "za", "rsa"].includes(country.trim().toLowerCase())
+          ? country
+          : "United Kingdom";
+      setCountry(currentCountry);
+      setPaymentMethod("bank_transfer");
+      showMessage(`✈️ International DHL selected for ${currentCountry}`);
+    }
+  };
+
+  const handleIdNumberChange = (text) => {
+    setGuestIdNumber(text);
+    if (guestIdType === "national_id") {
+      const clean = text.replace(/\D/g, "");
+      if (clean.length >= 6) {
+        const yy = parseInt(clean.substring(0, 2), 10);
+        const mm = clean.substring(2, 4);
+        const dd = clean.substring(4, 6);
+        const monthNum = parseInt(mm, 10);
+        const dayNum = parseInt(dd, 10);
+
+        if (monthNum >= 1 && monthNum <= 12 && dayNum >= 1 && dayNum <= 31) {
+          const currentYear = new Date().getFullYear();
+          const currentYY = currentYear % 100;
+          const fullYear = yy <= currentYY ? 2000 + yy : 1900 + yy;
+          const calculatedAge = currentYear - fullYear;
+          if (calculatedAge >= 18 && calculatedAge <= 110) {
+            setGuestDob(`${fullYear}-${mm}-${dd}`);
+          }
+        }
+      }
+    }
+  };
+
   const isSouthAfrica =
-    country.trim().toLowerCase() === "south africa" ||
-    country.trim().toLowerCase() === "za";
+    destinationMode !== "international_dhl" &&
+    (country.trim().toLowerCase() === "south africa" ||
+      country.trim().toLowerCase() === "za");
 
   // Load items and pre-fill user profile info
   useEffect(() => {
@@ -1261,11 +1324,11 @@ const Checkout = ({ navigation, route }) => {
 
         // Auto-select preferred courier
         if (deliveryPreference === "postnet") {
-          const pn = quotesList.find((q) => q.courierName === "PostNet");
+          const pn = quotesList.find((q) => q.courierName === "PostNet" && (q.deliveryType === "pickup" || q.serviceLevel.includes("Collection")));
           setSelectedCourier(pn || quotesList[0]);
         } else if (effectiveCountry.toLowerCase() === "south africa") {
-          const cg = quotesList.find((q) => q.courierName === "Courier Guy");
-          setSelectedCourier(cg || quotesList[0]);
+          const pn = quotesList.find((q) => q.serviceLevel.includes("Standard")) || quotesList.find((q) => q.courierName === "PostNet");
+          setSelectedCourier(pn || quotesList[0]);
         } else {
           // International -> DHL Express
           const dhl = quotesList.find((q) => q.courierName.includes("DHL"));
@@ -1280,29 +1343,40 @@ const Checkout = ({ navigation, route }) => {
             ? [
                 {
                   courierName: "PostNet",
-                  serviceLevel: "Counter to Counter",
-                  cost: 250,
+                  serviceLevel: "PostNet Store Collection",
+                  deliveryType: "pickup",
+                  cost: 100,
                   estimatedDays: "2-3 business days",
                 },
               ]
             : [
                 {
-                  courierName: "Courier Guy",
-                  serviceLevel: "Door to Door Standard",
-                  cost: subtotal >= 1000 || subtotal === 0 ? 0 : 150,
-                  estimatedDays: "2-3 business days",
+                  courierName: "PostNet",
+                  serviceLevel: "PostNet Standard Delivery",
+                  deliveryType: "home",
+                  cost: 120,
+                  estimatedDays: "2-5 business days",
+                },
+                {
+                  courierName: "PostNet",
+                  serviceLevel: "PostNet Express Delivery",
+                  deliveryType: "home",
+                  cost: 180,
+                  estimatedDays: "1-2 business days",
                 },
                 {
                   courierName: "Courier Guy",
-                  serviceLevel: "Express Overnight",
-                  cost: 220,
-                  estimatedDays: "1 business day",
+                  serviceLevel: "Courier Guy Door Delivery",
+                  deliveryType: "home",
+                  cost: 150,
+                  estimatedDays: "2-3 business days",
                 },
               ]
           : [
               {
                 courierName: "DHL Express",
-                serviceLevel: "International Air Courier",
+                serviceLevel: "DHL Express International Air",
+                deliveryType: "home",
                 cost: 1800,
                 estimatedDays: "3-5 business days",
               },
@@ -1344,18 +1418,44 @@ const Checkout = ({ navigation, route }) => {
     } catch (err) {
       console.log("Delivery quote fallback applied:", err?.message || err);
       const fallbackQuotes = isSouthAfrica
-        ? [
-            {
-              courierName: deliveryPreference === "postnet" ? "PostNet" : "Courier Guy",
-              serviceLevel: deliveryPreference === "postnet" ? "Counter to Counter" : "Door to Door",
-              cost: deliveryPreference === "postnet" ? 250 : subtotal >= 1000 ? 0 : 150,
-              estimatedDays: "2-3 business days",
-            },
-          ]
+        ? deliveryPreference === "postnet"
+          ? [
+              {
+                courierName: "PostNet",
+                serviceLevel: "PostNet Store Collection",
+                deliveryType: "pickup",
+                cost: 100,
+                estimatedDays: "2-3 business days",
+              },
+            ]
+          : [
+              {
+                courierName: "PostNet",
+                serviceLevel: "PostNet Standard Delivery",
+                deliveryType: "home",
+                cost: 120,
+                estimatedDays: "2-5 business days",
+              },
+              {
+                courierName: "PostNet",
+                serviceLevel: "PostNet Express Delivery",
+                deliveryType: "home",
+                cost: 180,
+                estimatedDays: "1-2 business days",
+              },
+              {
+                courierName: "Courier Guy",
+                serviceLevel: "Courier Guy Door Delivery",
+                deliveryType: "home",
+                cost: 150,
+                estimatedDays: "2-3 business days",
+              },
+            ]
         : [
             {
               courierName: "DHL Express",
-              serviceLevel: "International Air Courier",
+              serviceLevel: "DHL Express Worldwide",
+              deliveryType: "home",
               cost: 1800,
               estimatedDays: "3-5 business days",
             },
@@ -1432,9 +1532,9 @@ const Checkout = ({ navigation, route }) => {
   if (selectedCourier) {
     shippingFee = Number(selectedCourier.cost) || 0;
   } else if (deliveryPreference === "postnet") {
-    shippingFee = 250;
+    shippingFee = 100;
   } else if (isSouthAfrica) {
-    shippingFee = subtotal >= 1000 || subtotal === 0 ? 0 : 150;
+    shippingFee = 120;
   } else {
     // International DHL Express flat rate
     shippingFee = 1800;
@@ -1525,6 +1625,86 @@ const Checkout = ({ navigation, route }) => {
         },
       ]
     );
+  };
+
+  // Step 1 -> Step 2 validation & rate calculation
+  const handleProceedToDeliveryMethod = async () => {
+    if (!checkoutItems || checkoutItems.length === 0) {
+      showMessage("Your order reserve is empty. Please add bottles first.");
+      return;
+    }
+    if (!fullName.trim()) {
+      showMessage("Please enter recipient full name");
+      return;
+    }
+    if (!phone.trim()) {
+      showMessage("Please enter a phone number for delivery updates");
+      return;
+    }
+    if (!email.trim() || !email.includes("@")) {
+      showMessage("Please enter a valid email for order receipt");
+      return;
+    }
+    if (deliveryPreference === "home" && !address.trim()) {
+      showMessage("Please enter your street delivery address");
+      return;
+    }
+    if (deliveryPreference === "postnet" && !preferredPostnetStore) {
+      showMessage("Please search and select your preferred PostNet collection branch");
+      return;
+    }
+    if (!isAgeConfirmed) {
+      showMessage("Please certify that you are at least 18 years of age to purchase alcoholic beverages.");
+      return;
+    }
+
+    // Guest checkout KYC verification
+    const token = await AsyncStorage.getItem("userToken");
+    if (!token) {
+      if (!guestIdNumber.trim()) {
+        showMessage("Please enter your official ID / Passport number for 18+ verification.");
+        return;
+      }
+      if (!guestDob.trim()) {
+        showMessage("Please enter your date of birth (YYYY-MM-DD).");
+        return;
+      }
+      const birthDate = new Date(guestDob.trim());
+      if (isNaN(birthDate.getTime())) {
+        showMessage("Please enter a valid date of birth (YYYY-MM-DD).");
+        return;
+      }
+      const today = new Date();
+      let age = today.getFullYear() - birthDate.getFullYear();
+      const m = today.getMonth() - birthDate.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+      }
+      if (age < 18) {
+        showMessage("You must be at least 18 years of age to purchase fine spirits.");
+        return;
+      }
+      if (!guestDocUrl) {
+        showMessage("Please upload or attach your official ID document for 18+ verification.");
+        return;
+      }
+    }
+
+    await calculateDeliveryQuote();
+    setCheckoutStep(2);
+  };
+
+  // Step 2 -> Step 3 validation
+  const handleProceedToPayment = () => {
+    if (!selectedCourier) {
+      showMessage("Please select your preferred delivery service.");
+      return;
+    }
+    if (!isSouthAfrica && !dutiesAccepted) {
+      showMessage("Please accept the International Duties acknowledgment.");
+      return;
+    }
+    setCheckoutStep(3);
   };
 
   // Submit Order & Launch PayFast Sandbox or EFT Instructions
@@ -1792,9 +1972,17 @@ const Checkout = ({ navigation, route }) => {
             }
           } else {
             console.log("PayFast generate-shop returned non-ok status:", pfRes?.status);
+            const errData = await pfRes?.json?.().catch(() => null);
+            const errMsg = errData?.message || "PayFast payment gateway could not be initiated. Please choose Bank Transfer or retry.";
+            Alert.alert("Payment Gateway Notice", errMsg);
+            setIsSubmitting(false);
+            return;
           }
         } catch (pfErr) {
           console.log("PayFast sandbox generation error:", pfErr);
+          Alert.alert("Payment Gateway Error", "Could not connect to payment gateway. Please select Bank Transfer or check connection.");
+          setIsSubmitting(false);
+          return;
         }
       }
 
@@ -2248,6 +2436,15 @@ const Checkout = ({ navigation, route }) => {
   if (orderCompleted && createdOrder) {
     const isBank = paymentMethod === "bank_transfer";
     const isPaid = createdOrder.paymentStatus === "Paid";
+    const isPostNet =
+      deliveryPreference === "postnet" ||
+      Boolean(createdOrder.pickupStore) ||
+      createdOrder.deliveryType === "pickup" ||
+      (createdOrder.courierName || "").toLowerCase().includes("postnet");
+    const isDHL =
+      destinationMode === "international_dhl" ||
+      (createdOrder.courierName || "").toLowerCase().includes("dhl") ||
+      !isSouthAfrica;
 
     return (
       <SafeAreaView style={styles.container}>
@@ -2465,21 +2662,31 @@ const Checkout = ({ navigation, route }) => {
                 {
                   stage: 4,
                   name: "Collected by Courier",
-                  desc: isPostNet ? "Collected by PostNet Logistics" : "Collected by Courier Guy Express",
+                  desc: isPostNet
+                    ? "Collected by PostNet Logistics"
+                    : isDHL
+                    ? "Collected by DHL Express Air Courier"
+                    : "Collected by Courier Guy Express",
                   done: false,
                   active: false,
                 },
                 {
                   stage: 5,
                   name: "In Transit 🚚",
-                  desc: "Secured transport via regional distribution hub",
+                  desc: isDHL
+                    ? "Secured international air transit & customs clearance"
+                    : "Secured transport via regional distribution hub",
                   done: false,
                   active: false,
                 },
                 {
                   stage: 6,
                   name: isPostNet ? "Ready for Collection 📍" : "Delivered ✅",
-                  desc: isPostNet ? "Counter collection with SMS PIN & 18+ ID" : "Direct doorstep handover & signature",
+                  desc: isPostNet
+                    ? "Counter collection with SMS PIN & 18+ ID"
+                    : isDHL
+                    ? "International doorstep handover & adult signature"
+                    : "Direct doorstep handover & signature",
                   done: false,
                   active: false,
                 },
@@ -2710,629 +2917,732 @@ const Checkout = ({ navigation, route }) => {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Delivery Method Selection (Matching Web Version) */}
-          <View style={styles.sectionCard}>
-            <View style={styles.stepHeader}>
-              <View style={styles.stepNumberCircle}>
-                <Text style={styles.stepNumber}>📦</Text>
+          {/* Top 3-Step Wizard Progress Bar */}
+          <View style={styles.topProgressContainer}>
+            <TouchableOpacity
+              style={[styles.progressStepTouch, checkoutStep === 1 && styles.progressStepActive]}
+              onPress={() => setCheckoutStep(1)}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.progressBadge, checkoutStep > 1 && styles.progressBadgeDone, checkoutStep === 1 && styles.progressBadgeActive]}>
+                <Text style={[styles.progressBadgeText, checkoutStep === 1 && styles.progressBadgeTextActive, checkoutStep > 1 && styles.progressBadgeTextDone]}>
+                  {checkoutStep > 1 ? "✓" : "1"}
+                </Text>
               </View>
-              <Text style={styles.stepTitle}>Delivery Method</Text>
-            </View>
+              <Text style={[styles.progressLabel, checkoutStep === 1 && styles.progressLabelActive]}>Delivery Details</Text>
+            </TouchableOpacity>
 
-            <Text style={styles.subtleHelperText}>
-              Choose how you want to receive your bottles before entering address details:
-            </Text>
+            <View style={[styles.progressLine, checkoutStep >= 2 && styles.progressLineActive]} />
 
-            <View style={styles.deliveryMethodsRow}>
-              {/* Home Door Delivery (Local & Global) */}
-              <TouchableOpacity
-                style={[
-                  styles.deliveryMethodCard,
-                  deliveryPreference === "home" && styles.deliveryMethodCardActive,
-                ]}
-                onPress={() => setDeliveryPreference("home")}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.deliveryMethodIcon}>🏠</Text>
-                <Text style={styles.deliveryMethodTitle}>Door Delivery</Text>
-                <Text style={styles.deliveryMethodDesc}>
-                  Courier Guy locally, or DHL Express worldwide
+            <TouchableOpacity
+              style={[styles.progressStepTouch, checkoutStep === 2 && styles.progressStepActive]}
+              onPress={() => { if (checkoutStep > 2) setCheckoutStep(2); }}
+              disabled={checkoutStep < 2}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.progressBadge, checkoutStep > 2 && styles.progressBadgeDone, checkoutStep === 2 && styles.progressBadgeActive]}>
+                <Text style={[styles.progressBadgeText, checkoutStep === 2 && styles.progressBadgeTextActive, checkoutStep > 2 && styles.progressBadgeTextDone]}>
+                  {checkoutStep > 2 ? "✓" : "2"}
                 </Text>
-              </TouchableOpacity>
+              </View>
+              <Text style={[styles.progressLabel, checkoutStep === 2 && styles.progressLabelActive]}>Delivery Method</Text>
+            </TouchableOpacity>
 
-              {/* PostNet Pickup */}
-              <TouchableOpacity
-                style={[
-                  styles.deliveryMethodCard,
-                  deliveryPreference === "postnet" && styles.deliveryMethodCardActive,
-                ]}
-                onPress={() => {
-                  setDeliveryPreference("postnet");
-                  setCountry("South Africa");
-                }}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.deliveryMethodIcon}>📦</Text>
-                <Text style={styles.deliveryMethodTitle}>PostNet</Text>
-                <Text style={styles.deliveryMethodDesc}>
-                  Branch pickup (South Africa only)
-                </Text>
-              </TouchableOpacity>
+            <View style={[styles.progressLine, checkoutStep >= 3 && styles.progressLineActive]} />
 
-              {/* Compare All */}
-              <TouchableOpacity
-                style={[
-                  styles.deliveryMethodCard,
-                  deliveryPreference === "best" && styles.deliveryMethodCardActive,
-                ]}
-                onPress={() => setDeliveryPreference("best")}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.deliveryMethodIcon}>⚡</Text>
-                <Text style={styles.deliveryMethodTitle}>Compare All</Text>
-                <Text style={styles.deliveryMethodDesc}>
-                  See all Courier Guy, PostNet & DHL rates
+            <TouchableOpacity
+              style={[styles.progressStepTouch, checkoutStep === 3 && styles.progressStepActive]}
+              disabled={checkoutStep < 3}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.progressBadge, checkoutStep === 3 && styles.progressBadgeActive]}>
+                <Text style={[styles.progressBadgeText, checkoutStep === 3 && styles.progressBadgeTextActive]}>
+                  3
                 </Text>
-              </TouchableOpacity>
-            </View>
+              </View>
+              <Text style={[styles.progressLabel, checkoutStep === 3 && styles.progressLabelActive]}>Payment</Text>
+            </TouchableOpacity>
           </View>
 
-          {/* Step 1: Delivery Address & Google Places Autocomplete */}
-          <View style={styles.sectionCard}>
-            <View style={styles.stepHeader}>
-              <View style={styles.stepNumberCircle}>
-                <Text style={styles.stepNumber}>1</Text>
-              </View>
-              <Text style={styles.stepTitle}>Recipient & Delivery Address</Text>
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>FULL NAME *</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="e.g. Alexander Sterling"
-                placeholderTextColor="#666"
-                value={fullName}
-                onChangeText={setFullName}
-              />
-            </View>
-
-            <View style={styles.rowInputs}>
-              {/* Phone Number Input (Only Numbers As Key) */}
-              <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
-                <Text style={styles.inputLabel}>PHONE NUMBER *</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="e.g. 0821234567"
-                  placeholderTextColor="#666"
-                  keyboardType="number-pad"
-                  value={phone}
-                  onChangeText={(text) => {
-                    const numbersOnly = text.replace(/[^0-9]/g, "");
-                    setPhone(numbersOnly);
-                  }}
-                />
-              </View>
-
-              <View style={[styles.inputGroup, { flex: 1 }]}>
-                <Text style={styles.inputLabel}>EMAIL (FOR RECEIPT) *</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="name@domain.com"
-                  placeholderTextColor="#666"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  value={email}
-                  onChangeText={setEmail}
-                />
-              </View>
-            </View>
-
-            {/* Street Address or PostNet Banner */}
-            {deliveryPreference !== "postnet" ? (
-              <View style={styles.inputGroup}>
-                <View style={styles.labelRowWithIcon}>
-                  <Text style={styles.inputLabel}>
-                    STREET ADDRESS (LOCAL & WORLDWIDE AUTOCOMPLETE) *
-                  </Text>
-                  {isSearchingAddress && (
-                    <ActivityIndicator size="small" color="#c99742" style={{ marginLeft: 6 }} />
-                  )}
-                </View>
-
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="Start typing street address, house, or building (any country)..."
-                  placeholderTextColor="#666"
-                  value={address}
-                  onChangeText={handleAddressChange}
-                />
-
-                {/* Street Address Dropdown */}
-                {showAddressDropdown && addressPredictions.length > 0 && (
-                  <View style={styles.predictionsDropdown}>
-                    <View style={styles.predictionsHeader}>
-                      <Text style={styles.predictionsHeaderText}>SUGGESTED ADDRESSES</Text>
-                      <Text style={styles.googlePoweredText}>Powered by Google Maps</Text>
-                    </View>
-                    {addressPredictions.map((p, idx) => (
-                      <TouchableOpacity
-                        key={p.place_id || idx}
-                        style={[
-                          styles.predictionItem,
-                          idx === addressPredictions.length - 1 && { borderBottomWidth: 0 },
-                        ]}
-                        onPress={() => handleSelectAddressPrediction(p)}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.predictionPinIcon}>📍</Text>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.predictionMainText} numberOfLines={1}>
-                            {p.structured_formatting?.main_text || p.description}
-                          </Text>
-                          {p.structured_formatting?.secondary_text && (
-                            <Text style={styles.predictionSubText} numberOfLines={1}>
-                              {p.structured_formatting.secondary_text}
-                            </Text>
-                          )}
-                        </View>
-                      </TouchableOpacity>
-                    ))}
+          {/* ========================================================================= */}
+          {/* STEP 1: DELIVERY DETAILS & LOCATION                                       */}
+          {/* ========================================================================= */}
+          {checkoutStep === 1 && (
+            <>
+              {/* Delivery Mode Selection: Home, PostNet, or International DHL */}
+              <View style={styles.sectionCard}>
+                <View style={styles.stepHeader}>
+                  <View style={styles.stepNumberCircle}>
+                    <Text style={styles.stepNumber}>1</Text>
                   </View>
-                )}
-              </View>
-            ) : (
-              <View style={styles.postnetNoticeBox}>
-                <Text style={styles.postnetNoticeIcon}>📦</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.postnetNoticeTitle}>
-                    {preferredPostnetStore
-                      ? `Pickup: ${preferredPostnetStore.name}`
-                      : "PostNet Counter Pickup"}
-                  </Text>
-                  <Text style={styles.postnetNoticeDesc}>
-                    {preferredPostnetStore
-                      ? `${preferredPostnetStore.address} (Tel: ${preferredPostnetStore.telephone || "N/A"})`
-                      : "No street address needed. Select your nearby PostNet branch from the list below."}
-                  </Text>
+                  <Text style={styles.stepTitle}>Choose Delivery Location</Text>
+                </View>
+
+                <Text style={styles.subtleHelperText}>
+                  Where would you like your fine spirits delivered?
+                </Text>
+
+                <View style={styles.deliveryModesColumn}>
+                  {/* Option 1: Deliver to my address (Standard & Express Home Delivery) */}
+                  <TouchableOpacity
+                    style={[
+                      styles.modeCard,
+                      destinationMode === "domestic_sa" && deliveryPreference === "home" && styles.modeCardActive,
+                    ]}
+                    onPress={() => selectDeliveryMode("domestic_home")}
+                    activeOpacity={0.8}
+                  >
+                    <View style={styles.modeIconBox}>
+                      <Text style={styles.modeIcon}>🏠</Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <View style={styles.modeTitleRow}>
+                        <Text style={styles.modeTitle}>Deliver to my address</Text>
+                        <View style={styles.modeTag}>
+                          <Text style={styles.modeTagText}>PostNet &amp; Courier Guy</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.modeSubtitle}>
+                        Standard (2–5 days @ R120) or Express (1–2 days @ R180) to your door in South Africa
+                      </Text>
+                    </View>
+                    <View style={styles.modeRadio}>
+                      {destinationMode === "domestic_sa" && deliveryPreference === "home" && (
+                        <View style={styles.modeRadioDot} />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Option 2: Collect from a PostNet Store (PostNet-to-PostNet Counter Collection) */}
+                  <TouchableOpacity
+                    style={[
+                      styles.modeCard,
+                      destinationMode === "domestic_sa" && deliveryPreference === "postnet" && styles.modeCardActive,
+                    ]}
+                    onPress={() => selectDeliveryMode("domestic_postnet")}
+                    activeOpacity={0.8}
+                  >
+                    <View style={styles.modeIconBox}>
+                      <Text style={styles.modeIcon}>🏪</Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <View style={styles.modeTitleRow}>
+                        <Text style={styles.modeTitle}>Collect from a PostNet Store</Text>
+                        <View style={[styles.modeTag, { backgroundColor: "rgba(76, 217, 100, 0.15)" }]}>
+                          <Text style={[styles.modeTagText, { color: "#4cd964" }]}>R100 • 400+ Stores</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.modeSubtitle}>
+                        PostNet-to-PostNet counter collection (2–3 days). Pick up when convenient with SMS PIN.
+                      </Text>
+                    </View>
+                    <View style={styles.modeRadio}>
+                      {destinationMode === "domestic_sa" && deliveryPreference === "postnet" && (
+                        <View style={styles.modeRadioDot} />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Option 3: International DHL Air Courier */}
+                  <TouchableOpacity
+                    style={[
+                      styles.modeCard,
+                      destinationMode === "international_dhl" && styles.modeCardActive,
+                    ]}
+                    onPress={() => selectDeliveryMode("international_dhl")}
+                    activeOpacity={0.8}
+                  >
+                    <View style={styles.modeIconBox}>
+                      <Text style={styles.modeIcon}>✈️</Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <View style={styles.modeTitleRow}>
+                        <Text style={styles.modeTitle}>International DHL</Text>
+                        <View style={[styles.modeTag, { backgroundColor: "rgba(245, 194, 66, 0.2)" }]}>
+                          <Text style={[styles.modeTagText, { color: "#f5c242" }]}>DHL Express Air</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.modeSubtitle}>
+                        Air express courier to UK, USA, Europe &amp; 50+ countries (3–5 days). Base R1,800.
+                      </Text>
+                    </View>
+                    <View style={styles.modeRadio}>
+                      {destinationMode === "international_dhl" && (
+                        <View style={styles.modeRadioDot} />
+                      )}
+                    </View>
+                  </TouchableOpacity>
                 </View>
               </View>
-            )}
 
-            {/* City & Postal Code Inputs */}
-            <View style={styles.rowInputs}>
-              {/* City Input with Autocomplete Dropdown */}
-              <View style={[styles.inputGroup, { flex: 1.2, marginRight: 8 }]}>
-                <View style={styles.labelRowWithIcon}>
-                  <Text style={styles.inputLabel}>CITY (DROPDOWN) *</Text>
-                  {isSearchingCity && (
-                    <ActivityIndicator size="small" color="#c99742" style={{ marginLeft: 4 }} />
-                  )}
+              {/* Recipient Information Card */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.cardHeaderTitle}>RECIPIENT INFORMATION</Text>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>FULL NAME *</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="e.g. Alexander Sterling"
+                    placeholderTextColor="#666"
+                    value={fullName}
+                    onChangeText={setFullName}
+                  />
                 </View>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="e.g. Cape Town, London, Dubai"
-                  placeholderTextColor="#666"
-                  value={city}
-                  onFocus={() => {
-                    if (cityPredictions.length === 0) setCityPredictions(DEFAULT_SA_CITIES);
-                    setShowCityDropdown(true);
-                  }}
-                  onChangeText={handleCityInputChange}
-                />
 
-                {/* City Autocomplete Dropdown */}
-                {showCityDropdown && (
-                  <View style={styles.predictionsDropdown}>
-                    <View style={styles.predictionsHeader}>
-                      <Text style={styles.predictionsHeaderText}>SUGGESTED CITIES</Text>
-                      <TouchableOpacity onPress={() => setShowCityDropdown(false)}>
-                        <Text style={{ color: "#aaa", fontSize: 11 }}>✕ Close</Text>
+                <View style={styles.rowInputs}>
+                  <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
+                    <Text style={styles.inputLabel}>MOBILE NUMBER (FOR SMS PIN) *</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="e.g. 0821234567"
+                      placeholderTextColor="#666"
+                      keyboardType="number-pad"
+                      value={phone}
+                      onChangeText={(text) => setPhone(text.replace(/[^0-9]/g, ""))}
+                    />
+                  </View>
+
+                  <View style={[styles.inputGroup, { flex: 1 }]}>
+                    <Text style={styles.inputLabel}>EMAIL (FOR RECEIPT) *</Text>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="name@domain.com"
+                      placeholderTextColor="#666"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      value={email}
+                      onChangeText={setEmail}
+                    />
+                  </View>
+                </View>
+              </View>
+
+              {/* Address Details (if Home Delivery or International DHL) */}
+              {deliveryPreference === "home" && (
+                <View style={styles.sectionCard}>
+                  <Text style={styles.cardHeaderTitle}>
+                    {destinationMode === "international_dhl" ? "WORLDWIDE DELIVERY ADDRESS" : "STREET DELIVERY ADDRESS"}
+                  </Text>
+
+                  <View style={styles.inputGroup}>
+                    <View style={styles.labelRowWithIcon}>
+                      <Text style={styles.inputLabel}>STREET ADDRESS *</Text>
+                      {isSearchingAddress && (
+                        <ActivityIndicator size="small" color="#c99742" style={{ marginLeft: 6 }} />
+                      )}
+                    </View>
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="Street address, house or building number..."
+                      placeholderTextColor="#666"
+                      value={address}
+                      onChangeText={handleAddressChange}
+                    />
+                    {showAddressDropdown && addressPredictions.length > 0 && (
+                      <View style={styles.predictionsDropdown}>
+                        <View style={styles.predictionsHeader}>
+                          <Text style={styles.predictionsHeaderText}>SUGGESTED ADDRESSES</Text>
+                          <Text style={styles.googlePoweredText}>Powered by Google Maps</Text>
+                        </View>
+                        {addressPredictions.map((p, idx) => (
+                          <TouchableOpacity
+                            key={p.place_id || idx}
+                            style={[styles.predictionItem, idx === addressPredictions.length - 1 && { borderBottomWidth: 0 }]}
+                            onPress={() => handleSelectAddressPrediction(p)}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={styles.predictionPinIcon}>📍</Text>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.predictionMainText} numberOfLines={1}>
+                                {p.structured_formatting?.main_text || p.description}
+                              </Text>
+                              {p.structured_formatting?.secondary_text && (
+                                <Text style={styles.predictionSubText} numberOfLines={1}>
+                                  {p.structured_formatting.secondary_text}
+                                </Text>
+                              )}
+                            </View>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={styles.rowInputs}>
+                    <View style={[styles.inputGroup, { flex: 1.2, marginRight: 8 }]}>
+                      <View style={styles.labelRowWithIcon}>
+                        <Text style={styles.inputLabel}>CITY / SUBURB *</Text>
+                        {isSearchingCity && (
+                          <ActivityIndicator size="small" color="#c99742" style={{ marginLeft: 4 }} />
+                        )}
+                      </View>
+                      <TextInput
+                        style={styles.textInput}
+                        placeholder="e.g. Sandton or London"
+                        placeholderTextColor="#666"
+                        value={city}
+                        onFocus={() => {
+                          if (cityPredictions.length === 0) setCityPredictions(DEFAULT_SA_CITIES);
+                          setShowCityDropdown(true);
+                        }}
+                        onChangeText={handleCityInputChange}
+                      />
+                      {showCityDropdown && (
+                        <View style={styles.predictionsDropdown}>
+                          <View style={styles.predictionsHeader}>
+                            <Text style={styles.predictionsHeaderText}>SUGGESTED CITIES</Text>
+                            <TouchableOpacity onPress={() => setShowCityDropdown(false)}>
+                              <Text style={{ color: "#aaa", fontSize: 11 }}>✕ Close</Text>
+                            </TouchableOpacity>
+                          </View>
+                          {(() => {
+                            const allCityList = cityPredictions.length > 0 ? cityPredictions : DEFAULT_SA_CITIES;
+                            const displayedCities = showAllCityDropdown ? allCityList : allCityList.slice(0, 3);
+                            return (
+                              <>
+                                {displayedCities.map((p, idx) => {
+                                  const cityName = p.structured_formatting?.main_text || p.main_text || p.description?.split(",")[0] || "";
+                                  const subName = p.structured_formatting?.secondary_text || p.description || "";
+                                  return (
+                                    <TouchableOpacity
+                                      key={p.place_id || idx}
+                                      style={[styles.predictionItem, idx === displayedCities.length - 1 && !allCityList.length > 3 && { borderBottomWidth: 0 }]}
+                                      onPress={() => handleSelectCity(p)}
+                                      activeOpacity={0.7}
+                                    >
+                                      <Text style={styles.predictionPinIcon}>🏙️</Text>
+                                      <View style={{ flex: 1 }}>
+                                        <Text style={styles.predictionMainText} numberOfLines={1}>{cityName}</Text>
+                                        {subName ? <Text style={styles.predictionSubText} numberOfLines={1}>{subName}</Text> : null}
+                                      </View>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                                {allCityList.length > 3 && (
+                                  <TouchableOpacity
+                                    style={styles.dropdownShowMoreBtn}
+                                    onPress={() => setShowAllCityDropdown(!showAllCityDropdown)}
+                                    activeOpacity={0.75}
+                                  >
+                                    <Text style={styles.dropdownShowMoreBtnText}>
+                                      {showAllCityDropdown ? "▴ Show Fewer Cities" : `▾ Show More Cities (${allCityList.length - 3} More)`}
+                                    </Text>
+                                  </TouchableOpacity>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </View>
+                      )}
+                    </View>
+
+                    <View style={[styles.inputGroup, { flex: 0.8 }]}>
+                      <View style={styles.labelRowWithIcon}>
+                        <Text style={styles.inputLabel}>POSTAL CODE *</Text>
+                        {isSearchingPostal && (
+                          <ActivityIndicator size="small" color="#c99742" style={{ marginLeft: 4 }} />
+                        )}
+                      </View>
+                      <TextInput
+                        style={styles.textInput}
+                        placeholder="e.g. 2196"
+                        placeholderTextColor="#666"
+                        value={postalCode}
+                        onChangeText={handlePostalCodeChange}
+                      />
+                      {showPostalDropdown && postalPredictions.length > 0 && (
+                        <View style={styles.predictionsDropdown}>
+                          <View style={styles.predictionsHeader}>
+                            <Text style={styles.predictionsHeaderText}>MATCHING POSTAL CODES</Text>
+                            <Text style={styles.googlePoweredText}>Google Places</Text>
+                          </View>
+                          {postalPredictions.map((p, idx) => (
+                            <TouchableOpacity
+                              key={p.place_id || idx}
+                              style={[styles.predictionItem, idx === postalPredictions.length - 1 && { borderBottomWidth: 0 }]}
+                              onPress={() => handleSelectPostalPrediction(p)}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.predictionPinIcon}>📮</Text>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.predictionMainText} numberOfLines={1}>
+                                  {p.structured_formatting?.main_text || p.description}
+                                </Text>
+                                {p.structured_formatting?.secondary_text && (
+                                  <Text style={styles.predictionSubText} numberOfLines={1}>
+                                    {p.structured_formatting.secondary_text}
+                                  </Text>
+                                )}
+                              </View>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  </View>
+
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>COUNTRY *</Text>
+                    {destinationMode === "domestic_sa" ? (
+                      <View style={styles.lockedCountryBox}>
+                        <Text style={styles.lockedCountryFlag}>🇿🇦</Text>
+                        <Text style={styles.lockedCountryText}>South Africa</Text>
+                        <View style={styles.zaTag}>
+                          <Text style={styles.zaTagText}>PostNet &amp; Local Courier</Text>
+                        </View>
+                      </View>
+                    ) : (
+                      <TextInput
+                        style={[styles.textInput, { color: "#f5c242", fontWeight: "700" }]}
+                        value={country}
+                        placeholder="e.g. United Kingdom, United States, Germany..."
+                        placeholderTextColor="#666"
+                        onChangeText={(t) => {
+                          setCountry(t);
+                          setQuote(null);
+                        }}
+                      />
+                    )}
+                  </View>
+                </View>
+              )}
+
+              {/* PostNet Branch Selection (if PostNet Store Collection) */}
+              {deliveryPreference === "postnet" && (
+                <View style={styles.sectionCard}>
+                  <Text style={styles.cardHeaderTitle}>CHOOSE POSTNET COLLECTION BRANCH</Text>
+                  <Text style={styles.subtleHelperText}>
+                    Select your city or search your suburb to find the nearest PostNet counter:
+                  </Text>
+
+                  {/* PostNet City Chips */}
+                  <View style={styles.postnetCitiesBox}>
+                    <View style={styles.postnetCitiesHeader}>
+                      <Text style={styles.postnetCitiesTitle}>
+                        🏙️ AVAILABLE POSTNET CITIES ({POSTNET_AVAILABLE_CITIES.length})
+                      </Text>
+                    </View>
+                    <View style={styles.postnetCitiesGrid}>
+                      {(showAllPostnetCities ? POSTNET_AVAILABLE_CITIES : POSTNET_AVAILABLE_CITIES.slice(0, 3)).map((cName) => {
+                        const isSelected = city.trim().toLowerCase() === cName.toLowerCase() && hasSelectedCityForPostnet;
+                        return (
+                          <TouchableOpacity
+                            key={cName}
+                            style={[styles.postnetCityCard, isSelected && styles.postnetCityCardActive]}
+                            onPress={() => handleSelectPostnetCity(cName)}
+                            activeOpacity={0.8}
+                          >
+                            <View style={styles.postnetCityIconBadge}>
+                              <Text style={{ fontSize: 13 }}>{isSelected ? "📍" : "🏢"}</Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[styles.postnetCityName, isSelected && styles.postnetCityNameActive]} numberOfLines={1}>
+                                {cName}
+                              </Text>
+                              <Text style={styles.postnetCitySub}>
+                                {FALLBACK_POSTNET_STORES[cName.toLowerCase()]?.length || 3}+ Branches
+                              </Text>
+                            </View>
+                            {isSelected && (
+                              <View style={styles.citySelectedCheck}>
+                                <Text style={styles.citySelectedCheckText}>✓</Text>
+                              </View>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    {POSTNET_AVAILABLE_CITIES.length > 3 && (
+                      <TouchableOpacity
+                        style={styles.showMoreCitiesBtn}
+                        onPress={() => setShowAllPostnetCities(!showAllPostnetCities)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.showMoreCitiesBtnText}>
+                          {showAllPostnetCities ? "▴ Show Fewer Cities" : `▾ Show More Cities (${POSTNET_AVAILABLE_CITIES.length - 3} More)`}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  {/* Selected PostNet Confirmation Banner */}
+                  {preferredPostnetStore && (
+                    <View style={styles.selectedBranchBanner}>
+                      <View style={styles.selectedBranchCheckCircle}>
+                        <Text style={styles.selectedBranchCheckText}>✓</Text>
+                      </View>
+                      <View style={{ flex: 1, marginLeft: 8 }}>
+                        <Text style={styles.selectedBranchBannerTitle}>
+                          {preferredPostnetStore.name} ({preferredPostnetStore.distance} km away)
+                        </Text>
+                        <Text style={styles.selectedBranchBannerAddress} numberOfLines={1}>
+                          {preferredPostnetStore.address}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={() => setPreferredPostnetStore(null)}>
+                        <Text style={{ color: "#f5c242", fontSize: 11, fontWeight: "700", textDecorationLine: "underline" }}>
+                          Change
+                        </Text>
                       </TouchableOpacity>
                     </View>
-                    {(() => {
-                      const allCityList = cityPredictions.length > 0 ? cityPredictions : DEFAULT_SA_CITIES;
-                      const displayedCities = showAllCityDropdown ? allCityList : allCityList.slice(0, 3);
+                  )}
 
-                      return (
+                  {/* Nearby Branches List */}
+                  {!preferredPostnetStore && (
+                    <>
+                      <View style={styles.branchSearchBox}>
+                        <Text style={{ fontSize: 13, marginRight: 6 }}>🔍</Text>
+                        <TextInput
+                          style={styles.branchSearchInput}
+                          placeholder={`Filter ${city} branch by mall, area or street...`}
+                          placeholderTextColor="#666"
+                          value={branchSearch}
+                          onChangeText={setBranchSearch}
+                        />
+                        {branchSearch.length > 0 && (
+                          <TouchableOpacity onPress={() => setBranchSearch("")}>
+                            <Text style={{ color: "#888", fontSize: 12, paddingHorizontal: 4 }}>✕</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+
+                      {filteredPostnetStores.length > 0 ? (
                         <>
-                          {displayedCities.map((p, idx) => {
-                            const cityName =
-                              p.structured_formatting?.main_text ||
-                              p.main_text ||
-                              p.description?.split(",")[0] ||
-                              "";
-                            const subName =
-                              p.structured_formatting?.secondary_text ||
-                              p.description ||
-                              "";
+                          {(showAllPostnetBranches || branchSearch.trim().length > 0 ? filteredPostnetStores : filteredPostnetStores.slice(0, 3)).map((store, idx) => {
                             return (
-                              <TouchableOpacity
-                                key={p.place_id || idx}
-                                style={[
-                                  styles.predictionItem,
-                                  idx === displayedCities.length - 1 && !allCityList.length > 3 && { borderBottomWidth: 0 },
-                                ]}
-                                onPress={() => handleSelectCity(p)}
-                                activeOpacity={0.7}
-                              >
-                                <Text style={styles.predictionPinIcon}>🏙️</Text>
+                              <View key={store.id || idx} style={styles.postnetStoreCard}>
                                 <View style={{ flex: 1 }}>
-                                  <Text style={styles.predictionMainText} numberOfLines={1}>
-                                    {cityName}
-                                  </Text>
-                                  {subName ? (
-                                    <Text style={styles.predictionSubText} numberOfLines={1}>
-                                      {subName}
-                                    </Text>
-                                  ) : null}
+                                  <View style={styles.storeNameRow}>
+                                    <Text style={styles.storeName}>{store.name}</Text>
+                                    {store.distance !== null && store.distance !== undefined && (
+                                      <View style={styles.distanceBadge}>
+                                        <Text style={styles.distanceBadgeText}>{store.distance} km away</Text>
+                                      </View>
+                                    )}
+                                  </View>
+                                  <Text style={styles.storeAddress}>{store.address}</Text>
+                                  {store.telephone ? <Text style={styles.storePhone}>📞 {store.telephone}</Text> : null}
                                 </View>
-                              </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={styles.selectStoreBtn}
+                                  onPress={() => {
+                                    setPreferredPostnetStore(store);
+                                    if (store.postalCode) setPostalCode(store.postalCode);
+                                    showMessage(`📍 Selected ${store.name}`);
+                                  }}
+                                >
+                                  <Text style={styles.selectStoreBtnText}>SELECT STORE</Text>
+                                </TouchableOpacity>
+                              </View>
                             );
                           })}
 
-                          {allCityList.length > 3 && (
+                          {filteredPostnetStores.length > 3 && !branchSearch.trim() && (
                             <TouchableOpacity
-                              style={styles.dropdownShowMoreBtn}
-                              onPress={() => setShowAllCityDropdown(!showAllCityDropdown)}
-                              activeOpacity={0.75}
+                              style={styles.showMoreBranchesBtn}
+                              onPress={() => setShowAllPostnetBranches(!showAllPostnetBranches)}
+                              activeOpacity={0.8}
                             >
-                              <Text style={styles.dropdownShowMoreBtnText}>
-                                {showAllCityDropdown
-                                  ? "▴ Show Fewer Cities"
-                                  : `▾ Show More Cities (${allCityList.length - 3} More)`}
+                              <Text style={styles.showMoreBranchesBtnText}>
+                                {showAllPostnetBranches ? "▴ Show Fewer Branches" : `▾ Show More Branches (${filteredPostnetStores.length - 3} More)`}
                               </Text>
                             </TouchableOpacity>
                           )}
                         </>
-                      );
-                    })()}
-                  </View>
-                )}
-              </View>
-
-              {/* Postal Code Input with Dropdown */}
-              <View style={[styles.inputGroup, { flex: 0.8 }]}>
-                <View style={styles.labelRowWithIcon}>
-                  <Text style={styles.inputLabel}>POSTAL CODE *</Text>
-                  {isSearchingPostal && (
-                    <ActivityIndicator size="small" color="#c99742" style={{ marginLeft: 4 }} />
+                      ) : (
+                        <View style={styles.emptyStoresBox}>
+                          <Text style={styles.emptyStoresText}>
+                            No PostNet branches found matching "{branchSearch}". Try selecting another city above.
+                          </Text>
+                        </View>
+                      )}
+                    </>
                   )}
                 </View>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="e.g. 2196, SW1A 1AA"
-                  placeholderTextColor="#666"
-                  value={postalCode}
-                  onChangeText={handlePostalCodeChange}
-                />
+              )}
 
-                {/* Postal Code Dropdown */}
-                {showPostalDropdown && postalPredictions.length > 0 && (
-                  <View style={styles.predictionsDropdown}>
-                    <View style={styles.predictionsHeader}>
-                      <Text style={styles.predictionsHeaderText}>MATCHING POSTAL CODES</Text>
-                      <Text style={styles.googlePoweredText}>Google Places</Text>
-                    </View>
-                    {postalPredictions.map((p, idx) => (
-                      <TouchableOpacity
-                        key={p.place_id || idx}
-                        style={[
-                          styles.predictionItem,
-                          idx === postalPredictions.length - 1 && { borderBottomWidth: 0 },
-                        ]}
-                        onPress={() => handleSelectPostalPrediction(p)}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.predictionPinIcon}>📮</Text>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.predictionMainText} numberOfLines={1}>
-                            {p.structured_formatting?.main_text || p.description}
-                          </Text>
-                          {p.structured_formatting?.secondary_text && (
-                            <Text style={styles.predictionSubText} numberOfLines={1}>
-                              {p.structured_formatting.secondary_text}
-                            </Text>
-                          )}
-                        </View>
-                      </TouchableOpacity>
-                    ))}
+              {/* 18+ Legal Age Verification & Guest ID KYC Card */}
+              <View style={styles.sectionCard}>
+                <View style={styles.stepHeader}>
+                  <View style={[styles.stepNumberCircle, { backgroundColor: "rgba(201, 151, 66, 0.2)", borderColor: "#c99742" }]}>
+                    <Text style={[styles.stepNumber, { color: "#c99742", fontSize: 13 }]}>18+</Text>
                   </View>
-                )}
-              </View>
-            </View>
-
-
-            {/* AVAILABLE POSTNET PICKUP LOCATIONS: SHOWS ONLY WHEN A CITY IS SELECTED IN CITY DROPDOWN */}
-            {deliveryPreference === "postnet" && (
-              <View style={styles.postnetStoresSection}>
-                {/* 1. PostNet City Quick-Selector with "Show More" if > 3 cities */}
-                <View style={styles.postnetCitiesBox}>
-                  <View style={styles.postnetCitiesHeader}>
-                    <Text style={styles.postnetCitiesTitle}>
-                      🏙️ AVAILABLE POSTNET CITIES ({POSTNET_AVAILABLE_CITIES.length})
-                    </Text>
-                    <Text style={styles.postnetCitiesSub}>
-                      Select your city to view local PostNet counter collection points:
-                    </Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.stepTitle}>18+ Legal Age &amp; Identity Verification</Text>
+                    <Text style={styles.verifySubtitle}>Mandatory compliance under the Liquor Act</Text>
                   </View>
+                </View>
 
-                  <View style={styles.postnetCitiesGrid}>
-                    {(showAllPostnetCities
-                      ? POSTNET_AVAILABLE_CITIES
-                      : POSTNET_AVAILABLE_CITIES.slice(0, 3)
-                    ).map((cName) => {
-                      const isSelected =
-                        city.trim().toLowerCase() === cName.toLowerCase() &&
-                        hasSelectedCityForPostnet;
-                      return (
+                {!isLoggedIn ? (
+                  <View style={styles.guestVerifyContainer}>
+                    <Text style={styles.inputLabel}>OFFICIAL ID DOCUMENT TYPE *</Text>
+                    <View style={styles.verifyTypeSelector}>
+                      {[
+                        { key: "national_id", label: "National ID" },
+                        { key: "passport", label: "Passport" },
+                        { key: "drivers_license", label: "Driver's License" },
+                      ].map((t) => (
                         <TouchableOpacity
-                          key={cName}
-                          style={[
-                            styles.postnetCityCard,
-                            isSelected && styles.postnetCityCardActive,
-                          ]}
-                          onPress={() => handleSelectPostnetCity(cName)}
+                          key={t.key}
+                          style={[styles.verifyTypeOption, guestIdType === t.key && styles.verifyTypeOptionActive]}
+                          onPress={() => setGuestIdType(t.key)}
                           activeOpacity={0.8}
                         >
-                          <View style={styles.postnetCityIconBadge}>
-                            <Text style={{ fontSize: 13 }}>{isSelected ? "📍" : "🏢"}</Text>
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text
-                              style={[
-                                styles.postnetCityName,
-                                isSelected && styles.postnetCityNameActive,
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {cName}
-                            </Text>
-                            <Text style={styles.postnetCitySub}>
-                              {FALLBACK_POSTNET_STORES[cName.toLowerCase()]?.length || 3}+ Branches
-                            </Text>
-                          </View>
-                          {isSelected && (
-                            <View style={styles.citySelectedCheck}>
-                              <Text style={styles.citySelectedCheckText}>✓</Text>
-                            </View>
-                          )}
+                          <Text style={[styles.verifyTypeOptionText, guestIdType === t.key && styles.verifyTypeOptionTextActive]}>
+                            {t.label}
+                          </Text>
                         </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+                      ))}
+                    </View>
 
-                  {/* Show More / Fewer Cities Button if > 3 cities */}
-                  {POSTNET_AVAILABLE_CITIES.length > 3 && (
+                    <View style={styles.rowInputs}>
+                      <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
+                        <Text style={styles.inputLabel}>
+                          {guestIdType === "national_id" ? "SA ID NUMBER *" : guestIdType === "passport" ? "PASSPORT NUMBER *" : "LICENSE NUMBER *"}
+                        </Text>
+                        <TextInput
+                          style={styles.textInput}
+                          placeholder={guestIdType === "national_id" ? "e.g. 9205125089087" : "e.g. A12345678"}
+                          placeholderTextColor="#666"
+                          value={guestIdNumber}
+                          onChangeText={handleIdNumberChange}
+                          autoCapitalize="characters"
+                        />
+                      </View>
+
+                      <View style={[styles.inputGroup, { flex: 1 }]}>
+                        <Text style={styles.inputLabel}>DATE OF BIRTH *</Text>
+                        <TextInput
+                          style={styles.textInput}
+                          placeholder="YYYY-MM-DD"
+                          placeholderTextColor="#666"
+                          value={guestDob}
+                          onChangeText={setGuestDob}
+                          keyboardType="numeric"
+                        />
+                      </View>
+                    </View>
+
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.inputLabel}>ATTACH OFFICIAL ID / PASSPORT PHOTO *</Text>
+                      {isUploadingDoc ? (
+                        <View style={styles.docUploadingBox}>
+                          <ActivityIndicator size="small" color="#c99742" />
+                          <Text style={styles.docUploadingText}>Uploading and encrypting document...</Text>
+                        </View>
+                      ) : guestDocUrl ? (
+                        <View style={styles.verifyDocAttachedBox}>
+                          <View style={styles.verifyDocAttachedLeft}>
+                            <Text style={styles.verifyDocAttachedCheck}>✓</Text>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.verifyDocAttachedTitle}>Document Attached Successfully</Text>
+                              <Text style={styles.verifyDocAttachedName} numberOfLines={1}>
+                                {guestDocFileName || "Official_ID_Document.jpg"}
+                              </Text>
+                            </View>
+                          </View>
+                          <TouchableOpacity style={styles.verifyDocReuploadBtn} onPress={handlePickGuestDocument} activeOpacity={0.8}>
+                            <Text style={styles.verifyDocReuploadText}>Change</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ) : (
+                        <TouchableOpacity style={styles.verifyDocUploadBtn} onPress={handlePickGuestDocument} activeOpacity={0.8}>
+                          <Text style={styles.verifyDocUploadIcon}>📷</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.verifyDocUploadTitle}>Attach Official ID Photo</Text>
+                            <Text style={styles.verifyDocUploadSub}>Select photo or scan from gallery (PNG, JPG)</Text>
+                          </View>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
                     <TouchableOpacity
-                      style={styles.showMoreCitiesBtn}
-                      onPress={() => setShowAllPostnetCities(!showAllPostnetCities)}
+                      style={styles.verifyCheckboxRow}
                       activeOpacity={0.8}
+                      onPress={() => setIsAgeConfirmed(!isAgeConfirmed)}
                     >
-                      <Text style={styles.showMoreCitiesBtnText}>
-                        {showAllPostnetCities
-                          ? "▴ Show Fewer Cities"
-                          : `▾ Show More Cities (${POSTNET_AVAILABLE_CITIES.length - 3} More)`}
+                      <View style={[styles.verifyCheckbox, isAgeConfirmed && styles.verifyCheckboxChecked]}>
+                        {isAgeConfirmed && <Text style={styles.verifyCheckmark}>✓</Text>}
+                      </View>
+                      <Text style={styles.verifyCheckboxText}>
+                        I legally certify that I am at least 18 years of age and authorized to purchase alcoholic beverages under the South African Liquor Act. I confirm this document belongs to me.
                       </Text>
                     </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* 2. Available PostNet Branches in Selected City */}
-                {!hasSelectedCityForPostnet ? (
-                  <View style={styles.selectCityPromptBox}>
-                    <Text style={styles.selectCityPromptIcon}>📍</Text>
-                    <Text style={styles.selectCityPromptTitle}>
-                      CHOOSE A CITY ABOVE
-                    </Text>
-                    <Text style={styles.selectCityPromptSub}>
-                      Select one of the cities above to view available PostNet branch counters.
-                    </Text>
                   </View>
                 ) : (
-                  <>
-                    <View style={styles.postnetStoresHeader}>
+                  <View style={styles.authVerifiedContainer}>
+                    <View style={styles.authVerifiedRow}>
+                      <View style={styles.authVerifiedIconBox}>
+                        <Text style={styles.authVerifiedIcon}>✓</Text>
+                      </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.postnetStoresTitle}>
-                          📍 AVAILABLE POSTNET BRANCHES NEAR {city.toUpperCase()}
-                        </Text>
-                        <Text style={styles.postnetStoresSubtitle}>
-                          Select your preferred PostNet counter for parcel collection:
+                        <Text style={styles.authVerifiedTitle}>18+ Account Verified</Text>
+                        <Text style={styles.authVerifiedSub}>
+                          Your logged-in account has verified legal age compliance. Standard age verification may be requested upon courier handover.
                         </Text>
                       </View>
-                      {isLoadingPostnet ? (
-                        <ActivityIndicator size="small" color="#c99742" />
-                      ) : (
-                        <TouchableOpacity
-                          style={styles.changeCityBtn}
-                          onPress={() => {
-                            setShowCityDropdown(true);
-                          }}
-                        >
-                          <Text style={styles.changeCityBtnText}>Change City</Text>
-                        </TouchableOpacity>
-                      )}
                     </View>
-
-                    {/* Filter / Search Branch */}
-                    <View style={styles.branchSearchBox}>
-                      <Text style={{ fontSize: 13, marginRight: 6 }}>🔍</Text>
-                      <TextInput
-                        style={styles.branchSearchInput}
-                        placeholder={`Filter ${city} branch by mall, area or street...`}
-                        placeholderTextColor="#666"
-                        value={branchSearch}
-                        onChangeText={setBranchSearch}
-                      />
-                      {branchSearch.length > 0 && (
-                        <TouchableOpacity onPress={() => setBranchSearch("")}>
-                          <Text style={{ color: "#888", fontSize: 12, paddingHorizontal: 4 }}>✕</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-
-                    {/* Selected PostNet Confirmation Banner */}
-                    {preferredPostnetStore && (
-                      <View style={styles.selectedBranchBanner}>
-                        <View style={styles.selectedBranchCheckCircle}>
-                          <Text style={styles.selectedBranchCheckText}>✓</Text>
-                        </View>
-                        <View style={{ flex: 1, marginLeft: 8 }}>
-                          <Text style={styles.selectedBranchBannerTitle}>
-                            {preferredPostnetStore.name} ({preferredPostnetStore.distance} km away)
-                          </Text>
-                          <Text style={styles.selectedBranchBannerAddress} numberOfLines={1}>
-                            {preferredPostnetStore.address}
-                          </Text>
-                        </View>
+                    <TouchableOpacity
+                      style={[styles.verifyCheckboxRow, { marginTop: 12 }]}
+                      activeOpacity={0.8}
+                      onPress={() => setIsAgeConfirmed(!isAgeConfirmed)}
+                    >
+                      <View style={[styles.verifyCheckbox, isAgeConfirmed && styles.verifyCheckboxChecked]}>
+                        {isAgeConfirmed && <Text style={styles.verifyCheckmark}>✓</Text>}
                       </View>
-                    )}
-
-                    {/* Branch Cards List */}
-                    {filteredPostnetStores.length > 0 ? (
-                      <>
-                        {(showAllPostnetBranches || branchSearch.trim().length > 0
-                          ? filteredPostnetStores
-                          : filteredPostnetStores.slice(0, 3)
-                        ).map((store, idx) => {
-                          const isSelected = preferredPostnetStore?.id === store.id;
-                          return (
-                            <TouchableOpacity
-                              key={store.id || idx}
-                              style={[
-                                styles.postnetStoreCard,
-                                isSelected && styles.postnetStoreCardSelected,
-                              ]}
-                              onPress={() => {
-                                setPreferredPostnetStore(store);
-                                if (store.postalCode) setPostalCode(store.postalCode);
-                                showMessage(`📍 Selected ${store.name}`);
-                              }}
-                              activeOpacity={0.8}
-                            >
-                              <View style={styles.radioCircle}>
-                                {isSelected && <View style={styles.radioDot} />}
-                              </View>
-                              <View style={{ flex: 1, marginLeft: 10 }}>
-                                <View style={styles.storeNameRow}>
-                                  <Text style={styles.storeName}>{store.name}</Text>
-                                  {store.distance !== null && store.distance !== undefined && (
-                                    <View style={styles.distanceBadge}>
-                                      <Text style={styles.distanceBadgeText}>
-                                        {store.distance} km away
-                                      </Text>
-                                    </View>
-                                  )}
-                                </View>
-                                <Text style={styles.storeAddress}>{store.address}</Text>
-                                {store.telephone ? (
-                                  <Text style={styles.storePhone}>📞 {store.telephone}</Text>
-                                ) : null}
-                              </View>
-                            </TouchableOpacity>
-                          );
-                        })}
-
-                        {/* Show More / Show Fewer Branches Button if > 3 branches */}
-                        {filteredPostnetStores.length > 3 && !branchSearch.trim() && (
-                          <TouchableOpacity
-                            style={styles.showMoreBranchesBtn}
-                            onPress={() => setShowAllPostnetBranches(!showAllPostnetBranches)}
-                            activeOpacity={0.8}
-                          >
-                            <Text style={styles.showMoreBranchesBtnText}>
-                              {showAllPostnetBranches
-                                ? "▴ Show Fewer Branches"
-                                : `▾ Show More Branches (${filteredPostnetStores.length - 3} More)`}
-                            </Text>
-                          </TouchableOpacity>
-                        )}
-                      </>
-                    ) : (
-                      <View style={styles.emptyStoresBox}>
-                        <Text style={styles.emptyStoresText}>
-                          No PostNet branches found matching "{branchSearch}". Try clearing the search or choosing another city.
-                        </Text>
-                      </View>
-                    )}
-                  </>
-                )}
-              </View>
-            )}
-
-            {/* Country Selector: Locked to South Africa for PostNet/PayFast, Selectable Worldwide for Door Delivery */}
-            <View style={styles.inputGroup}>
-              <View style={styles.labelRowWithIcon}>
-                <Text style={styles.inputLabel}>COUNTRY *</Text>
-                {deliveryPreference === "postnet" || (paymentMethod === "payfast" && isSouthAfrica) ? (
-                  <View style={styles.lockedBadge}>
-                    <Text style={styles.lockedBadgeText}>
-                      {deliveryPreference === "postnet" ? "🔒 South Africa Only (PostNet)" : "🔒 South Africa (PayFast ZAR)"}
-                    </Text>
+                      <Text style={styles.verifyCheckboxText}>
+                        I confirm that I am at least 18 years of age and eligible to receive this shipment.
+                      </Text>
+                    </TouchableOpacity>
                   </View>
-                ) : (
-                  <Text style={styles.editableNoticeText}>✏️ Worldwide Delivery Supported</Text>
                 )}
               </View>
 
-              {deliveryPreference === "postnet" ? (
-                <View style={styles.lockedCountryBox}>
-                  <Text style={styles.lockedCountryFlag}>🇿🇦</Text>
-                  <Text style={styles.lockedCountryText}>South Africa</Text>
-                  <View style={styles.zaTag}>
-                    <Text style={styles.zaTagText}>PostNet Branch</Text>
-                  </View>
-                </View>
-              ) : (
-                <>
-                  <TextInput
-                    style={[styles.textInput, { color: "#f5c242", fontWeight: "700" }]}
-                    value={country}
-                    placeholder="e.g. South Africa, United Kingdom, United States"
-                    placeholderTextColor="#666"
-                    onChangeText={(t) => {
-                      setCountry(t);
-                      setQuote(null);
-                      const isSA = t.trim().toLowerCase() === "south africa" || t.trim().toLowerCase() === "za";
-                      if (!isSA && paymentMethod === "payfast") {
-                        setPaymentMethod("bank_transfer");
-                        showMessage("🌍 Switched to Bank Transfer (EFT) & DHL Express for international shipping");
-                      }
-                    }}
-                  />
+              {/* Continue to Step 2 Button */}
+              <TouchableOpacity
+                style={styles.continueStepBtn}
+                onPress={handleProceedToDeliveryMethod}
+                disabled={isCalculatingQuote}
+                activeOpacity={0.88}
+              >
+                <LinearGradient
+                  colors={["#f5c242", "#c99742", "#a67c2e"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.continueStepGradient}
+                >
+                  {isCalculatingQuote ? (
+                    <ActivityIndicator color="#000" />
+                  ) : (
+                    <Text style={styles.continueStepText}>CONTINUE TO DELIVERY METHOD →</Text>
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
+            </>
+          )}
 
-                </>
-              )}
-            </View>
-
-            {/* Calculate Delivery Rates Action Button */}
-            <TouchableOpacity
-              style={styles.calcRatesBtn}
-              onPress={calculateDeliveryQuote}
-              disabled={isCalculatingQuote}
-              activeOpacity={0.8}
-            >
-              {isCalculatingQuote ? (
-                <View style={styles.calcBtnContent}>
-                  <ActivityIndicator size="small" color="#0a0a0a" style={{ marginRight: 8 }} />
-                  <Text style={styles.calcRatesBtnText}>Calculating Courier Rates...</Text>
+          {/* ========================================================================= */}
+          {/* STEP 2: DELIVERY METHOD & ALCOHOL COMPLIANCE                              */}
+          {/* ========================================================================= */}
+          {checkoutStep === 2 && (
+            <>
+              <View style={styles.stepTitleRow}>
+                <View>
+                  <Text style={styles.mainStepTitle}>2. Delivery Method</Text>
+                  <Text style={styles.mainStepSubtitle}>Choose your preferred shipping service level.</Text>
                 </View>
-              ) : (
-                <View style={styles.calcBtnContent}>
-                  <Text style={styles.calcRatesBtnIcon}>🚚</Text>
-                  <Text style={styles.calcRatesBtnText}>Calculate Live Courier Rates</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+                <TouchableOpacity onPress={() => setCheckoutStep(1)} style={styles.stepBackLink}>
+                  <Text style={styles.stepBackLinkText}>← Edit Details</Text>
+                </TouchableOpacity>
+              </View>
 
-            {/* Courier Selection & Live Rates */}
-            {quote && quote.shipments && quote.shipments.length > 0 && (
-              <View style={styles.courierRatesContainer}>
+              {/* Available Courier Rates */}
+              <View style={styles.sectionCard}>
                 <Text style={styles.courierSectionTitle}>
                   AVAILABLE COURIER SERVICES ({isSouthAfrica ? "SOUTH AFRICA" : "INTERNATIONAL"})
                 </Text>
 
-                {quote.shipments[0].shippingQuotes?.map((opt, idx) => {
+                {quote?.shipments?.[0]?.shippingQuotes?.map((opt, idx) => {
                   const isSelected = selectedCourier?.serviceLevel === opt.serviceLevel;
                   return (
                     <TouchableOpacity
@@ -3362,535 +3672,396 @@ const Checkout = ({ navigation, route }) => {
                   );
                 })}
               </View>
-            )}
 
-            {/* 🔒 THE CONFIDENCE SECTION (PostNet & Door Delivery Security) */}
-            <View style={styles.confidenceCard}>
-              <View style={styles.confidenceHeader}>
-                <Text style={styles.confidenceShieldIcon}>🔒</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.confidenceTitle}>Secure & Trackable Delivery</Text>
-                  <Text style={styles.confidenceSub}>
-                    {deliveryPreference === "postnet"
-                      ? "Direct vault dispatch to your chosen PostNet collection branch with PIN verification."
-                      : "Insured courier dispatch with tamper-proof packaging & real-time tracking."}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.confidenceGrid}>
-                <View style={styles.confidenceGridItem}>
-                  <Text style={styles.confidenceCheck}>✓</Text>
-                  <Text style={styles.confidenceItemText}>Live Waybill Tracking</Text>
-                </View>
-                <View style={styles.confidenceGridItem}>
-                  <Text style={styles.confidenceCheck}>✓</Text>
-                  <Text style={styles.confidenceItemText}>SMS Dispatch PIN</Text>
-                </View>
-                <View style={styles.confidenceGridItem}>
-                  <Text style={styles.confidenceCheck}>✓</Text>
-                  <Text style={styles.confidenceItemText}>Fragile Handling</Text>
-                </View>
-                <View style={styles.confidenceGridItem}>
-                  <Text style={styles.confidenceCheck}>✓</Text>
-                  <Text style={styles.confidenceItemText}>18+ ID Verification</Text>
-                </View>
-              </View>
-
-              <View style={styles.liquorComplianceBox}>
-                <Text style={styles.liquorComplianceIcon}>⚖️</Text>
-                <Text style={styles.liquorComplianceText}>
-                  <Text style={styles.liquorComplianceBold}>South African Liquor Compliance: </Text>
-                  Recipients must present a valid National ID or Passport upon delivery or PostNet branch collection.
-                </Text>
-              </View>
-            </View>
-
-            {/* IMPORTANT: International Delivery Disclaimer & Checkbox (Matching Web Version) */}
-            {!isSouthAfrica && (
-              <View style={styles.internationalDeliveryCard}>
-                <View style={styles.internationalDeliveryHeader}>
-                  <Text style={styles.internationalWarningIcon}>⚠️</Text>
-                  <Text style={styles.internationalDeliveryTitle}>
-                    IMPORTANT: International Delivery
-                  </Text>
-                </View>
-
-                <Text style={styles.internationalDeliveryText}>
-                  Import duties, customs charges, destination VAT/GST or other government charges may be payable by you upon arrival in {country.trim() || "your destination country"}. The delivery charge covers transportation only. Estimated duties/taxes: R {estimatedDutiesTaxes.toFixed(2)}.
-                </Text>
-
-                <TouchableOpacity
-                  style={styles.dutiesCheckboxRow}
-                  activeOpacity={0.8}
-                  onPress={() => setDutiesAccepted(!dutiesAccepted)}
-                >
-                  <View style={[styles.dutiesCheckbox, dutiesAccepted && styles.dutiesCheckboxChecked]}>
-                    {dutiesAccepted && <Text style={styles.dutiesCheckmark}>✓</Text>}
+              {/* 🔒 THE CONFIDENCE SECTION */}
+              <View style={styles.confidenceCard}>
+                <View style={styles.confidenceHeader}>
+                  <Text style={styles.confidenceShieldIcon}>🔒</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.confidenceTitle}>Secure &amp; Trackable Delivery</Text>
+                    <Text style={styles.confidenceSub}>
+                      {deliveryPreference === "postnet"
+                        ? "Direct vault dispatch to your chosen PostNet collection branch with PIN verification."
+                        : "Insured courier dispatch with tamper-proof packaging &amp; real-time tracking."}
+                    </Text>
                   </View>
-                  <Text style={styles.dutiesCheckboxLabel}>
-                    I understand that I am responsible for any destination-country taxes, duties, or customs charges.
+                </View>
+
+                <View style={styles.confidenceGrid}>
+                  <View style={styles.confidenceGridItem}>
+                    <Text style={styles.confidenceCheck}>✓</Text>
+                    <Text style={styles.confidenceItemText}>Live Waybill Tracking</Text>
+                  </View>
+                  <View style={styles.confidenceGridItem}>
+                    <Text style={styles.confidenceCheck}>✓</Text>
+                    <Text style={styles.confidenceItemText}>SMS Dispatch PIN</Text>
+                  </View>
+                  <View style={styles.confidenceGridItem}>
+                    <Text style={styles.confidenceCheck}>✓</Text>
+                    <Text style={styles.confidenceItemText}>Fragile Handling</Text>
+                  </View>
+                  <View style={styles.confidenceGridItem}>
+                    <Text style={styles.confidenceCheck}>✓</Text>
+                    <Text style={styles.confidenceItemText}>18+ ID Verification</Text>
+                  </View>
+                </View>
+
+                <View style={styles.liquorComplianceBox}>
+                  <Text style={styles.liquorComplianceIcon}>⚖️</Text>
+                  <Text style={styles.liquorComplianceText}>
+                    <Text style={styles.liquorComplianceBold}>South African Liquor Compliance: </Text>
+                    Recipients must present a valid National ID or Passport upon delivery or PostNet branch collection.
                   </Text>
+                </View>
+              </View>
+
+              {/* International Duties Disclaimer if International */}
+              {!isSouthAfrica && (
+                <View style={styles.internationalDeliveryCard}>
+                  <View style={styles.internationalDeliveryHeader}>
+                    <Text style={styles.internationalWarningIcon}>⚠️</Text>
+                    <Text style={styles.internationalDeliveryTitle}>
+                      IMPORTANT: International Delivery &amp; Duties
+                    </Text>
+                  </View>
+
+                  <Text style={styles.internationalDeliveryText}>
+                    Import duties, customs charges, destination VAT/GST or other government charges may be payable by you upon arrival in {country.trim() || "your destination country"}. The delivery charge covers transportation only. Estimated duties/taxes: R {estimatedDutiesTaxes.toFixed(2)}.
+                  </Text>
+
+                  <TouchableOpacity
+                    style={styles.dutiesCheckboxRow}
+                    activeOpacity={0.8}
+                    onPress={() => setDutiesAccepted(!dutiesAccepted)}
+                  >
+                    <View style={[styles.dutiesCheckbox, dutiesAccepted && styles.dutiesCheckboxChecked]}>
+                      {dutiesAccepted && <Text style={styles.dutiesCheckmark}>✓</Text>}
+                    </View>
+                    <Text style={styles.dutiesCheckboxLabel}>
+                      I understand that I am responsible for any destination-country taxes, duties, or customs charges.
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Continue to Step 3 Button */}
+              <TouchableOpacity
+                style={styles.continueStepBtn}
+                onPress={handleProceedToPayment}
+                activeOpacity={0.88}
+              >
+                <LinearGradient
+                  colors={["#f5c242", "#c99742", "#a67c2e"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.continueStepGradient}
+                >
+                  <Text style={styles.continueStepText}>CONTINUE TO PAYMENT →</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {/* ========================================================================= */}
+          {/* STEP 3: PAYMENT & CONFIRMATION                                            */}
+          {/* ========================================================================= */}
+          {checkoutStep === 3 && (
+            <>
+              <View style={styles.stepTitleRow}>
+                <View>
+                  <Text style={styles.mainStepTitle}>3. Payment &amp; Rewards</Text>
+                  <Text style={styles.mainStepSubtitle}>Apply Super Coins and select payment method.</Text>
+                </View>
+                <TouchableOpacity onPress={() => setCheckoutStep(2)} style={styles.stepBackLink}>
+                  <Text style={styles.stepBackLinkText}>← Edit Delivery</Text>
                 </TouchableOpacity>
               </View>
-            )}
-          </View>
 
-          {/* Universal 18+ Legal Age Verification & Guest ID Document Upload */}
-          <View style={styles.sectionCard}>
-            <View style={styles.stepHeader}>
-              <View style={[styles.stepNumberCircle, { backgroundColor: "rgba(201, 151, 66, 0.2)", borderColor: "#c99742" }]}>
-                <Text style={[styles.stepNumber, { color: "#c99742", fontSize: 13 }]}>18+</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.stepTitle}>18+ Legal Age &amp; Identity Verification</Text>
-                <Text style={styles.verifySubtitle}>
-                  Mandatory compliance under the Liquor Act &amp; International Regulations
-                </Text>
-              </View>
-            </View>
-
-            {!isLoggedIn ? (
-              // Guest Customer Verification Flow
-              <View style={styles.guestVerifyContainer}>
-                <View style={styles.kycExplainerBox}>
-                  <Text style={styles.kycExplainerIcon}>🛡️</Text>
-                  <Text style={styles.kycExplainerText}>
-                    As a guest customer, please provide your legal identification details and attach an official photo of your ID, Passport or Driver's License. Your order will be placed instantly, and our compliance desk will verify the document before courier dispatch.
+              {/* Locked Delivery Summary Card with Shortcut */}
+              <View style={styles.lockedDeliveryCard}>
+                <View style={styles.lockedDeliveryLeft}>
+                  <Text style={{ fontSize: 20, marginRight: 10 }}>
+                    {deliveryPreference === "postnet" ? "🏪" : "🏠"}
                   </Text>
-                </View>
-
-                {/* ID Type Selector */}
-                <Text style={styles.inputLabel}>OFFICIAL ID DOCUMENT TYPE *</Text>
-                <View style={styles.verifyTypeSelector}>
-                  {[
-                    { key: "national_id", label: "National ID" },
-                    { key: "passport", label: "Passport" },
-                    { key: "drivers_license", label: "Driver's License" },
-                  ].map((t) => (
-                    <TouchableOpacity
-                      key={t.key}
-                      style={[
-                        styles.verifyTypeOption,
-                        guestIdType === t.key && styles.verifyTypeOptionActive,
-                      ]}
-                      onPress={() => setGuestIdType(t.key)}
-                      activeOpacity={0.8}
-                    >
-                      <Text
-                        style={[
-                          styles.verifyTypeOptionText,
-                          guestIdType === t.key && styles.verifyTypeOptionTextActive,
-                        ]}
-                      >
-                        {t.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <View style={styles.rowInputs}>
-                  {/* ID Number */}
-                  <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
-                    <Text style={styles.inputLabel}>
-                      {guestIdType === "national_id"
-                        ? "SA ID NUMBER *"
-                        : guestIdType === "passport"
-                        ? "PASSPORT NUMBER *"
-                        : "LICENSE NUMBER *"}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.lockedDeliveryTag}>
+                      {deliveryPreference === "postnet" ? "POSTNET COLLECTION POINT" : "DELIVERY DESTINATION"}
                     </Text>
-                    <TextInput
-                      style={styles.textInput}
-                      placeholder={guestIdType === "national_id" ? "e.g. 9205125089087" : "e.g. A12345678"}
-                      placeholderTextColor="#666"
-                      value={guestIdNumber}
-                      onChangeText={setGuestIdNumber}
-                      autoCapitalize="characters"
-                    />
-                  </View>
-
-                  {/* Date of Birth */}
-                  <View style={[styles.inputGroup, { flex: 1 }]}>
-                    <Text style={styles.inputLabel}>DATE OF BIRTH *</Text>
-                    <TextInput
-                      style={styles.textInput}
-                      placeholder="YYYY-MM-DD"
-                      placeholderTextColor="#666"
-                      value={guestDob}
-                      onChangeText={setGuestDob}
-                      keyboardType="numeric"
-                    />
+                    <Text style={styles.lockedDeliveryAddress} numberOfLines={2}>
+                      {deliveryPreference === "postnet" && preferredPostnetStore
+                        ? `${preferredPostnetStore.name} — ${preferredPostnetStore.address}`
+                        : `${address}, ${city}, ${country}`}
+                    </Text>
                   </View>
                 </View>
+                <TouchableOpacity
+                  style={styles.changeDeliveryBtn}
+                  onPress={() => setCheckoutStep(1)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.changeDeliveryBtnText}>Change</Text>
+                </TouchableOpacity>
+              </View>
 
-                {/* Document Upload Button / Status */}
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>ATTACH OFFICIAL ID / PASSPORT PHOTO *</Text>
-                  {isUploadingDoc ? (
-                    <View style={styles.docUploadingBox}>
-                      <ActivityIndicator size="small" color="#c99742" />
-                      <Text style={styles.docUploadingText}>Uploading and encrypting document...</Text>
-                    </View>
-                  ) : guestDocUrl ? (
-                    <View style={styles.verifyDocAttachedBox}>
-                      <View style={styles.verifyDocAttachedLeft}>
-                        <Text style={styles.verifyDocAttachedCheck}>✓</Text>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.verifyDocAttachedTitle}>Document Attached Successfully</Text>
-                          <Text style={styles.verifyDocAttachedName} numberOfLines={1}>
-                            {guestDocFileName || "Official_ID_Document.jpg"}
+              {/* Bottle Reserve Summary */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.cardHeaderTitle}>BOTTLE RESERVE ({checkoutItems.length})</Text>
+                {checkoutItems.map((item, idx) => {
+                  const key = getItemKey(item) || String(idx);
+                  const lineTotal = Number(item.price || 0) * Number(item.quantity || 1);
+                  return (
+                    <View key={key} style={styles.itemRow}>
+                      <Image
+                        source={{ uri: getImageUrl(item.image) }}
+                        style={styles.itemThumb}
+                        resizeMode="contain"
+                      />
+                      <View style={styles.itemDetailsCol}>
+                        <View style={styles.itemTopRow}>
+                          <Text style={styles.itemName} numberOfLines={2}>
+                            {item.name}
+                          </Text>
+                          <TouchableOpacity
+                            onPress={() => handleRemoveCheckoutItem(key)}
+                            style={styles.itemRemoveTouch}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={styles.itemRemoveIcon}>✕</Text>
+                          </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.itemMetaRow}>
+                          <Text style={styles.itemSizeBadge}>{item.size || "750ml"}</Text>
+                          <Text style={styles.itemUnitPrice}>
+                            R{Number(item.price || 0).toFixed(2)} each
                           </Text>
                         </View>
-                      </View>
-                      <TouchableOpacity
-                        style={styles.verifyDocReuploadBtn}
-                        onPress={handlePickGuestDocument}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.verifyDocReuploadText}>Change</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.verifyDocUploadBtn}
-                      onPress={handlePickGuestDocument}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={styles.verifyDocUploadIcon}>📷</Text>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.verifyDocUploadTitle}>Attach Official ID Photo</Text>
-                        <Text style={styles.verifyDocUploadSub}>Select photo or scan from your gallery (PNG, JPG, PDF)</Text>
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                </View>
 
-                {/* 18+ Certification Checkbox */}
-                <TouchableOpacity
-                  style={styles.verifyCheckboxRow}
-                  activeOpacity={0.8}
-                  onPress={() => setIsAgeConfirmed(!isAgeConfirmed)}
-                >
-                  <View style={[styles.verifyCheckbox, isAgeConfirmed && styles.verifyCheckboxChecked]}>
-                    {isAgeConfirmed && <Text style={styles.verifyCheckmark}>✓</Text>}
-                  </View>
-                  <Text style={styles.verifyCheckboxText}>
-                    I legally certify that I am at least 18 years of age and authorized to purchase alcoholic beverages under the South African Liquor Act. I confirm this document belongs to me.
-                  </Text>
-                </TouchableOpacity>
+                        <View style={styles.itemControlsRow}>
+                          <View style={styles.itemStepper}>
+                            <TouchableOpacity
+                              onPress={() => handleDecrementItemQty(key)}
+                              style={styles.stepperActionBtn}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.stepperActionMinus}>−</Text>
+                            </TouchableOpacity>
+                            <View style={styles.stepperQtyBox}>
+                              <Text style={styles.stepperQtyText}>{item.quantity || 1}</Text>
+                            </View>
+                            <TouchableOpacity
+                              onPress={() => handleIncrementItemQty(key)}
+                              style={styles.stepperActionBtn}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.stepperActionPlus}>+</Text>
+                            </TouchableOpacity>
+                          </View>
+
+                          <View style={styles.itemTotalCol}>
+                            <Text style={styles.itemTotalLabel}>Total</Text>
+                            <Text style={styles.itemPrice}>R{lineTotal.toFixed(2)}</Text>
+                          </View>
+                        </View>
+                      </View>
+                    </View>
+                  );
+                })}
               </View>
-            ) : (
-              // Authenticated User Pre-Verified Badge
-              <View style={styles.authVerifiedContainer}>
-                <View style={styles.authVerifiedRow}>
-                  <View style={styles.authVerifiedIconBox}>
-                    <Text style={styles.authVerifiedIcon}>✓</Text>
+
+              {/* Super Coins Card */}
+              <View style={styles.superCoinsCheckoutCard}>
+                <View style={styles.superCoinsCardHeader}>
+                  <View style={styles.superCoinsIconBox}>
+                    <Text style={styles.superCoinsIconText}>🪙</Text>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.authVerifiedTitle}>18+ Account Verified</Text>
-                    <Text style={styles.authVerifiedSub}>
-                      Your logged-in account has verified legal age compliance. Standard age verification may be requested upon courier handover.
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <View style={styles.superCoinsTitleRow}>
+                      <Text style={styles.superCoinsCardTitle}>Grand Store Super Coins</Text>
+                      <View style={styles.superCoinsRateBadge}>
+                        <Text style={styles.superCoinsRateBadgeText}>10 COINS = R1.00</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.superCoinsBalanceSub}>
+                      Available: <Text style={styles.superCoinsBalanceGold}>{(userSuperCoins || 0).toLocaleString()} Coins</Text> (Value: R{((userSuperCoins || 0) * 0.1).toFixed(2)})
                     </Text>
                   </View>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.superCoinsToggle,
+                      useSuperCoins && (userSuperCoins || 0) > 0 && styles.superCoinsToggleActive,
+                    ]}
+                    onPress={() => {
+                      if ((userSuperCoins || 0) <= 0) {
+                        showMessage("You currently have 0 Super Coins. Earn 10 coins per R100 on this order!");
+                        return;
+                      }
+                      setUseSuperCoins(!useSuperCoins);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.superCoinsToggleCheck}>
+                      {useSuperCoins && (userSuperCoins || 0) > 0 ? "✓" : ""}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity
-                  style={[styles.verifyCheckboxRow, { marginTop: 12 }]}
-                  activeOpacity={0.8}
-                  onPress={() => setIsAgeConfirmed(!isAgeConfirmed)}
-                >
-                  <View style={[styles.verifyCheckbox, isAgeConfirmed && styles.verifyCheckboxChecked]}>
-                    {isAgeConfirmed && <Text style={styles.verifyCheckmark}>✓</Text>}
+
+                {useSuperCoins && (userSuperCoins || 0) > 0 && superCoinDiscount > 0 ? (
+                  <View style={styles.superCoinsAppliedRow}>
+                    <View style={styles.superCoinsAppliedLeft}>
+                      <Text style={styles.superCoinsAppliedCheck}>✓</Text>
+                      <Text style={styles.superCoinsAppliedText}>
+                        Margin-Safe Deduction: <Text style={styles.superCoinsAppliedAmount}>-R{superCoinDiscount.toFixed(2)}</Text> ({Math.round(superCoinDiscount / 0.1)} coins)
+                      </Text>
+                    </View>
+                    {superCoinsQuote?.isMarginCapped ? (
+                      <Text style={styles.superCoinsMarginNote}>
+                        🛡️ {superCoinsQuote.marginMessage || "10% max order redemption cap (protects 15% platform margin)"}
+                      </Text>
+                    ) : null}
                   </View>
-                  <Text style={styles.verifyCheckboxText}>
-                    I confirm that I am at least 18 years of age and eligible to receive this shipment.
+                ) : null}
+
+                <View style={styles.superCoinsEarnBanner}>
+                  <Text style={styles.superCoinsEarnIcon}>🎉</Text>
+                  <Text style={styles.superCoinsEarnText}>
+                    Earn <Text style={styles.superCoinsEarnGold}>+{superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)} Super Coins</Text> (R{((superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)) * 0.1).toFixed(2)}) upon order delivery!
                   </Text>
-                </TouchableOpacity>
+                </View>
               </View>
-            )}
-          </View>
 
-          {/* Step 2: Bottle Reserve Summary */}
-          <View style={styles.sectionCard}>
-            <View style={styles.stepHeader}>
-              <View style={styles.stepNumberCircle}>
-                <Text style={styles.stepNumber}>2</Text>
-              </View>
-              <Text style={styles.stepTitle}>Bottle Reserve ({checkoutItems.length})</Text>
-            </View>
+              {/* Payment Method Selection */}
+              <View style={styles.sectionCard}>
+                <Text style={styles.cardHeaderTitle}>PAYMENT METHOD</Text>
 
-            {checkoutItems.length === 0 ? (
-              <View style={styles.emptyCheckoutReserve}>
-                <Text style={styles.emptyCheckoutText}>No bottles in reserve</Text>
-                <TouchableOpacity
-                  style={styles.emptyCheckoutBtn}
-                  onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.navigate("Cart"))}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.emptyCheckoutBtnText}>Return to Selection</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              checkoutItems.map((item, idx) => {
-                const key = getItemKey(item) || String(idx);
-                const lineTotal = Number(item.price || 0) * Number(item.quantity || 1);
-                return (
-                  <View key={key} style={styles.itemRow}>
-                    <Image
-                      source={{ uri: getImageUrl(item.image) }}
-                      style={styles.itemThumb}
-                      resizeMode="contain"
-                    />
-                    <View style={styles.itemDetailsCol}>
-                      <View style={styles.itemTopRow}>
-                        <Text style={styles.itemName} numberOfLines={2}>
-                          {item.name}
-                        </Text>
-                        <TouchableOpacity
-                          onPress={() => handleRemoveCheckoutItem(key)}
-                          style={styles.itemRemoveTouch}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={styles.itemRemoveIcon}>✕</Text>
-                        </TouchableOpacity>
+                {/* Option A: PayFast (Instant Cards & Instant EFT - South Africa) */}
+                {isSouthAfrica && (
+                  <TouchableOpacity
+                    style={[
+                      styles.paymentOption,
+                      paymentMethod === "payfast" && styles.paymentOptionActive,
+                    ]}
+                    onPress={() => handlePaymentMethodSelect("payfast")}
+                    activeOpacity={0.8}
+                  >
+                    <View style={styles.radioCircle}>
+                      {paymentMethod === "payfast" && <View style={styles.radioDot} />}
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <View style={styles.optionHeaderRow}>
+                        <Text style={styles.paymentOptionTitle}>PayFast (Instant)</Text>
+                        <Text style={styles.zaOnlyBadge}>🇿🇦 ZA ONLY</Text>
                       </View>
-
-                      <View style={styles.itemMetaRow}>
-                        <Text style={styles.itemSizeBadge}>{item.size || "750ml"}</Text>
-                        <Text style={styles.itemUnitPrice}>
-                          R{Number(item.price || 0).toFixed(2)} each
-                        </Text>
-                      </View>
-
-                      <View style={styles.itemControlsRow}>
-                        {/* Stepper controls: - / qty / + */}
-                        <View style={styles.itemStepper}>
-                          <TouchableOpacity
-                            onPress={() => handleDecrementItemQty(key)}
-                            style={styles.stepperActionBtn}
-                            activeOpacity={0.7}
-                          >
-                            <Text style={styles.stepperActionMinus}>−</Text>
-                          </TouchableOpacity>
-                          <View style={styles.stepperQtyBox}>
-                            <Text style={styles.stepperQtyText}>{item.quantity || 1}</Text>
-                          </View>
-                          <TouchableOpacity
-                            onPress={() => handleIncrementItemQty(key)}
-                            style={styles.stepperActionBtn}
-                            activeOpacity={0.7}
-                          >
-                            <Text style={styles.stepperActionPlus}>+</Text>
-                          </TouchableOpacity>
-                        </View>
-
-                        {/* Item line total */}
-                        <View style={styles.itemTotalCol}>
-                          <Text style={styles.itemTotalLabel}>Total</Text>
-                          <Text style={styles.itemPrice}>R{lineTotal.toFixed(2)}</Text>
-                        </View>
+                      <Text style={styles.paymentOptionDesc}>
+                        Visa, Mastercard, Debit, and Instant EFT via PayFast Sandbox for immediate dispatch.
+                      </Text>
+                      <View style={styles.payfastBadgeBox}>
+                        <Text style={styles.payfastBadgeText}>🔒 Powered by PayFast Sandbox</Text>
                       </View>
                     </View>
+                  </TouchableOpacity>
+                )}
+
+                {/* Option B: Manual Bank Transfer (Standard Bank EFT) */}
+                <TouchableOpacity
+                  style={[
+                    styles.paymentOption,
+                    paymentMethod === "bank_transfer" && styles.paymentOptionActive,
+                  ]}
+                  onPress={() => handlePaymentMethodSelect("bank_transfer")}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.radioCircle}>
+                    {paymentMethod === "bank_transfer" && <View style={styles.radioDot} />}
                   </View>
-                );
-              })
-            )}
-          </View>
-
-          {/* Step 3: Payment Method Selection */}
-          <View style={styles.sectionCard}>
-            <View style={styles.stepHeader}>
-              <View style={styles.stepNumberCircle}>
-                <Text style={styles.stepNumber}>3</Text>
-              </View>
-              <Text style={styles.stepTitle}>Payment Method</Text>
-            </View>
-
-            {/* Option A: PayFast (Instant Cards & Instant EFT - South Africa) */}
-            <TouchableOpacity
-              style={[
-                styles.paymentOption,
-                paymentMethod === "payfast" && styles.paymentOptionActive,
-              ]}
-              onPress={() => handlePaymentMethodSelect("payfast")}
-              activeOpacity={0.8}
-            >
-              <View style={styles.radioCircle}>
-                {paymentMethod === "payfast" && <View style={styles.radioDot} />}
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <View style={styles.optionHeaderRow}>
-                  <Text style={styles.paymentOptionTitle}>PayFast (Instant)</Text>
-                  <Text style={styles.zaOnlyBadge}>🇿🇦 ZA ONLY</Text>
-                </View>
-                <Text style={styles.paymentOptionDesc}>
-                  Visa, Mastercard, Debit, and Instant EFT. Operates via PayFast Sandbox for immediate order dispatch.
-                </Text>
-                <View style={styles.payfastBadgeBox}>
-                  <Text style={styles.payfastBadgeText}>🔒 Powered by PayFast Sandbox</Text>
-                </View>
-              </View>
-            </TouchableOpacity>
-
-            {/* Option B: Manual Bank Transfer (Standard Bank EFT) */}
-            <TouchableOpacity
-              style={[
-                styles.paymentOption,
-                paymentMethod === "bank_transfer" && styles.paymentOptionActive,
-              ]}
-              onPress={() => handlePaymentMethodSelect("bank_transfer")}
-              activeOpacity={0.8}
-            >
-              <View style={styles.radioCircle}>
-                {paymentMethod === "bank_transfer" && <View style={styles.radioDot} />}
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <View style={styles.optionHeaderRow}>
-                  <Text style={styles.paymentOptionTitle}>Manual Bank Transfer (EFT)</Text>
-                  <Text style={styles.preferredBadge}>ANY COUNTRY</Text>
-                </View>
-                <Text style={styles.paymentOptionDesc}>
-                  Transfer directly to our Standard Bank account. Details & Reference displayed upon order. Supports local & international banking.
-                </Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-
-          {/* ⭐ SUPER COINS REDEMPTION CARD (10 Super Coins = R1.00, Max 10% Margin-Safe Cap) */}
-          <View style={styles.superCoinsCheckoutCard}>
-            <View style={styles.superCoinsCardHeader}>
-              <View style={styles.superCoinsIconBox}>
-                <Text style={styles.superCoinsIconText}>🪙</Text>
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <View style={styles.superCoinsTitleRow}>
-                  <Text style={styles.superCoinsCardTitle}>Grand Store Super Coins</Text>
-                  <View style={styles.superCoinsRateBadge}>
-                    <Text style={styles.superCoinsRateBadgeText}>10 COINS = R1.00</Text>
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <View style={styles.optionHeaderRow}>
+                      <Text style={styles.paymentOptionTitle}>Manual Bank Transfer (EFT)</Text>
+                      <Text style={styles.preferredBadge}>ANY COUNTRY</Text>
+                    </View>
+                    <Text style={styles.paymentOptionDesc}>
+                      Direct deposit to our Standard Bank account. Details &amp; Reference displayed upon order.
+                    </Text>
                   </View>
-                </View>
-                <Text style={styles.superCoinsBalanceSub}>
-                  Available: <Text style={styles.superCoinsBalanceGold}>{(userSuperCoins || 0).toLocaleString()} Coins</Text> (Value: R{((userSuperCoins || 0) * 0.1).toFixed(2)})
-                </Text>
+                </TouchableOpacity>
               </View>
 
+              {/* Total Financial Breakdown */}
+              <View style={styles.breakdownCard}>
+                <Text style={styles.breakdownTitle}>TOTAL BREAKDOWN</Text>
+
+                <View style={styles.breakdownRow}>
+                  <Text style={styles.breakdownLabel}>Subtotal</Text>
+                  <Text style={styles.breakdownVal}>R{subtotal.toFixed(2)}</Text>
+                </View>
+
+                {discount > 0 && (
+                  <View style={styles.breakdownRow}>
+                    <Text style={[styles.breakdownLabel, { color: "#4cd964" }]}>Voucher Discount</Text>
+                    <Text style={[styles.breakdownVal, { color: "#4cd964" }]}>-R{discount.toFixed(2)}</Text>
+                  </View>
+                )}
+
+                {superCoinDiscount > 0 && (
+                  <View style={styles.breakdownRow}>
+                    <Text style={[styles.breakdownLabel, { color: "#f5c242" }]}>🪙 Super Coins Redeemed</Text>
+                    <Text style={[styles.breakdownVal, { color: "#f5c242", fontWeight: "700" }]}>
+                      -R{superCoinDiscount.toFixed(2)}
+                    </Text>
+                  </View>
+                )}
+
+                <View style={styles.breakdownRow}>
+                  <Text style={styles.breakdownLabel}>
+                    {selectedCourier
+                      ? `${selectedCourier.courierName} (${selectedCourier.serviceLevel})`
+                      : deliveryPreference === "postnet"
+                      ? "PostNet Pickup Delivery"
+                      : isSouthAfrica
+                      ? "PostNet Standard Delivery"
+                      : "DHL Express Courier"}
+                  </Text>
+                  <Text style={styles.breakdownVal}>
+                    {shippingFee === 0 ? "FREE" : `R${shippingFee.toFixed(2)}`}
+                  </Text>
+                </View>
+
+                <View style={styles.divider} />
+
+                <View style={styles.breakdownRowTotal}>
+                  <Text style={styles.breakdownLabelTotal}>TOTAL TO PAY</Text>
+                  <Text style={styles.breakdownValTotal}>R{grandTotal.toFixed(2)}</Text>
+                </View>
+              </View>
+
+              {/* Place Order CTA */}
               <TouchableOpacity
-                style={[
-                  styles.superCoinsToggle,
-                  useSuperCoins && (userSuperCoins || 0) > 0 && styles.superCoinsToggleActive,
-                ]}
-                onPress={() => {
-                  if ((userSuperCoins || 0) <= 0) {
-                    showMessage("You currently have 0 Super Coins. Earn 10 coins per R100 on this order!");
-                    return;
-                  }
-                  setUseSuperCoins(!useSuperCoins);
-                }}
-                activeOpacity={0.8}
+                style={styles.placeOrderTouch}
+                onPress={handlePlaceOrder}
+                disabled={isSubmitting}
+                activeOpacity={0.88}
               >
-                <Text style={styles.superCoinsToggleCheck}>
-                  {useSuperCoins && (userSuperCoins || 0) > 0 ? "✓" : ""}
-                </Text>
+                <LinearGradient
+                  colors={["#f5c242", "#c99742", "#a67c2e"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.placeOrderGradient}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator color="#000" />
+                  ) : (
+                    <Text style={styles.placeOrderText}>
+                      {paymentMethod === "payfast"
+                        ? `PAY WITH PAYFAST • R${grandTotal.toFixed(2)}`
+                        : `PLACE ORDER • R${grandTotal.toFixed(2)}`}
+                    </Text>
+                  )}
+                </LinearGradient>
               </TouchableOpacity>
-            </View>
-
-            {useSuperCoins && (userSuperCoins || 0) > 0 && superCoinDiscount > 0 ? (
-              <View style={styles.superCoinsAppliedRow}>
-                <View style={styles.superCoinsAppliedLeft}>
-                  <Text style={styles.superCoinsAppliedCheck}>✓</Text>
-                  <Text style={styles.superCoinsAppliedText}>
-                    Margin-Safe Deduction: <Text style={styles.superCoinsAppliedAmount}>-R{superCoinDiscount.toFixed(2)}</Text> ({Math.round(superCoinDiscount / 0.1)} coins)
-                  </Text>
-                </View>
-                {superCoinsQuote?.isMarginCapped ? (
-                  <Text style={styles.superCoinsMarginNote}>
-                    🛡️ {superCoinsQuote.marginMessage || "10% max order redemption cap (protects 15% platform margin)"}
-                  </Text>
-                ) : null}
-              </View>
-            ) : null}
-
-            {/* Potential Coins to Earn Banner */}
-            <View style={styles.superCoinsEarnBanner}>
-              <Text style={styles.superCoinsEarnIcon}>🎉</Text>
-              <Text style={styles.superCoinsEarnText}>
-                Earn <Text style={styles.superCoinsEarnGold}>+{superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)} Super Coins</Text> (R{((superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)) * 0.1).toFixed(2)}) upon order delivery!
-              </Text>
-            </View>
-          </View>
-
-          {/* Step 4: Final Financial Breakdown */}
-          <View style={styles.breakdownCard}>
-            <Text style={styles.breakdownTitle}>TOTAL BREAKDOWN</Text>
-
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Subtotal</Text>
-              <Text style={styles.breakdownVal}>R{subtotal.toFixed(2)}</Text>
-            </View>
-
-            {discount > 0 && (
-              <View style={styles.breakdownRow}>
-                <Text style={[styles.breakdownLabel, { color: "#4cd964" }]}>Voucher Discount</Text>
-                <Text style={[styles.breakdownVal, { color: "#4cd964" }]}>-R{discount.toFixed(2)}</Text>
-              </View>
-            )}
-
-            {superCoinDiscount > 0 && (
-              <View style={styles.breakdownRow}>
-                <Text style={[styles.breakdownLabel, { color: "#f5c242" }]}>🪙 Super Coins Redeemed</Text>
-                <Text style={[styles.breakdownVal, { color: "#f5c242", fontWeight: "700" }]}>
-                  -R{superCoinDiscount.toFixed(2)}
-                </Text>
-              </View>
-            )}
-
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>
-                {selectedCourier
-                  ? `${selectedCourier.courierName} (${selectedCourier.serviceLevel})`
-                  : deliveryPreference === "postnet"
-                  ? "PostNet Pickup Delivery"
-                  : isSouthAfrica
-                  ? "Courier Guy Door Delivery"
-                  : "DHL Express Courier"}
-              </Text>
-              <Text style={styles.breakdownVal}>
-                {shippingFee === 0 ? "FREE" : `R${shippingFee.toFixed(2)}`}
-              </Text>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.breakdownRowTotal}>
-              <Text style={styles.breakdownLabelTotal}>TOTAL TO PAY</Text>
-              <Text style={styles.breakdownValTotal}>R{grandTotal.toFixed(2)}</Text>
-            </View>
-          </View>
-
-          {/* Submit Action */}
-          <TouchableOpacity
-            style={styles.placeOrderTouch}
-            onPress={handlePlaceOrder}
-            disabled={isSubmitting}
-            activeOpacity={0.88}
-          >
-            <LinearGradient
-              colors={["#f5c242", "#c99742", "#a67c2e"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.placeOrderGradient}
-            >
-              {isSubmitting ? (
-                <ActivityIndicator color="#000" />
-              ) : (
-                <Text style={styles.placeOrderText}>
-                  {paymentMethod === "payfast"
-                    ? `PAY WITH PAYFAST • R${grandTotal.toFixed(2)}`
-                    : `PLACE ORDER • R${grandTotal.toFixed(2)}`}
-                </Text>
-              )}
-            </LinearGradient>
-          </TouchableOpacity>
+            </>
+          )}
         </ScrollView>
       )}
       {renderPayfastModal()}
@@ -3902,6 +4073,274 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0c0a08" },
   loadingCenter: { flex: 1, justifyContent: "center", alignItems: "center" },
   scrollContent: { padding: 14, paddingBottom: 60 },
+
+  // Top Wizard Progress Bar
+  topProgressContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#15120e",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 16,
+  },
+  progressStepTouch: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  progressStepActive: {},
+  progressBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 6,
+  },
+  progressBadgeActive: {
+    backgroundColor: "#c99742",
+    borderColor: "#c99742",
+  },
+  progressBadgeDone: {
+    backgroundColor: "rgba(201, 151, 66, 0.2)",
+    borderColor: "#c99742",
+  },
+  progressBadgeText: {
+    color: "#888",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  progressBadgeTextActive: {
+    color: "#000",
+    fontWeight: "900",
+  },
+  progressBadgeTextDone: {
+    color: "#f5c242",
+    fontWeight: "900",
+  },
+  progressLabel: {
+    color: "#777",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  progressLabelActive: {
+    color: "#f5c242",
+    fontWeight: "800",
+  },
+  progressLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    marginHorizontal: 8,
+  },
+  progressLineActive: {
+    backgroundColor: "#c99742",
+  },
+
+  // Step Title Row & Navigation Shortcuts
+  stepTitleRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    marginBottom: 14,
+    paddingHorizontal: 2,
+  },
+  mainStepTitle: {
+    color: "#f8f5ee",
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+  },
+  mainStepSubtitle: {
+    color: "#888",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  stepBackLink: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+  },
+  stepBackLinkText: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+
+  // Delivery Modes Column (Deliver to Address / Collect from PostNet / International DHL)
+  deliveryModesColumn: {
+    gap: 10,
+    marginTop: 4,
+  },
+  modeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#0e0c0a",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    padding: 12,
+  },
+  modeCardActive: {
+    borderColor: "#c99742",
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+  },
+  modeIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modeIcon: {
+    fontSize: 18,
+  },
+  modeTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 3,
+  },
+  modeTitle: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  modeTag: {
+    backgroundColor: "rgba(201, 151, 66, 0.18)",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  modeTagText: {
+    color: "#f5c242",
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  modeSubtitle: {
+    color: "#888",
+    fontSize: 10.5,
+    lineHeight: 14,
+  },
+  modeRadio: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: "#c99742",
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 8,
+  },
+  modeRadioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#f5c242",
+  },
+
+  // Card Header Titles
+  cardHeaderTitle: {
+    color: "#c99742",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    marginBottom: 12,
+  },
+
+  // Select Store Button in PostNet list
+  selectStoreBtn: {
+    backgroundColor: "#c99742",
+    borderRadius: 8,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    alignSelf: "center",
+    marginLeft: 8,
+  },
+  selectStoreBtnText: {
+    color: "#000",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
+
+  // Locked Delivery Card in Step 3
+  lockedDeliveryCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#15120e",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+    padding: 14,
+    marginBottom: 16,
+  },
+  lockedDeliveryLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    marginRight: 10,
+  },
+  lockedDeliveryTag: {
+    color: "#f5c242",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    marginBottom: 2,
+  },
+  lockedDeliveryAddress: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 16,
+  },
+  changeDeliveryBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.35)",
+  },
+  changeDeliveryBtnText: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "800",
+    textDecorationLine: "underline",
+  },
+
+  // Continue Step Button (Gradient)
+  continueStepBtn: {
+    marginBottom: 24,
+  },
+  continueStepGradient: {
+    height: 50,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 3,
+    shadowColor: "#f5c242",
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  continueStepText: {
+    color: "#0a0a0a",
+    fontSize: 13,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+  },
 
   // Section Cards
   sectionCard: {
