@@ -38,6 +38,8 @@ const getImageUrl = (imagePath) => {
 // Real Order Card Component
 const OrderItem = ({ item, navigation, onOrderUpdated }) => {
   const isPaid = item.isPaid || item.paymentStatus === "Paid";
+  const isPickup = item.deliveryPreference === 'pickup' || Boolean(item.selectedPostnetStore);
+  const latestMsg = item.latestAdminMessage || (item.adminMessages && item.adminMessages.length > 0 ? item.adminMessages[item.adminMessages.length - 1] : null);
   const items = (item.items && item.items.length > 0)
     ? item.items
     : (item.orderItems && item.orderItems.length > 0)
@@ -74,6 +76,28 @@ const OrderItem = ({ item, navigation, onOrderUpdated }) => {
           </View>
         </View>
       </View>
+
+      {/* Fulfillment Status Pill */}
+      <View style={{ marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: "rgba(216, 183, 109, 0.08)", borderWidth: 1, borderColor: "rgba(216, 183, 109, 0.2)", flexDirection: "row", alignItems: "center" }}>
+        <Text style={{ fontSize: 13, marginRight: 6 }}>{isPickup ? "📍" : "🚚"}</Text>
+        <Text style={{ color: "#d8b76d", fontSize: 11, fontWeight: "600", flex: 1 }} numberOfLines={1}>
+          {isPickup
+            ? (item.selectedPostnetStore ? `Arriving at PostNet ${item.selectedPostnetStore.name}` : "Arriving at your PostNet collection branch")
+            : "Delivery Soon"}
+        </Text>
+      </View>
+
+      {/* Concierge / Out of Stock Alert Banner */}
+      {latestMsg && (
+        <View style={{ marginTop: 8, padding: 9, borderRadius: 8, backgroundColor: latestMsg.type === 'emergency' || latestMsg.type === 'stock_issue' ? "rgba(225, 29, 72, 0.15)" : "rgba(217, 119, 6, 0.15)", borderWidth: 1, borderColor: latestMsg.type === 'emergency' || latestMsg.type === 'stock_issue' ? "rgba(225, 29, 72, 0.4)" : "rgba(217, 119, 6, 0.4)" }}>
+          <Text style={{ color: latestMsg.type === 'emergency' || latestMsg.type === 'stock_issue' ? "#fda4af" : "#fcd34d", fontSize: 10, fontWeight: "700", textTransform: "uppercase", marginBottom: 2 }}>
+            {latestMsg.type === 'stock_issue' ? "⚠️ Out of Stock Notice" : latestMsg.type === 'emergency' ? "🚨 Urgent Notice" : "💬 Concierge Notice"}
+          </Text>
+          <Text style={{ color: "#ffffff", fontSize: 11, lineHeight: 15 }} numberOfLines={2}>
+            {latestMsg.message}
+          </Text>
+        </View>
+      )}
 
       {/* Items Preview List */}
       <View style={styles.itemsBox}>
@@ -253,6 +277,10 @@ export default function MyOrders({ navigation }) {
                       paymentStatus: paid ? "Paid" : (o.paymentStatus || (o.isPaid ? "Paid" : "Pending")),
                       isPaid: paid || o.isPaid || o.paymentStatus === "Paid",
                       courierName: o.shipments?.[0]?.selectedCourier?.courierName || "Courier Guy",
+                      deliveryPreference: o.deliveryPreference,
+                      selectedPostnetStore: o.selectedPostnetStore,
+                      latestAdminMessage: o.latestAdminMessage,
+                      adminMessages: o.adminMessages,
                       items: (o.orderItems || []).map((item) => ({
                         name: item.name,
                         price: Number(item.price || 0),

@@ -185,6 +185,10 @@ export default function OrderDetails({ route, navigation }) {
                         country: first.shippingAddress?.country,
                         phone: first.shippingAddress?.phone || first.shippingAddress?.phoneNumber,
                       },
+                      deliveryPreference: first.deliveryPreference,
+                      selectedPostnetStore: first.selectedPostnetStore,
+                      latestAdminMessage: first.latestAdminMessage,
+                      adminMessages: first.adminMessages,
                     });
                     break;
                   }
@@ -290,8 +294,12 @@ export default function OrderDetails({ route, navigation }) {
   const recipient = order.recipient || {};
   const isPostNet =
     order.deliveryPreference === "postnet" ||
+    order.deliveryPreference === "pickup" ||
+    Boolean(order.selectedPostnetStore) ||
     String(order.courierName || "").toLowerCase().includes("postnet") ||
     !!order.pickupStore;
+
+  const latestAdminMsg = order.latestAdminMessage || (order.adminMessages && order.adminMessages.length > 0 ? order.adminMessages[order.adminMessages.length - 1] : null);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -329,113 +337,90 @@ export default function OrderDetails({ route, navigation }) {
 
           {/* Delivery Status Banner */}
           <View style={styles.deliveryStatusRow}>
-            <Text style={{ fontSize: 18, marginRight: 10 }}>{isPaid ? "📦" : "⏳"}</Text>
+            <Text style={{ fontSize: 20, marginRight: 12 }}>{isPostNet ? "📍" : "🚚"}</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.deliveryStatusTitle}>
-                {isPaid ? "Preparing for Courier Collection" : "Awaiting Payment Confirmation"}
+                {isPostNet
+                  ? "Your order has been received — Arriving at your PostNet collection branch"
+                  : "Your order has been received — Delivery Soon"}
               </Text>
               <Text style={styles.deliveryStatusSub}>
-                {isPaid
-                  ? "Your luxury order is packaged with tamper-proof security seals."
-                  : "Complete payment to initiate priority warehouse fulfillment."}
+                {isPostNet
+                  ? (order.selectedPostnetStore ? `Collection point: ${order.selectedPostnetStore.name} (${order.selectedPostnetStore.address})` : "Counter pickup with collection PIN upon parcel arrival.")
+                  : (recipient.address ? `Delivering to: ${recipient.address}, ${recipient.city || ''}` : "Priority doorstep delivery undergoing warehouse dispatch preparation.")}
               </Text>
             </View>
           </View>
         </View>
 
-        {/* 6-Stage Delivery Tracking Timeline */}
-        <View style={styles.card}>
-          <View style={styles.timelineHeaderRow}>
-            <Text style={styles.sectionHeading}>6-STAGE TRACKING TIMELINE</Text>
-            <View style={styles.liveTrackingPill}>
-              <Text style={styles.liveTrackingPillText}>LIVE WAYBILL</Text>
+        {/* Concierge Custom Advisory / Out of Stock / Emergency Notice Card */}
+        {latestAdminMsg && (
+          <View style={[
+            styles.card,
+            {
+              backgroundColor: latestAdminMsg.type === 'emergency' || latestAdminMsg.type === 'stock_issue'
+                ? "rgba(225, 29, 72, 0.12)"
+                : latestAdminMsg.type === 'warning'
+                ? "rgba(217, 119, 6, 0.12)"
+                : "rgba(59, 130, 246, 0.12)",
+              borderColor: latestAdminMsg.type === 'emergency' || latestAdminMsg.type === 'stock_issue'
+                ? "rgba(225, 29, 72, 0.45)"
+                : latestAdminMsg.type === 'warning'
+                ? "rgba(217, 119, 6, 0.45)"
+                : "rgba(59, 130, 246, 0.45)",
+              borderWidth: 1.5,
+            }
+          ]}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.1)" }}>
+              <Text style={{
+                color: latestAdminMsg.type === 'emergency' || latestAdminMsg.type === 'stock_issue'
+                  ? "#fda4af"
+                  : latestAdminMsg.type === 'warning'
+                  ? "#fcd34d"
+                  : "#93c5fd",
+                fontSize: 12,
+                fontWeight: "700",
+                textTransform: "uppercase",
+                letterSpacing: 0.5
+              }}>
+                {latestAdminMsg.type === 'stock_issue'
+                  ? "⚠️ Out of Stock / Stock Notice"
+                  : latestAdminMsg.type === 'emergency'
+                  ? "🚨 Urgent Order Notice"
+                  : latestAdminMsg.type === 'warning'
+                  ? "⚠️ Delivery Advisory"
+                  : "💬 Store Concierge Message"}
+              </Text>
+              {latestAdminMsg.sentAt && (
+                <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, fontFamily: "monospace" }}>
+                  {new Date(latestAdminMsg.sentAt).toLocaleDateString()} {new Date(latestAdminMsg.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+              )}
+            </View>
+            <Text style={{ color: "#ffffff", fontSize: 13, lineHeight: 19, marginBottom: 8, borderLeftWidth: 2, borderLeftColor: "#d8b76d", paddingLeft: 10 }}>
+              {latestAdminMsg.message}
+            </Text>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+              <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 10 }}>
+                From: {latestAdminMsg.sentByName || "The Grand Store Concierge"}
+              </Text>
+              <Text style={{ color: "#d8b76d", fontSize: 10, fontWeight: "600" }}>
+                concierge@grandstore.co.za
+              </Text>
             </View>
           </View>
+        )}
 
-          <View style={styles.timelineList}>
-            {[
-              {
-                stage: 1,
-                name: "Payment Confirmed",
-                desc: isPaid ? "Payment verified via PayFast" : "Awaiting payment settlement",
-                done: isPaid,
-                active: !isPaid,
-              },
-              {
-                stage: 2,
-                name: "Order Confirmed",
-                desc: `Assigned order reference #${orderRefId}`,
-                done: true,
-                active: false,
-              },
-              {
-                stage: 3,
-                name: "Vendor Preparing",
-                desc: "Bottles inspected & sealed with tamper-proof security wax",
-                done: isPaid,
-                active: isPaid,
-              },
-              {
-                stage: 4,
-                name: "Collected by Courier",
-                desc: isPostNet ? "Handed over to PostNet Logistics" : "Collected by Courier Guy Express",
-                done: false,
-                active: false,
-              },
-              {
-                stage: 5,
-                name: "In Transit 🚚",
-                desc: "Secured transport via regional distribution hub",
-                done: false,
-                active: false,
-              },
-              {
-                stage: 6,
-                name: isPostNet ? "Ready for Collection 📍" : "Delivered ✅",
-                desc: isPostNet
-                  ? "Counter collection with SMS PIN & 18+ ID"
-                  : "Direct doorstep handover & signature",
-                done: false,
-                active: false,
-              },
-            ].map((step, sIdx, arr) => (
-              <View key={sIdx} style={styles.timelineStepRow}>
-                <View style={styles.timelineLeftCol}>
-                  <View
-                    style={[
-                      styles.timelineNode,
-                      step.done && styles.timelineNodeDone,
-                      step.active && styles.timelineNodeActive,
-                    ]}
-                  >
-                    <Text style={styles.timelineNodeText}>
-                      {step.done ? "✓" : step.stage}
-                    </Text>
-                  </View>
-                  {sIdx < arr.length - 1 && (
-                    <View
-                      style={[
-                        styles.timelineLine,
-                        step.done && styles.timelineLineDone,
-                      ]}
-                    />
-                  )}
-                </View>
-                <View style={styles.timelineRightCol}>
-                  <Text
-                    style={[
-                      styles.timelineStepName,
-                      (step.done || step.active) && styles.timelineStepNameActive,
-                    ]}
-                  >
-                    {step.name}
-                  </Text>
-                  <Text style={styles.timelineStepDesc}>{step.desc}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        </View>
+        {/*
+          [COMMENTED OUT FOR NOW AS REQUESTED - 6-STAGE TRACKING TIMELINE]
+          Multi-stage status progression:
+          Stage 1: Payment Confirmed
+          Stage 2: Order Confirmed
+          Stage 3: Vendor Preparing
+          Stage 4: Collected by Courier
+          Stage 5: In Transit
+          Stage 6: Ready for Collection / Delivered
+        */}
 
         {/* Ordered Products Section */}
         <View style={styles.card}>
@@ -495,6 +480,18 @@ export default function OrderDetails({ route, navigation }) {
               <Text style={styles.infoValue}>
                 {recipient.fullName} {recipient.phone ? `(${recipient.phone})` : ""}
               </Text>
+            </View>
+          )}
+
+          {order.isGift && (
+            <View style={[styles.infoBlock, { backgroundColor: "rgba(201, 151, 66, 0.08)", padding: 10, borderRadius: 8, borderWidth: 1, borderColor: "rgba(201, 151, 66, 0.2)" }]}>
+              <Text style={[styles.infoLabel, { color: "#f5c242" }]}>🎁 Gift Order</Text>
+              {order.giftRecipientName ? (
+                <Text style={styles.infoValue}>For: {order.giftRecipientName}</Text>
+              ) : null}
+              {order.giftMessage ? (
+                <Text style={[styles.infoValue, { fontStyle: "italic", color: "#ccc", marginTop: 2 }]}>"{order.giftMessage}"</Text>
+              ) : null}
             </View>
           )}
 

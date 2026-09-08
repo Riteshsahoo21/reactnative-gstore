@@ -645,6 +645,11 @@ const Checkout = ({ navigation, route }) => {
   const [useSuperCoins, setUseSuperCoins] = useState(true);
   const [superCoinsQuote, setSuperCoinsQuote] = useState(null);
 
+  // Gift Option State
+  const [isGift, setIsGift] = useState(false);
+  const [giftRecipientName, setGiftRecipientName] = useState("");
+  const [giftMessage, setGiftMessage] = useState("");
+
   // Delivery Quote State (from backend /api/checkout/quote)
   const [quote, setQuote] = useState(null);
   const [isCalculatingQuote, setIsCalculatingQuote] = useState(false);
@@ -1758,35 +1763,18 @@ const Checkout = ({ navigation, route }) => {
     if (deliveryPreference === "postnet" && preferredPostnetStore && !city.trim()) {
       setCity(preferredPostnetStore.city || preferredPostnetStore.suburb || "Johannesburg");
     }
+    /*
+    ========================================================================================
+    [COMMENTED OUT FOR NOW - 18+ VERIFICATION & ID DOCUMENT UPLOAD IS ONLY FOR AUCTIONS]
+    ========================================================================================
     if (!isAgeConfirmed) {
       showMessage("Please certify that you are at least 18 years of age to purchase alcoholic beverages.");
       return;
     }
-
-    // Guest checkout KYC verification
     const token = await AsyncStorage.getItem("userToken");
     if (!token) {
       if (!guestIdNumber.trim()) {
         showMessage("Please enter your official ID / Passport number for 18+ verification.");
-        return;
-      }
-      if (!guestDob.trim()) {
-        showMessage("Please enter your date of birth (YYYY-MM-DD).");
-        return;
-      }
-      const birthDate = new Date(guestDob.trim());
-      if (isNaN(birthDate.getTime())) {
-        showMessage("Please enter a valid date of birth (YYYY-MM-DD).");
-        return;
-      }
-      const today = new Date();
-      let age = today.getFullYear() - birthDate.getFullYear();
-      const m = today.getMonth() - birthDate.getMonth();
-      if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      if (age < 18) {
-        showMessage("You must be at least 18 years of age to purchase fine spirits.");
         return;
       }
       if (!guestDocUrl) {
@@ -1794,6 +1782,8 @@ const Checkout = ({ navigation, route }) => {
         return;
       }
     }
+    ========================================================================================
+    */
 
     await calculateDeliveryQuote();
     setCheckoutStep(2);
@@ -1847,44 +1837,24 @@ const Checkout = ({ navigation, route }) => {
       return;
     }
 
-    // Universal 18+ Age & Guest Identity Document Enforcement
+    const token = await AsyncStorage.getItem("userToken");
+
+    /*
+    ========================================================================================
+    [COMMENTED OUT FOR NOW - 18+ VERIFICATION & ID DOCUMENT UPLOAD IS ONLY FOR AUCTIONS]
+    ========================================================================================
     if (!isAgeConfirmed) {
       showMessage("Please certify that you are at least 18 years of age to purchase alcoholic beverages.");
       return;
     }
-
-    // 18+ Age & Identity Document Enforcement for Unverified Customers
-    const token = await AsyncStorage.getItem("userToken");
     if (!isUserAgeVerified) {
       if (!guestIdNumber.trim()) {
         showMessage("Please enter your official ID / Passport number for 18+ verification.");
         return;
       }
-      if (!guestDob.trim()) {
-        showMessage("Please enter your date of birth (YYYY-MM-DD).");
-        return;
-      }
-      const birthDate = new Date(guestDob.trim());
-      if (isNaN(birthDate.getTime())) {
-        showMessage("Please enter a valid date of birth (YYYY-MM-DD).");
-        return;
-      }
-      const today = new Date();
-      let age = today.getFullYear() - birthDate.getFullYear();
-      const m = today.getMonth() - birthDate.getMonth();
-      if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      const minAge = kycSettings?.bidderKycMinAge || 18;
-      if (age < minAge) {
-        showMessage(`You must be at least ${minAge} years of age to purchase from The Grand Store.`);
-        return;
-      }
-      if (kycSettings?.bidderKycRequireDocumentUpload !== false && !guestDocUrl) {
-        showMessage("Please upload or attach your official ID document for 18+ compliance verification.");
-        return;
-      }
     }
+    ========================================================================================
+    */
 
     try {
       setIsSubmitting(true);
@@ -2002,6 +1972,9 @@ const Checkout = ({ navigation, route }) => {
             guestEmail: (email || "").trim(),
             guestName: (fullName || "").trim(),
             guestPhone: (phone || "").trim(),
+            isGift: Boolean(isGift),
+            giftRecipientName: isGift ? String(giftRecipientName || "").trim() : "",
+            giftMessage: isGift ? String(giftMessage || "").trim() : "",
             guestKyc: (!token || !isUserAgeVerified) && (guestDocUrl || guestIdNumber)
               ? {
                   idType: guestIdType,
@@ -2109,6 +2082,9 @@ const Checkout = ({ navigation, route }) => {
             Math.floor((subtotal / 100) * 10)
           : 0,
         deliveryPreference,
+        isGift: Boolean(isGift),
+        giftRecipientName: isGift ? String(giftRecipientName || "").trim() : "",
+        giftMessage: isGift ? String(giftMessage || "").trim() : "",
         grandTotal,
         paymentMethod:
           paymentMethod === "payfast"
@@ -2835,7 +2811,10 @@ const Checkout = ({ navigation, route }) => {
             </View>
           )}
 
-          {/* 6-Stage PostNet & Delivery Tracking Timeline */}
+          {/*
+          ========================================================================
+          [COMMENTED OUT FOR NOW AS REQUESTED - 6-STAGE DELIVERY & TRACKING TIMELINE]
+          ========================================================================
           <View style={styles.timelineCard}>
             <Text style={styles.timelineTitle}>DELIVERY & TRACKING TIMELINE</Text>
             <View style={styles.timelineList}>
@@ -2930,6 +2909,8 @@ const Checkout = ({ navigation, route }) => {
               ))}
             </View>
           </View>
+          ========================================================================
+          */}
 
           {/* FULL ITEMIZED TAX INVOICE / BILL RECEIPT */}
           <View style={styles.invoiceBillCard}>
@@ -2966,6 +2947,25 @@ const Checkout = ({ navigation, route }) => {
                 </View>
               </View>
             </View>
+
+            {createdOrder.isGift && (
+              <>
+                <View style={styles.invoiceDivider} />
+                <View style={styles.giftReceiptCard}>
+                  <Text style={styles.giftReceiptTitle}>🎁 COMPLIMENTARY GIFT DELIVERY</Text>
+                  {createdOrder.giftRecipientName ? (
+                    <Text style={styles.giftReceiptRecipient}>
+                      For: <Text style={{ color: "#fff", fontWeight: "700" }}>{createdOrder.giftRecipientName}</Text>
+                    </Text>
+                  ) : null}
+                  {createdOrder.giftMessage ? (
+                    <Text style={styles.giftReceiptMessage}>
+                      "{createdOrder.giftMessage}"
+                    </Text>
+                  ) : null}
+                </View>
+              </>
+            )}
 
             <View style={styles.invoiceDivider} />
 
@@ -3794,7 +3794,74 @@ const Checkout = ({ navigation, route }) => {
                 </View>
               )}
 
-              {/* 18+ Legal Age Verification & Guest ID KYC Card */}
+              {/* Send as a Gift Card */}
+              <View style={styles.sectionCard}>
+                <TouchableOpacity
+                  style={styles.giftToggleHeader}
+                  onPress={() => setIsGift(!isGift)}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.giftIconBox}>
+                    <Text style={styles.giftIcon}>🎁</Text>
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <View style={styles.modeTitleRow}>
+                      <Text style={styles.modeTitle}>Send as a Gift</Text>
+                      <View style={[styles.modeTag, { backgroundColor: "rgba(201, 151, 66, 0.18)" }]}>
+                        <Text style={[styles.modeTagText, { color: "#f5c242" }]}>Complimentary</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.modeSubtitle}>
+                      Includes luxury gift packaging and a personalized handwritten message card
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.superCoinsToggle,
+                      isGift && styles.superCoinsToggleActive,
+                      { width: 28, height: 28, marginLeft: 8 },
+                    ]}
+                  >
+                    <Text style={[styles.superCoinsToggleCheck, { fontSize: 14 }]}>
+                      {isGift ? "✓" : ""}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+
+                {isGift && (
+                  <View style={styles.giftFieldsContainer}>
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.inputLabel}>RECIPIENT NAME *</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        placeholder="e.g. Alexander Sterling"
+                        placeholderTextColor="#666"
+                        value={giftRecipientName}
+                        onChangeText={setGiftRecipientName}
+                      />
+                    </View>
+
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.inputLabel}>PERSONAL GIFT MESSAGE</Text>
+                      <TextInput
+                        style={[styles.textInput, { height: 80, textAlignVertical: "top", paddingTop: 10 }]}
+                        placeholder="Write your personal message to be printed on the gift card..."
+                        placeholderTextColor="#666"
+                        multiline
+                        numberOfLines={3}
+                        value={giftMessage}
+                        onChangeText={setGiftMessage}
+                      />
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              {/*
+              ========================================================================================
+              [COMMENTED OUT FOR NOW - 18+ LEGAL AGE & ID DOCUMENT UPLOAD IS ONLY FOR AUCTIONS]
+              ========================================================================================
+               18+ Legal Age Verification & Guest ID KYC Card 
               <View style={styles.sectionCard}>
                 <View style={styles.stepHeader}>
                   <View style={[styles.stepNumberCircle, { backgroundColor: "rgba(201, 151, 66, 0.2)", borderColor: "#c99742" }]}>
@@ -3932,7 +3999,11 @@ const Checkout = ({ navigation, route }) => {
                 )}
               </View>
 
-              {/* Continue to Step 2 Button */}
+
+              ========================================================================================
+              */}
+
+                            {/* Continue to Step 2 Button */}
               <TouchableOpacity
                 style={styles.continueStepBtn}
                 onPress={handleProceedToDeliveryMethod}
@@ -6962,6 +7033,59 @@ const styles = StyleSheet.create({
   complianceStatusText: {
     fontSize: 11,
     fontWeight: "700",
+  },
+  giftToggleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  giftIconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "rgba(201, 151, 66, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.3)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  giftIcon: {
+    fontSize: 20,
+  },
+  giftFieldsContainer: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.08)",
+  },
+  giftReceiptCard: {
+    backgroundColor: "rgba(201, 151, 66, 0.08)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    padding: 12,
+    marginVertical: 4,
+  },
+  giftReceiptTitle: {
+    color: "#f5c242",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  giftReceiptRecipient: {
+    color: "#ccc",
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  giftReceiptMessage: {
+    color: "#e8d8be",
+    fontSize: 12,
+    fontStyle: "italic",
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    padding: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
   },
 });
 
