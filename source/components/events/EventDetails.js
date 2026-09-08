@@ -31,8 +31,19 @@ const SOMMELIER_CREST = require("../../resources/images/sommelier_crest.jpg");
 const { width } = Dimensions.get("window");
 
 const getEventApiCandidates = () => {
-  const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : API_BASE;
-  const list = [active];
+  const list = [];
+  if (__DEV__) {
+    list.push(
+      "http://127.0.0.1:5000/api",
+      "http://localhost:5000/api",
+      "http://192.168.1.102:5000/api",
+      "http://10.0.2.2:5000/api"
+    );
+  }
+  const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : null;
+  if (active) {
+    list.push(active);
+  }
   if (typeof getCandidateBases === "function") {
     list.push(...getCandidateBases());
   }

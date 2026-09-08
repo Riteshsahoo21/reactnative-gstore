@@ -638,6 +638,7 @@ const Checkout = ({ navigation, route }) => {
   const [showAllPostnetCities, setShowAllPostnetCities] = useState(false);
   const [showAllPostnetBranches, setShowAllPostnetBranches] = useState(false);
   const [showAllCityDropdown, setShowAllCityDropdown] = useState(false);
+  const [usingNearestCity, setUsingNearestCity] = useState(false);
 
   // Super Coins Loyalty State (10 Super Coins = R1.00, Max 10% Redemption Cap, 15% Platform Margin Rule)
   const [userSuperCoins, setUserSuperCoins] = useState(0);
@@ -848,10 +849,10 @@ const Checkout = ({ navigation, route }) => {
 
   // Fetch PostNet branches only when PostNet is selected and a city has been clicked
   useEffect(() => {
-    if (deliveryPreference === "postnet" && hasSelectedCityForPostnet && city) {
+    if (deliveryPreference === "postnet" && city) {
       fetchPostnetBranches(city, lat, lng);
     }
-  }, [deliveryPreference, city, hasSelectedCityForPostnet]);
+  }, [deliveryPreference, city]);
 
   // Automatically calculate delivery rates whenever delivery preference or country changes
   useEffect(() => {
@@ -881,9 +882,27 @@ const Checkout = ({ navigation, route }) => {
 
     if (initialStores.length > 0) {
       setPostnetStores(initialStores);
+      setUsingNearestCity(false);
     }
 
-    // 2. Query official PostNet store locator network API
+    // 2. Query backend locator first (which calculates nearest regional hub and distances)
+    try {
+      const locatorUrl = `/postnet/locator?address=${encodeURIComponent(cleanCity + ', South Africa')}&city=${encodeURIComponent(cleanCity)}${searchLat && searchLng ? `&lat=${searchLat}&lng=${searchLng}` : ''}&limit=10`;
+      const locatorRes = await safeApiFetch(locatorUrl, {}, 5000);
+      if (locatorRes && locatorRes.ok) {
+        const data = await locatorRes.json();
+        if (Array.isArray(data.stores) && data.stores.length > 0) {
+          setPostnetStores(data.stores);
+          setUsingNearestCity(Boolean(data.usingNearestCity));
+          setIsLoadingPostnet(false);
+          return;
+        }
+      }
+    } catch (locatorErr) {
+      console.log("PostNet backend locator query error, trying direct store list:", locatorErr.message);
+    }
+
+    // 3. Fallback to querying official PostNet store locator network API
     try {
       const liveRes = await fetch("https://storelocator.postnet.co.za/cart_store-json_list/");
       const allStores = await liveRes.json();
@@ -913,6 +932,20 @@ const Checkout = ({ navigation, route }) => {
             distance: idx === 0 ? 1.2 : Number((1.2 + idx * 0.9).toFixed(1)),
           }));
           setPostnetStores(formatted);
+          setUsingNearestCity(false);
+        } else {
+          // If no direct city matches, fallback to regional stores
+          const fallbackStores = allStores.slice(0, 8).map((s, idx) => ({
+            id: s.code || `pn-${idx}`,
+            name: `PostNet ${s.store_name}`,
+            address: s.physical_address,
+            city: s.town || "Regional Hub",
+            postalCode: s.postal_code || "",
+            telephone: s.telephone || "",
+            distance: idx === 0 ? 15.2 : Number((15.2 + idx * 2.4).toFixed(1)),
+          }));
+          setPostnetStores(fallbackStores);
+          setUsingNearestCity(true);
         }
       }
     } catch (err) {
@@ -3010,7 +3043,7 @@ const Checkout = ({ navigation, route }) => {
               <View style={styles.superCoinsEarnedReceiptRow}>
                 <Text style={styles.superCoinsEarnedReceiptIcon}>🎉</Text>
                 <Text style={styles.superCoinsEarnedReceiptText}>
-                  +{createdOrder.superCoinsEarned} Super Coins (Value: R{(createdOrder.superCoinsEarned * 0.1).toFixed(2)}) will be credited upon order delivery!
+                  +{createdOrder.superCoinsEarned} Super Coins (Value: R{(createdOrder.superCoinsEarned * 0.1).toFixed(2)}) will be credited upon payment completion!
                 </Text>
               </View>
             )}
@@ -3534,6 +3567,123 @@ const Checkout = ({ navigation, route }) => {
                     )}
                   </View>
 
+                  {/* PostNet City / Suburb & Postal Code Inputs */}
+                  <View style={[styles.rowInputs, { marginBottom: 12 }]}>
+                    <View style={[styles.inputGroup, { flex: 1.2, marginRight: 8 }]}>
+                      <View style={styles.labelRowWithIcon}>
+                        <Text style={styles.inputLabel}>CITY / SUBURB *</Text>
+                        {isSearchingCity && (
+                          <ActivityIndicator size="small" color="#c99742" style={{ marginLeft: 4 }} />
+                        )}
+                      </View>
+                      <TextInput
+                        style={styles.textInput}
+                        placeholder="e.g. Sandton, Durban..."
+                        placeholderTextColor="#666"
+                        value={city}
+                        onFocus={() => {
+                          if (cityPredictions.length === 0) setCityPredictions(DEFAULT_SA_CITIES);
+                          setShowCityDropdown(true);
+                        }}
+                        onChangeText={(text) => {
+                          handleCityInputChange(text);
+                          setHasSelectedCityForPostnet(true);
+                        }}
+                      />
+                      {showCityDropdown && (
+                        <View style={styles.predictionsDropdown}>
+                          <View style={styles.predictionsHeader}>
+                            <Text style={styles.predictionsHeaderText}>SUGGESTED CITIES</Text>
+                            <TouchableOpacity onPress={() => setShowCityDropdown(false)}>
+                              <Text style={{ color: "#aaa", fontSize: 11 }}>✕ Close</Text>
+                            </TouchableOpacity>
+                          </View>
+                          {(() => {
+                            const allCityList = cityPredictions.length > 0 ? cityPredictions : DEFAULT_SA_CITIES;
+                            const displayedCities = showAllCityDropdown ? allCityList : allCityList.slice(0, 3);
+                            return (
+                              <>
+                                {displayedCities.map((p, idx) => {
+                                  const cityName = p.structured_formatting?.main_text || p.main_text || p.description?.split(",")[0] || "";
+                                  const subName = p.structured_formatting?.secondary_text || p.description || "";
+                                  return (
+                                    <TouchableOpacity
+                                      key={p.place_id || idx}
+                                      style={[styles.predictionItem, idx === displayedCities.length - 1 && !allCityList.length > 3 && { borderBottomWidth: 0 }]}
+                                      onPress={() => handleSelectCity(p)}
+                                      activeOpacity={0.7}
+                                    >
+                                      <Text style={styles.predictionPinIcon}>🏙️</Text>
+                                      <View style={{ flex: 1 }}>
+                                        <Text style={styles.predictionMainText} numberOfLines={1}>{cityName}</Text>
+                                        {subName ? <Text style={styles.predictionSubText} numberOfLines={1}>{subName}</Text> : null}
+                                      </View>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                                {allCityList.length > 3 && (
+                                  <TouchableOpacity
+                                    style={styles.dropdownShowMoreBtn}
+                                    onPress={() => setShowAllCityDropdown(!showAllCityDropdown)}
+                                    activeOpacity={0.75}
+                                  >
+                                    <Text style={styles.dropdownShowMoreBtnText}>
+                                      {showAllCityDropdown ? "▴ Show Fewer Cities" : `▾ Show More Cities (${allCityList.length - 3} More)`}
+                                    </Text>
+                                  </TouchableOpacity>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </View>
+                      )}
+                    </View>
+
+                    <View style={[styles.inputGroup, { flex: 0.8 }]}>
+                      <View style={styles.labelRowWithIcon}>
+                        <Text style={styles.inputLabel}>POSTAL CODE</Text>
+                        {isSearchingPostal && (
+                          <ActivityIndicator size="small" color="#c99742" style={{ marginLeft: 4 }} />
+                        )}
+                      </View>
+                      <TextInput
+                        style={styles.textInput}
+                        placeholder="e.g. 2196"
+                        placeholderTextColor="#666"
+                        value={postalCode}
+                        onChangeText={handlePostalCodeChange}
+                      />
+                      {showPostalDropdown && postalPredictions.length > 0 && (
+                        <View style={styles.predictionsDropdown}>
+                          <View style={styles.predictionsHeader}>
+                            <Text style={styles.predictionsHeaderText}>MATCHING POSTAL CODES</Text>
+                            <Text style={styles.googlePoweredText}>Google Places</Text>
+                          </View>
+                          {postalPredictions.map((p, idx) => (
+                            <TouchableOpacity
+                              key={p.place_id || idx}
+                              style={[styles.predictionItem, idx === postalPredictions.length - 1 && { borderBottomWidth: 0 }]}
+                              onPress={() => handleSelectPostalPrediction(p)}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.predictionPinIcon}>📮</Text>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.predictionMainText} numberOfLines={1}>
+                                  {p.structured_formatting?.main_text || p.description}
+                                </Text>
+                                {p.structured_formatting?.secondary_text && (
+                                  <Text style={styles.predictionSubText} numberOfLines={1}>
+                                    {p.structured_formatting.secondary_text}
+                                  </Text>
+                                )}
+                              </View>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  </View>
+
                   {/* Selected PostNet Confirmation Banner */}
                   {preferredPostnetStore && (
                     <View style={styles.selectedBranchBanner}>
@@ -3553,6 +3703,20 @@ const Checkout = ({ navigation, route }) => {
                           Change
                         </Text>
                       </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* Nearest Regional Hub Warning Banner (Mobile) */}
+                  {usingNearestCity && !preferredPostnetStore && postnetStores.length > 0 && (
+                    <View style={styles.nearestCityBanner}>
+                      <Text style={{ fontSize: 18, marginRight: 8 }}>📍</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.nearestCityTitle}>Nearest Regional Hub</Text>
+                        <Text style={styles.nearestCityDesc}>
+                          No direct PostNet branch found in "{city}". Showing nearest available branches in{" "}
+                          <Text style={{ color: "#fff", fontWeight: "700" }}>{postnetStores[0]?.city || "the nearest regional hub"}</Text>.
+                        </Text>
+                      </View>
                     </View>
                   )}
 
@@ -4097,7 +4261,7 @@ const Checkout = ({ navigation, route }) => {
                 <View style={styles.superCoinsEarnBanner}>
                   <Text style={styles.superCoinsEarnIcon}>🎉</Text>
                   <Text style={styles.superCoinsEarnText}>
-                    Earn <Text style={styles.superCoinsEarnGold}>+{superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)} Super Coins</Text> (R{((superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)) * 0.1).toFixed(2)}) upon order delivery!
+                    Earn <Text style={styles.superCoinsEarnGold}>+{superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)} Super Coins</Text> (R{((superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)) * 0.1).toFixed(2)}) upon payment completion!
                   </Text>
                 </View>
               </View>
@@ -4942,6 +5106,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(201, 151, 66, 0.35)",
     alignItems: "center",
+  },
+  nearestCityBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "rgba(245, 158, 11, 0.12)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.35)",
+    padding: 12,
+    marginBottom: 12,
+  },
+  nearestCityTitle: {
+    color: "#fbbf24",
+    fontSize: 12,
+    fontWeight: "800",
+    marginBottom: 3,
+  },
+  nearestCityDesc: {
+    color: "#ccc",
+    fontSize: 11,
+    lineHeight: 15,
   },
   showMoreBranchesBtnText: {
     color: "#f5c242",

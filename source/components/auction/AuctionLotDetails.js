@@ -28,6 +28,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import RNShare from "react-native-share";
 import AppHeader from "../../widgets/AppHeader";
 import BidderVerificationModal from "./BidderVerificationModal";
+import AuctionAcquisitionCertificate from "./AuctionAcquisitionCertificate";
 import {
   API_BASE,
   getActiveServerHost,
@@ -367,66 +368,24 @@ export default function AuctionLotDetails({ route, navigation }) {
 
   const handleDownloadCertificate = useCallback(async () => {
     const targetId = lot?._id || lotId;
-    if (!targetId) return;
+    if (!targetId || downloadingCert) return;
 
     setDownloadingCert(true);
-    const safeLotNum = lot?.lotNumber || String(targetId).slice(-6).toUpperCase();
-    const filename = `TheGrandStore_Certificate_Lot_${safeLotNum}`;
-
     try {
-      // 1. Fetch official high-res PDF as Base64 data URL via app's direct network stack
-      const certData = await fetchCertificateBase64(targetId);
-      const pdfDataUrl = certData?.pdfBase64;
-
-      if (pdfDataUrl) {
-        // 2. Open native system Share/Save dialog (allows Save to Downloads, Save to Device, Open in PDF Reader, Drive, WhatsApp, etc.)
-        await RNShare.open({
-          title: `Certificate of Acquisition - Lot #${safeLotNum}`,
-          subject: `Official Certificate of Acquisition • ${lot?.title || "Masterpiece"}`,
-          url: pdfDataUrl,
-          filename: filename,
-          type: "application/pdf",
-          useInternalStorage: true,
-          saveToFiles: true,
-          failOnCancel: false,
-        });
-        setDownloadingCert(false);
-        return;
-      }
-    } catch (shareErr) {
-      console.log("RNShare prompt dismissed or failed:", shareErr);
-    }
-
-    // 3. Fallback: If base64 sharing failed or wasn't supported, probe candidate hosts and open direct browser download URL
-    try {
-      const candidates = getLotApiCandidates();
-      let workingHost = "http://127.0.0.1:5000";
-      for (const base of candidates) {
-        try {
-          const host = base.replace(/\/api\/?$/, "");
-          const checkUrl = `${host}/api/auction/${targetId}/certificate?download=1`;
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 2000);
-          const res = await fetch(checkUrl, { method: "HEAD", signal: controller.signal });
-          clearTimeout(timer);
-          if (res && res.status === 200) {
-            workingHost = host;
-            break;
-          }
-        } catch (e) {}
-      }
-      const downloadUrl = `${workingHost}/api/auction/${targetId}/certificate?download=1`;
+      // Open the existing download endpoint immediately. PDF sharing has its own action.
+      const host = getActiveServerHost().replace(/\/+$/, "");
+      const downloadUrl = `${host}/api/auction/${encodeURIComponent(targetId)}/certificate?download=1`;
       await Linking.openURL(downloadUrl);
     } catch (err) {
-      console.warn("Could not open certificate URL:", err);
+      console.warn("Could not open certificate download:", err);
       Alert.alert(
         "Download Certificate",
-        "Could not open browser download. Please ensure you are connected to the network or share via the Share button."
+        "Could not open the certificate download. Please try again or use Share to save the PDF."
       );
     } finally {
       setDownloadingCert(false);
     }
-  }, [lot, lotId, fetchCertificateBase64]);
+  }, [lot?._id, lotId, downloadingCert]);
 
   const handleShareCertificate = useCallback(async () => {
     const targetId = lot?._id || lotId;
@@ -1042,138 +1001,11 @@ export default function AuctionLotDetails({ route, navigation }) {
           </LinearGradient>
         </View>
 
-        {/* 4. OFFICIAL CERTIFICATE OF ACQUISITION (WHITE LUXURY TEMPLATE) */}
+        {/* 4. Official certificate of acquisition */}
         {isSold && isWinner && (
           <View style={styles.certOuterContainer}>
-            {/* Corner Ribbon Motto (Top Right) */}
-            <View style={styles.certRibbonTopRight}>
-              <Text style={styles.certRibbonTopRightText}>MORE THAN A DRINK A LEGACY</Text>
-            </View>
-
-            {/* Inner Gold Frame */}
             <View style={styles.certInnerFrame}>
-              {/* Background Watermark */}
-              <View style={styles.certWatermarkContainer} pointerEvents="none">
-                <Text style={styles.certWatermarkCrest}>⚜️</Text>
-                <Text style={styles.certWatermarkText}>ROYAL LIFESTYLE</Text>
-                <Text style={styles.certWatermarkSub}>THE GRAND STORE</Text>
-              </View>
-
-              {/* Header: Crest Badge & Brand */}
-              <View style={styles.certHeaderRow}>
-                <View style={styles.certBrandCol}>
-                  <View style={styles.certBadge}>
-                    <Text style={styles.certBadgeText}>★ TRUE ROYAL LIFESTYLE ★</Text>
-                  </View>
-                  <Text style={styles.certBrandTitle}>THE GRAND STORE</Text>
-                  <Text style={styles.certBrandTagline}>Crafting Moments, Raising Spirits</Text>
-                </View>
-                <View style={styles.certPillarsCol}>
-                  <Text style={styles.certPillarItem}>FINE SPIRITS</Text>
-                  <Text style={styles.certPillarDot}>•</Text>
-                  <Text style={styles.certPillarItem}>RARE COLLECTIONS</Text>
-                  <Text style={styles.certPillarDot}>•</Text>
-                  <Text style={styles.certPillarItem}>EXCLUSIVE AUCTIONS</Text>
-                </View>
-              </View>
-
-              <View style={styles.certHeaderDivider} />
-
-              {/* Title Section */}
-              <View style={styles.certTitleSection}>
-                <Text style={styles.certMainTitle}>CERTIFICATE</Text>
-                <Text style={styles.certSubtitle}>— OF ACQUISITION —</Text>
-              </View>
-
-              {/* Recipient Section */}
-              <View style={styles.certRecipientSection}>
-                <Text style={styles.certPresentedTo}>THIS CERTIFICATE IS PROUDLY PRESENTED TO</Text>
-                <Text style={styles.certWinnerName}>
-                  {user?.name || (typeof lot.winner === "object" ? lot.winner?.name : lot.winner) || "Distinguished Patron"}
-                </Text>
-                <View style={styles.certWinnerUnderline} />
-              </View>
-
-              {/* Proclamation Copy */}
-              <View style={styles.certProclamationSection}>
-                <Text style={styles.certProclamationText}>
-                  In recognition of your successful bid and acquisition in The Grand Store Auction.
-                </Text>
-                <Text style={styles.certProclamationText}>
-                  Your passion for exceptional spirits and rare collections is truly appreciated.
-                </Text>
-                <Text style={styles.certProclamationCheers}>
-                  Cheers to Great Choices!
-                </Text>
-              </View>
-
-              {/* Lot Particulars Box */}
-              <View style={styles.certParticularsBox}>
-                <View style={styles.certParticularsHeader}>
-                  <View style={{ flex: 1, paddingRight: 8 }}>
-                    <Text style={styles.certParticularsLabel}>CATALOGUE LOT PARTICULARS</Text>
-                    <Text style={styles.certParticularsTitle} numberOfLines={2}>
-                      Lot #{lot.lotNumber || lot._id.slice(-6).toUpperCase()}: {lot.title}
-                    </Text>
-                  </View>
-                  <View style={{ alignItems: "flex-end" }}>
-                    <Text style={styles.certParticularsLabel}>WINNING HAMMER BID</Text>
-                    <Text style={styles.certParticularsPrice}>
-                      R{Number(lot.winningBid || 0).toLocaleString("en-ZA")}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.certParticularsFooter}>
-                  <Text style={styles.certParticularsAuth}>Authentication: The Grand Store Private Vault</Text>
-                  <View style={styles.certParticularsCpaBadge}>
-                    <Text style={styles.certParticularsCpaText}>✓ CPA SEC. 45 TRUST SECURED</Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* Proof / Issue Date, Provenance Laurel, Gold Medallion */}
-              <View style={styles.certSealRow}>
-                {/* Date of Issue */}
-                <View style={styles.certDateCol}>
-                  <Text style={styles.certDateLabel}>DATE OF ISSUE</Text>
-                  <Text style={styles.certDateValue}>
-                    {lot.endDate
-                      ? new Date(lot.endDate).toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" })
-                      : new Date().toLocaleDateString("en-ZA", { year: "numeric", month: "short", day: "numeric" })}
-                  </Text>
-                  <View style={styles.certDateLine} />
-                </View>
-
-                {/* Center Certified Provenance */}
-                <View style={styles.certProvenanceCol}>
-                  <View style={styles.certProvenanceIcon}>
-                    <Text style={{ fontSize: 18 }}>⚖️</Text>
-                  </View>
-                  <Text style={styles.certProvenanceTitle}>CERTIFIED PROVENANCE</Text>
-                  <Text style={styles.certProvenanceStars}>★ ★ ★</Text>
-                </View>
-
-                {/* Bottom-Right Medallion Seal */}
-                <View style={styles.certMedallionCol}>
-                  <View style={styles.certMedallionCircle}>
-                    <Text style={styles.certMedallionStars}>★ ★ ★</Text>
-                    <Text style={styles.certMedallionTextSmall}>EXCEPTIONAL</Text>
-                    <Text style={styles.certMedallionTextBold}>PEOPLE</Text>
-                    <Text style={styles.certMedallionTextSmall}>SPIRITS</Text>
-                    <Text style={styles.certMedallionInfinity}>∞</Text>
-                  </View>
-                  <Text style={styles.certRefNo}>
-                    NO. {lot.gsReference || `GSC-${lot._id.slice(-6).toUpperCase()}`}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Bottom Footnote & Corner Motto */}
-              <View style={styles.certBottomFootnote}>
-                <Text style={styles.certFootnoteText}>
-                  COLLECT INVEST CELEBRATE  •  THE GRAND STORE VAULT ARCHIVE
-                </Text>
-              </View>
+              <AuctionAcquisitionCertificate lot={lot} user={user} />
 
               {/* Action Buttons: Download PDF & Share */}
               <View style={styles.certButtonRow}>
@@ -1994,385 +1826,38 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
 
-  // 4. Official Certificate of Acquisition (White Parchment Luxury Design)
+  // Certificate frame and existing actions
   certOuterContainer: {
     marginHorizontal: 16,
     marginVertical: 14,
-    backgroundColor: "#FAF9F5",
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: "#181818",
+    backgroundColor: "#fbf8f1",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#b99b60",
     padding: 10,
-    position: "relative",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.15,
     shadowRadius: 10,
     elevation: 6,
   },
-  certRibbonTopRight: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    backgroundColor: "#181818",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderBottomLeftRadius: 8,
-    zIndex: 10,
-  },
-  certRibbonTopRightText: {
-    color: "#d4af37",
-    fontSize: 7.5,
-    fontWeight: "900",
-    letterSpacing: 0.8,
-  },
   certInnerFrame: {
-    borderWidth: 1.5,
-    borderColor: "#c5a059",
-    borderRadius: 8,
-    padding: 14,
-    backgroundColor: "#FAF9F5",
     position: "relative",
   },
-  certWatermarkContainer: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: "center",
-    alignItems: "center",
-    opacity: 0.05,
-    zIndex: 0,
-  },
-  certWatermarkCrest: {
-    fontSize: 72,
-    marginBottom: 4,
-  },
-  certWatermarkText: {
-    fontSize: 26,
-    fontWeight: "900",
-    letterSpacing: 4,
-    color: "#181818",
-    textAlign: "center",
-  },
-  certWatermarkSub: {
-    fontSize: 14,
-    fontWeight: "bold",
-    letterSpacing: 3,
-    color: "#181818",
-    marginTop: 4,
-  },
-  certHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    zIndex: 1,
-    marginTop: 8,
-  },
-  certBrandCol: {
-    flex: 1,
-  },
-  certBadge: {
-    backgroundColor: "#181818",
-    alignSelf: "flex-start",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 3,
-    marginBottom: 4,
-  },
-  certBadgeText: {
-    color: "#d4af37",
-    fontSize: 7.5,
-    fontWeight: "900",
-    letterSpacing: 0.6,
-  },
-  certBrandTitle: {
-    color: "#1a1a1a",
-    fontSize: 15,
-    fontWeight: "900",
-    letterSpacing: 1.5,
-  },
-  certBrandTagline: {
-    color: "#8a7a63",
-    fontSize: 9,
-    fontStyle: "italic",
-    marginTop: 1,
-  },
-  certPillarsCol: {
-    alignItems: "flex-end",
-    paddingLeft: 6,
-  },
-  certPillarItem: {
-    color: "#8a7a63",
-    fontSize: 7,
-    fontWeight: "800",
-    letterSpacing: 0.8,
-  },
-  certPillarDot: {
-    color: "#c5a059",
-    fontSize: 6,
-    marginVertical: 1,
-  },
-  certHeaderDivider: {
-    height: 1,
-    backgroundColor: "rgba(197, 160, 89, 0.4)",
-    marginVertical: 10,
-    zIndex: 1,
-  },
-  certTitleSection: {
-    alignItems: "center",
-    marginVertical: 6,
-    zIndex: 1,
-  },
-  certMainTitle: {
-    color: "#1a1a1a",
-    fontSize: 22,
-    fontWeight: "900",
-    letterSpacing: 3,
-  },
-  certSubtitle: {
-    color: "#a87d26",
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 2,
-    marginTop: 2,
-  },
-  certRecipientSection: {
-    alignItems: "center",
-    marginVertical: 8,
-    zIndex: 1,
-  },
-  certPresentedTo: {
-    color: "#7a6b52",
-    fontSize: 8.5,
-    fontWeight: "800",
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-  },
-  certWinnerName: {
-    color: "#1a1a1a",
-    fontSize: 18,
-    fontWeight: "bold",
-    fontStyle: "italic",
-    marginTop: 4,
-    textAlign: "center",
-  },
-  certWinnerUnderline: {
-    width: "70%",
-    height: 1.5,
-    backgroundColor: "#c5a059",
-    marginTop: 4,
-  },
-  certProclamationSection: {
-    alignItems: "center",
-    marginVertical: 6,
-    paddingHorizontal: 6,
-    zIndex: 1,
-  },
-  certProclamationText: {
-    color: "#332e27",
-    fontSize: 10.5,
-    textAlign: "center",
-    lineHeight: 15,
-    marginTop: 2,
-  },
-  certProclamationCheers: {
-    color: "#a87d26",
-    fontSize: 12,
-    fontWeight: "bold",
-    fontStyle: "italic",
-    marginTop: 4,
-    textAlign: "center",
-  },
-  certParticularsBox: {
-    backgroundColor: "#F4F1E6",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "rgba(197, 160, 89, 0.4)",
-    padding: 10,
-    marginVertical: 8,
-    zIndex: 1,
-  },
-  certParticularsHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(197, 160, 89, 0.3)",
-  },
-  certParticularsLabel: {
-    color: "#a87d26",
-    fontSize: 7.5,
-    fontWeight: "900",
-    letterSpacing: 0.8,
-    marginBottom: 2,
-  },
-  certParticularsTitle: {
-    color: "#1a1a1a",
-    fontSize: 11.5,
-    fontWeight: "bold",
-  },
-  certParticularsPrice: {
-    color: "#1a1a1a",
-    fontSize: 14,
-    fontWeight: "900",
-  },
-  certParticularsFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingTop: 6,
-  },
-  certParticularsAuth: {
-    color: "#6b5a41",
-    fontSize: 8.5,
-    flex: 1,
-  },
-  certParticularsCpaBadge: {
-    backgroundColor: "#E6F4EA",
-    borderWidth: 1,
-    borderColor: "#A8DAB5",
-    borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-  },
-  certParticularsCpaText: {
-    color: "#137333",
-    fontSize: 7.5,
-    fontWeight: "bold",
-  },
-  certSealRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginVertical: 8,
-    zIndex: 1,
-  },
-  certDateCol: {
-    flex: 1,
-  },
-  certDateLabel: {
-    color: "#6b5a41",
-    fontSize: 7.5,
-    fontWeight: "800",
-    letterSpacing: 0.8,
-  },
-  certDateValue: {
-    color: "#1a1a1a",
-    fontSize: 11,
-    fontWeight: "bold",
-    marginTop: 2,
-  },
-  certDateLine: {
-    height: 1,
-    backgroundColor: "#c5a059",
-    width: "80%",
-    marginTop: 2,
-  },
-  certProvenanceCol: {
-    alignItems: "center",
-    flex: 1,
-  },
-  certProvenanceIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 1.5,
-    borderColor: "#c5a059",
-    backgroundColor: "#FAF9F5",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 2,
-  },
-  certProvenanceTitle: {
-    color: "#a87d26",
-    fontSize: 7.5,
-    fontWeight: "bold",
-    letterSpacing: 0.6,
-  },
-  certProvenanceStars: {
-    color: "#a87d26",
-    fontSize: 7,
-    marginTop: 1,
-  },
-  certMedallionCol: {
-    flex: 1,
-    alignItems: "flex-end",
-  },
-  certMedallionCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 1.5,
-    borderColor: "#d4af37",
-    backgroundColor: "#FAF9F5",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 2,
-    shadowColor: "#d4af37",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  certMedallionStars: {
-    color: "#aa8022",
-    fontSize: 5,
-    lineHeight: 6,
-  },
-  certMedallionTextSmall: {
-    color: "#5a4413",
-    fontSize: 5,
-    fontWeight: "900",
-    lineHeight: 6,
-  },
-  certMedallionTextBold: {
-    color: "#141414",
-    fontSize: 6,
-    fontWeight: "bold",
-    lineHeight: 7,
-  },
-  certMedallionInfinity: {
-    color: "#aa8022",
-    fontSize: 7,
-    lineHeight: 8,
-  },
-  certRefNo: {
-    color: "#8a7a63",
-    fontSize: 7.5,
-    fontWeight: "bold",
-    marginTop: 3,
-  },
-  certBottomFootnote: {
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(197, 160, 89, 0.3)",
-    alignItems: "center",
-    marginBottom: 8,
-    zIndex: 1,
-  },
-  certFootnoteText: {
-    color: "#7a6b52",
-    fontSize: 7.5,
-    fontWeight: "700",
-    letterSpacing: 0.6,
-    textAlign: "center",
-  },
   certButtonRow: {
-    flexDirection: "row",
+    flexDirection: "column",
     gap: 8,
-    marginTop: 4,
+    marginTop: 14,
     zIndex: 1,
   },
   certDownloadBtn: {
-    flex: 2,
+    minHeight: 48,
     backgroundColor: "#161616",
     borderRadius: 10,
     borderWidth: 1,
     borderColor: "#c5a059",
-    paddingVertical: 11,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2381,14 +1866,16 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: "bold",
     letterSpacing: 0.8,
+    textAlign: "center",
   },
   certShareBtn: {
-    flex: 1,
+    minHeight: 44,
     backgroundColor: "rgba(197, 160, 89, 0.15)",
     borderRadius: 10,
     borderWidth: 1,
     borderColor: "#c5a059",
-    paddingVertical: 11,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2397,6 +1884,7 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: "bold",
     letterSpacing: 0.8,
+    textAlign: "center",
   },
   certPaidBadge: {
     backgroundColor: "rgba(16, 185, 129, 0.15)",
