@@ -91,10 +91,11 @@ android {
             keyPassword 'android'
         }
         release {
-            storeFile file('my-release-key.keystore')  // Path to your keystore
-            storePassword '123456'                // your keystore password
-            keyAlias 'thegrandstore'                   // correct alias from keystore
-            keyPassword '123456'                  // usually same as keystore password
+            // Signs with debug.keystore so certificate SHA-1 matches registered Google OAuth Client ID (84:F4:6A:B1:29:55:3D:FF:1A:06:3A:4E:FE:BD:18:99:81:71:36:3F)
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
         }
 
     }

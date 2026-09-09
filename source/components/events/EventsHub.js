@@ -31,18 +31,19 @@ const { width } = Dimensions.get("window");
 
 const getEventApiCandidates = () => {
   const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : API_BASE;
-  const list = [active];
+  const list = [API_BASE, active];
   if (typeof getCandidateBases === "function") {
     list.push(...getCandidateBases());
   }
-  list.push(
-    API_BASE,
-    "http://127.0.0.1:5000/api",
-    "http://192.168.1.102:5000/api",
-    "http://localhost:5000/api",
-    "http://10.0.2.2:5000/api",
-    "http://192.168.1.9:5000/api"
-  );
+  if (__DEV__) {
+    list.push(
+      "http://127.0.0.1:5000/api",
+      "http://192.168.1.102:5000/api",
+      "http://localhost:5000/api",
+      "http://10.0.2.2:5000/api",
+      "http://192.168.1.9:5000/api"
+    );
+  }
   return [...new Set(list.filter(Boolean))];
 };
 

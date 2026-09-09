@@ -9,7 +9,9 @@ import {
   StyleSheet,
   ActivityIndicator,
   Text,
+  TouchableOpacity,
 } from "react-native";
+import { useNavigation } from "@react-navigation/native";
 import Video from "react-native-video";
 import axios from "axios";
 import { APP_FONT } from "../resources/data/Fonts";
@@ -18,22 +20,25 @@ const { width } = Dimensions.get("screen");
 const VIDEO_HEIGHT = 200;
 const hardcodedVideos = [
   { 
-    id: '1', 
+    id: 'poured', 
     url: 'https://res.cloudinary.com/oioqrgj0/video/upload/v1787829304/grand-store/hero-react-native/grand-store-hero-scrub.mp4',
+    poster: 'https://res.cloudinary.com/oioqrgj0/video/upload/v1787829304/grand-store/hero-react-native/grand-store-hero-scrub.jpg',
     title: 'Not simply poured.',
     subtitle: 'Remembered.',
     buttonText: 'Explore the collection →'
   },
   { 
-    id: '2', 
-    url: 'https://res.cloudinary.com/oioqrgj0/video/upload/v1787829318/grand-store/hero-react-native/grand-store-hero-cellar-hd.mp4',
-    title: 'Bid on the rarest.',
+    id: 'auction', 
+    url: 'https://res.cloudinary.com/oioqrgj0/video/upload/v1788935569/grand-store/hero/auctioneer_conducts_rare_wine_auction.mp4',
+    poster: 'https://res.cloudinary.com/oioqrgj0/video/upload/v1788935569/grand-store/hero/auctioneer_conducts_rare_wine_auction.jpg',
+    title: 'Rare Vintages.',
     subtitle: 'Live Auctions.',
     buttonText: 'Enter the auction house →'
   },
   { 
-    id: '3', 
+    id: 'tasting', 
     url: 'https://res.cloudinary.com/oioqrgj0/video/upload/v1787829323/grand-store/hero-react-native/grand-store-hero-third.mp4',
+    poster: 'https://res.cloudinary.com/oioqrgj0/video/upload/v1787829323/grand-store/hero-react-native/grand-store-hero-third.jpg',
     title: 'An evening of refinement.',
     subtitle: 'Exclusive Tastings.',
     buttonText: 'Book an event →'
@@ -41,8 +46,20 @@ const hardcodedVideos = [
 ];
 
 const VideoSlider = () => {
+  const navigation = useNavigation();
   const [currentIndex, setCurrentIndex] = useState(0);
   const flatListRef = useRef();
+
+  const handleCtaPress = () => {
+    const current = hardcodedVideos[currentIndex];
+    if (current?.id === 'auction') {
+      navigation.navigate("AuctionsHub");
+    } else if (current?.id === 'tasting') {
+      navigation.navigate("EventsHub");
+    } else {
+      navigation.navigate("Shop");
+    }
+  };
 
   const onViewRef = useRef(({ viewableItems }) => {
     if (viewableItems.length > 0) {
@@ -79,6 +96,8 @@ const VideoSlider = () => {
             source={{ uri: item.url }}
             style={styles.video}
             resizeMode="cover"
+            poster={item.poster}
+            posterResizeMode="cover"
             paused={currentIndex !== index} // Play only current video
             repeat
           />
@@ -91,13 +110,17 @@ const VideoSlider = () => {
       <View style={styles.overlayShade} pointerEvents="none" />
 
       {/* Text Overlay */}
-      <View style={styles.overlayContent} pointerEvents="none">
-        <Text style={styles.titleText}>{hardcodedVideos[currentIndex]?.title || 'Not simply poured.'}</Text>
-        <Text style={[styles.titleText, { fontStyle: 'italic', color: '#c99742' }]}>{hardcodedVideos[currentIndex]?.subtitle || 'Remembered.'}</Text>
+      <View style={styles.overlayContent} pointerEvents="box-none">
+        <Text style={styles.titleText} pointerEvents="none">{hardcodedVideos[currentIndex]?.title || 'Not simply poured.'}</Text>
+        <Text style={[styles.titleText, { fontStyle: 'italic', color: '#c99742' }]} pointerEvents="none">{hardcodedVideos[currentIndex]?.subtitle || 'Remembered.'}</Text>
         
-        <View style={styles.buttonPlaceholder}>
+        <TouchableOpacity 
+          style={styles.buttonPlaceholder}
+          activeOpacity={0.8}
+          onPress={handleCtaPress}
+        >
           <Text style={styles.buttonText}>{hardcodedVideos[currentIndex]?.buttonText || 'Explore the collection →'}</Text>
-        </View>
+        </TouchableOpacity>
       </View>
 
       {/* Pagination dots */}

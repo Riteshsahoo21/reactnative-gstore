@@ -48,13 +48,15 @@ export default function BidderVerificationModal({
     const active = getActiveApiBase();
     const candidateList = getCandidateBases();
     return [
+      API_BASE,
       active,
       ...candidateList,
-      API_BASE,
-      "http://localhost:5000/api",
-      "http://127.0.0.1:5000/api",
-      "http://10.0.2.2:5000/api",
-      "http://192.168.1.9:5000/api",
+      ...(__DEV__ ? [
+        "http://localhost:5000/api",
+        "http://127.0.0.1:5000/api",
+        "http://10.0.2.2:5000/api",
+        "http://192.168.1.9:5000/api",
+      ] : []),
     ].filter(Boolean);
   }, []);
 
@@ -370,7 +372,7 @@ export default function BidderVerificationModal({
     if (calculatedAge !== null && calculatedAge < minAge) {
       Alert.alert(
         "Age Qualification Restricted",
-        `Under South African liquor and auction regulations, you must be at least ${minAge} years of age.`
+        `Under auction compliance regulations, you must be at least ${minAge} years of age to participate in live bidding.`
       );
       return;
     }
@@ -467,7 +469,7 @@ export default function BidderVerificationModal({
 
         Alert.alert(
           "18+ Verification Submitted",
-          "Your legal identification has been submitted for compliance approval. Store purchases are pre-cleared and auction bidding will activate upon clearance.",
+          "Your legal identification has been submitted for compliance approval. Live auction bidding will activate upon clearance and your Public Bidder Number will be certified.",
           [{ text: "Continue", onPress: () => onClose() }]
         );
 
@@ -499,10 +501,10 @@ export default function BidderVerificationModal({
               </View>
               <View style={{ flex: 1, marginLeft: 10 }}>
                 <Text style={styles.modalTitle}>
-                  {minAge}+ Legal Age & Identity Verification
+                  {minAge}+ Live Auction Bidder Verification
                 </Text>
                 <Text style={styles.modalSubtitle}>
-                  Dual compliance for Store Wine/Spirits and Live Auctions
+                  Required exclusively for live auction bidding & rare lot acquisitions
                 </Text>
               </View>
             </View>
@@ -520,7 +522,7 @@ export default function BidderVerificationModal({
             <View style={styles.complianceNotice}>
               <Text style={styles.complianceNoticeIcon}>⚖️</Text>
               <Text style={styles.complianceNoticeText}>
-                Under the South African National Liquor Act & Consumer Protection Act, all spirit purchases and live auction participation require verified adult identification ({minAge}+). Verify once to unlock permanent pre-cleared checkout.
+                Under auction compliance regulations, participating in live auctions and bidding on allocated rare lots requires verified adult identification ({minAge}+). Complete verification to unlock certified live bidding privileges.
               </Text>
             </View>
 
@@ -710,7 +712,7 @@ export default function BidderVerificationModal({
                 {acceptRules && <Text style={styles.checkmark}>✓</Text>}
               </View>
               <Text style={styles.checkboxLabel}>
-                I certify under the South African National Liquor Act that I am at least {minAge} years of age, legally authorized to purchase fine spirits and bid on private reserve lots, and that the attached credentials belong to me.
+                I certify that I am at least {minAge} years of age, legally authorized to participate in live auctions and bid on private reserve lots, and that the attached credentials belong to me.
               </Text>
             </TouchableOpacity>
 

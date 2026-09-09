@@ -29,9 +29,11 @@ const { width } = Dimensions.get("window");
 
 const API_CANDIDATES = [
   API_BASE,
-  "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
-  "http://10.0.2.2:5000/api",
+  ...(__DEV__ ? [
+    "http://localhost:5000/api",
+    "http://192.168.1.9:5000/api",
+    "http://10.0.2.2:5000/api",
+  ] : []),
 ];
 
 const resolveImage = (img) => {

@@ -32,6 +32,9 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { launchImageLibrary } from "react-native-image-picker";
 import tmh_styles from "../styles/tmh_styles";
+import CheckoutPhoneInput from "../widgets/CheckoutPhoneInput";
+import { CountryFlagImage } from "./CountryCodePickerModal";
+import { getCheckoutPhone, splitPhoneNumber } from "../helpers/phoneNumbers";
 
 const escapeHtml = (str) => {
   return String(str ?? "")
@@ -68,7 +71,7 @@ const GOOGLE_MAPS_API_KEY = "AIzaSyBGtqdVoKgd9sCmz2Y8wxuwa0WfDBaymGk";
 const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
 
 const getApiBaseCandidates = () => {
-  const list = [];
+  const list = [API_BASE];
   if (typeof getActiveApiBase === "function") {
     const act = getActiveApiBase();
     if (act) list.push(act);
@@ -76,18 +79,19 @@ const getApiBaseCandidates = () => {
   if (typeof getCandidateBases === "function") {
     list.push(...getCandidateBases());
   }
-  list.push(
-    "http://127.0.0.1:5000/api",
-    "http://localhost:5000/api",
-    "http://192.168.1.102:5000/api",
-    "http://192.168.1.9:5000/api",
-    "http://10.0.2.2:5000/api",
-    API_BASE
-  );
+  if (__DEV__) {
+    list.push(
+      "http://127.0.0.1:5000/api",
+      "http://localhost:5000/api",
+      "http://192.168.1.102:5000/api",
+      "http://192.168.1.9:5000/api",
+      "http://10.0.2.2:5000/api"
+    );
+  }
   return [...new Set(list.filter(Boolean))];
 };
 
-const safeApiFetch = async (path, options = {}, timeoutMs = 4000) => {
+const safeApiFetch = async (path, options = {}, timeoutMs = 12000) => {
   const candidates = getApiBaseCandidates();
   let lastRes = null;
   for (const base of candidates) {
@@ -118,18 +122,18 @@ const showMessage = (msg) => {
   else Alert.alert("", msg);
 };
 
-// Top South African cities for instant suggestion
+// Top South African cities for instant city selection with postal codes
 const DEFAULT_SA_CITIES = [
-  { description: "Sandton, South Africa", main_text: "Sandton" },
-  { description: "Johannesburg, South Africa", main_text: "Johannesburg" },
-  { description: "Cape Town, South Africa", main_text: "Cape Town" },
-  { description: "Durban, South Africa", main_text: "Durban" },
-  { description: "Pretoria, South Africa", main_text: "Pretoria" },
-  { description: "Stellenbosch, South Africa", main_text: "Stellenbosch" },
-  { description: "Centurion, South Africa", main_text: "Centurion" },
-  { description: "Gqeberha (Port Elizabeth), South Africa", main_text: "Gqeberha" },
-  { description: "Bloemfontein, South Africa", main_text: "Bloemfontein" },
-  { description: "East London, South Africa", main_text: "East London" },
+  { description: "Sandton, South Africa", main_text: "Sandton", postalCode: "2196" },
+  { description: "Johannesburg, South Africa", main_text: "Johannesburg", postalCode: "2000" },
+  { description: "Cape Town, South Africa", main_text: "Cape Town", postalCode: "8001" },
+  { description: "Durban, South Africa", main_text: "Durban", postalCode: "4001" },
+  { description: "Pretoria, South Africa", main_text: "Pretoria", postalCode: "0002" },
+  { description: "Stellenbosch, South Africa", main_text: "Stellenbosch", postalCode: "7600" },
+  { description: "Centurion, South Africa", main_text: "Centurion", postalCode: "0157" },
+  { description: "Gqeberha (Port Elizabeth), South Africa", main_text: "Gqeberha", postalCode: "6001" },
+  { description: "Bloemfontein, South Africa", main_text: "Bloemfontein", postalCode: "9301" },
+  { description: "East London, South Africa", main_text: "East London", postalCode: "5201" },
 ];
 
 // Top PostNet pickup hub cities in South Africa
@@ -480,6 +484,121 @@ const FALLBACK_POSTNET_STORES = {
       distance: 4.1,
     },
   ],
+  gqeberha: [
+    {
+      id: "pn-walmer-park",
+      name: "PostNet Walmer Park",
+      address: "Shop 118, Walmer Park Shopping Centre, 16th Ave, Walmer, Gqeberha",
+      city: "Gqeberha",
+      postalCode: "6070",
+      telephone: "041 368 2800",
+      distance: 2.1,
+    },
+    {
+      id: "pn-summerstrand",
+      name: "PostNet Summerstrand",
+      address: "Shop 4, The Boardwalk Mall, Marine Dr, Summerstrand, Gqeberha",
+      city: "Gqeberha",
+      postalCode: "6001",
+      telephone: "041 583 3100",
+      distance: 4.5,
+    },
+  ],
+  bloemfontein: [
+    {
+      id: "pn-bloem-waterfront",
+      name: "PostNet Waterfront",
+      address: "Shop 74, Loch Logan Waterfront, Charles St, Bloemfontein",
+      city: "Bloemfontein",
+      postalCode: "9301",
+      telephone: "051 448 3300",
+      distance: 1.8,
+    },
+    {
+      id: "pn-preller-sq",
+      name: "PostNet Preller Square",
+      address: "Shop 12, Preller Square, Dan Pienaar, Bloemfontein",
+      city: "Bloemfontein",
+      postalCode: "9301",
+      telephone: "051 436 4400",
+      distance: 3.9,
+    },
+  ],
+  "east london": [
+    {
+      id: "pn-beacon-bay",
+      name: "PostNet Beacon Bay",
+      address: "Shop 28, Beacon Bay Retail Park, Bonza Bay Rd, East London",
+      city: "East London",
+      postalCode: "5241",
+      telephone: "043 748 1100",
+      distance: 2.3,
+    },
+    {
+      id: "pn-vincent-park",
+      name: "PostNet Vincent Park",
+      address: "Shop 42, Vincent Park Shopping Centre, Devereux Ave, East London",
+      city: "East London",
+      postalCode: "5247",
+      telephone: "043 726 2200",
+      distance: 4.0,
+    },
+  ],
+  paarl: [
+    {
+      id: "pn-paarl-mall",
+      name: "PostNet Paarl Mall",
+      address: "Shop 81, Paarl Mall, Cecilia St, Paarl",
+      city: "Paarl",
+      postalCode: "7646",
+      telephone: "021 863 4400",
+      distance: 1.5,
+    },
+  ],
+  "somerset west": [
+    {
+      id: "pn-somerset-mall",
+      name: "PostNet Somerset Mall",
+      address: "Shop 85, Somerset Mall, Centenary Dr, Somerset West",
+      city: "Somerset West",
+      postalCode: "7130",
+      telephone: "021 852 9900",
+      distance: 2.2,
+    },
+  ],
+  george: [
+    {
+      id: "pn-garden-route",
+      name: "PostNet Garden Route Mall",
+      address: "Shop 52, Garden Route Mall, Knysna Rd, George",
+      city: "George",
+      postalCode: "6529",
+      telephone: "044 871 1100",
+      distance: 2.8,
+    },
+  ],
+  knysna: [
+    {
+      id: "pn-knysna-mall",
+      name: "PostNet Knysna Mall",
+      address: "Shop 22, Knysna Mall, Main Rd, Knysna",
+      city: "Knysna",
+      postalCode: "6571",
+      telephone: "044 382 3300",
+      distance: 1.4,
+    },
+  ],
+  hermanus: [
+    {
+      id: "pn-whale-coast",
+      name: "PostNet Whale Coast Mall",
+      address: "Shop 38, Whale Coast Mall, R43, Sandbaai, Hermanus",
+      city: "Hermanus",
+      postalCode: "7200",
+      telephone: "028 312 4400",
+      distance: 2.0,
+    },
+  ],
 };
 
 const Checkout = ({ navigation, route }) => {
@@ -500,6 +619,8 @@ const Checkout = ({ navigation, route }) => {
   // Form Fields
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
+  const [phoneCountry, setPhoneCountry] = useState("ZA");
+  const checkoutPhone = getCheckoutPhone(phone, phoneCountry);
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("Johannesburg");
@@ -744,9 +865,10 @@ const Checkout = ({ navigation, route }) => {
           setCurrentUser(user);
           if (user.name) setFullName(user.name);
           if (user.email) setEmail(user.email);
-          if (user.phone) {
-            // Keep only digits for phone number
-            setPhone(String(user.phone).replace(/[^0-9]/g, ""));
+          if (user.phone || user.phoneNumber) {
+            const savedPhone = splitPhoneNumber(user.phone || user.phoneNumber);
+            setPhone(savedPhone.phone);
+            setPhoneCountry(savedPhone.phoneCountry);
           }
           if (user.address) setAddress(user.address);
           if (user.city) {
@@ -888,6 +1010,9 @@ const Checkout = ({ navigation, route }) => {
     if (initialStores.length > 0) {
       setPostnetStores(initialStores);
       setUsingNearestCity(false);
+      if (initialStores[0]?.postalCode) {
+        setPostalCode((current) => current || initialStores[0].postalCode);
+      }
     }
 
     // 2. Query backend locator first (which calculates nearest regional hub and distances)
@@ -1195,16 +1320,36 @@ const Checkout = ({ navigation, route }) => {
     setHasSelectedCityForPostnet(true);
     setPreferredPostnetStore(null);
 
-    // Look up various postal codes for this selected city
+    // Look up and AUTO-FILL postal code for this selected city
     const lowerCity = cityName.toLowerCase();
+    let autoPostal = prediction.postalCode || "";
     const mappedCodes = CITY_POSTAL_CODES_MAP[lowerCity];
 
     if (mappedCodes && mappedCodes.length > 0) {
       setCurrentCityPostalCodes(mappedCodes);
-      setPostalCode(mappedCodes[0].code);
-      showMessage(`🏙️ ${cityName} selected — ${mappedCodes.length} postal codes available`);
+      if (!autoPostal) autoPostal = mappedCodes[0].code;
     } else {
-      fetchDynamicPostalCodesForCity(cityName);
+      const matchKey = Object.keys(CITY_POSTAL_CODES_MAP).find(
+        (k) => lowerCity.includes(k) || k.includes(lowerCity)
+      );
+      if (matchKey && CITY_POSTAL_CODES_MAP[matchKey]?.length > 0) {
+        setCurrentCityPostalCodes(CITY_POSTAL_CODES_MAP[matchKey]);
+        if (!autoPostal) autoPostal = CITY_POSTAL_CODES_MAP[matchKey][0].code;
+      } else {
+        const fallbackPostnet = FALLBACK_POSTNET_STORES[lowerCity];
+        if (fallbackPostnet && fallbackPostnet.length > 0 && fallbackPostnet[0].postalCode) {
+          autoPostal = fallbackPostnet[0].postalCode;
+        } else {
+          fetchDynamicPostalCodesForCity(cityName);
+        }
+      }
+    }
+
+    if (autoPostal) {
+      setPostalCode(autoPostal);
+      showMessage(`🏙️ ${cityName} selected (${autoPostal})`);
+    } else {
+      showMessage(`🏙️ ${cityName} selected`);
     }
 
     // Immediately fetch PostNet branches near this clicked city
@@ -1740,8 +1885,8 @@ const Checkout = ({ navigation, route }) => {
       showMessage("Please enter recipient full name");
       return;
     }
-    if (!phone.trim()) {
-      showMessage("Please enter a phone number for delivery updates");
+    if (!checkoutPhone) {
+      showMessage("Please select a country code and enter a valid phone number for that country");
       return;
     }
     if (!email.trim() || !email.includes("@")) {
@@ -1812,8 +1957,8 @@ const Checkout = ({ navigation, route }) => {
       showMessage("Please enter recipient full name");
       return;
     }
-    if (!phone.trim()) {
-      showMessage("Please enter a phone number for courier tracking");
+    if (!checkoutPhone) {
+      showMessage("Please select a country code and enter a valid phone number for that country");
       return;
     }
     if (!email.trim() || !email.includes("@")) {
@@ -1864,8 +2009,7 @@ const Checkout = ({ navigation, route }) => {
       const finalShippingAddress = {
         name: (fullName || "").trim() || "Customer",
         fullName: (fullName || "").trim() || "Customer",
-        phone: (phone || "").trim() || "0000000000",
-        phoneNumber: (phone || "").trim() || "0000000000",
+        ...checkoutPhone,
         email: (email || "").trim() || "customer@grandstore.co.za",
         address:
           deliveryPreference === "postnet" && preferredPostnetStore
@@ -1971,7 +2115,7 @@ const Checkout = ({ navigation, route }) => {
             isGuest: !token,
             guestEmail: (email || "").trim(),
             guestName: (fullName || "").trim(),
-            guestPhone: (phone || "").trim(),
+            guestPhone: checkoutPhone.phone,
             isGift: Boolean(isGift),
             giftRecipientName: isGift ? String(giftRecipientName || "").trim() : "",
             giftMessage: isGift ? String(giftMessage || "").trim() : "",
@@ -2106,7 +2250,7 @@ const Checkout = ({ navigation, route }) => {
         },
         recipient: {
           fullName: (fullName || "").trim() || "Customer",
-          phone: (phone || "").trim(),
+          ...checkoutPhone,
           email: (email || "").trim(),
           address:
             deliveryPreference === "postnet" && preferredPostnetStore
@@ -2756,7 +2900,7 @@ const Checkout = ({ navigation, route }) => {
                 </Text>
                 <View style={styles.complianceContactRow}>
                   <Text style={styles.complianceContactLine}>✉️ Email: <Text style={styles.complianceContactHighlight}>{email || createdOrder.recipient?.email}</Text></Text>
-                  <Text style={styles.complianceContactLine}>📱 Phone / SMS: <Text style={styles.complianceContactHighlight}>{phone || createdOrder.recipient?.phone}</Text></Text>
+                  <Text style={styles.complianceContactLine}>📱 Phone / SMS: <Text style={styles.complianceContactHighlight}>{createdOrder.recipient?.phone || checkoutPhone?.phone}</Text></Text>
                 </View>
               </View>
             </View>
@@ -2805,7 +2949,7 @@ const Checkout = ({ navigation, route }) => {
               </View>
               <View style={styles.postnetPinNotice}>
                 <Text style={styles.postnetPinNoticeText}>
-                  📲 An SMS alert containing your unique collection PIN and required ID verification will be sent to {phone || "your phone"} when the package arrives at the branch.
+                  📲 An SMS alert containing your unique collection PIN and required ID verification will be sent to {createdOrder.recipient?.phone || checkoutPhone?.phone || "your phone"} when the package arrives at the branch.
                 </Text>
               </View>
             </View>
@@ -3291,20 +3435,18 @@ const Checkout = ({ navigation, route }) => {
                   />
                 </View>
 
-                <View style={styles.rowInputs}>
-                  <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
+                <View>
+                  <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>MOBILE NUMBER (FOR SMS PIN) *</Text>
-                    <TextInput
-                      style={styles.textInput}
-                      placeholder="e.g. 0821234567"
-                      placeholderTextColor="#666"
-                      keyboardType="number-pad"
-                      value={phone}
-                      onChangeText={(text) => setPhone(text.replace(/[^0-9]/g, ""))}
+                    <CheckoutPhoneInput
+                      phone={phone}
+                      phoneCountry={phoneCountry}
+                      onChangePhone={setPhone}
+                      onChangeCountry={setPhoneCountry}
                     />
                   </View>
 
-                  <View style={[styles.inputGroup, { flex: 1 }]}>
+                  <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>EMAIL (FOR RECEIPT) *</Text>
                     <TextInput
                       style={styles.textInput}
@@ -3487,7 +3629,7 @@ const Checkout = ({ navigation, route }) => {
                     <Text style={styles.inputLabel}>COUNTRY *</Text>
                     {destinationMode === "domestic_sa" ? (
                       <View style={styles.lockedCountryBox}>
-                        <Text style={styles.lockedCountryFlag}>🇿🇦</Text>
+                        <CountryFlagImage iso="ZA" size={16} style={{ marginRight: 6 }} />
                         <Text style={styles.lockedCountryText}>South Africa</Text>
                         <View style={styles.zaTag}>
                           <Text style={styles.zaTagText}>PostNet & Local Courier</Text>
@@ -3514,58 +3656,8 @@ const Checkout = ({ navigation, route }) => {
                 <View style={styles.sectionCard}>
                   <Text style={styles.cardHeaderTitle}>CHOOSE POSTNET COLLECTION BRANCH</Text>
                   <Text style={styles.subtleHelperText}>
-                    Select your city or search your suburb to find the nearest PostNet counter:
+                    Select your city or suburb to choose your preferred PostNet counter:
                   </Text>
-
-                  {/* PostNet City Chips */}
-                  <View style={styles.postnetCitiesBox}>
-                    <View style={styles.postnetCitiesHeader}>
-                      <Text style={styles.postnetCitiesTitle}>
-                        🏙️ AVAILABLE POSTNET CITIES ({POSTNET_AVAILABLE_CITIES.length})
-                      </Text>
-                    </View>
-                    <View style={styles.postnetCitiesGrid}>
-                      {(showAllPostnetCities ? POSTNET_AVAILABLE_CITIES : POSTNET_AVAILABLE_CITIES.slice(0, 3)).map((cName) => {
-                        const isSelected = city.trim().toLowerCase() === cName.toLowerCase() && hasSelectedCityForPostnet;
-                        return (
-                          <TouchableOpacity
-                            key={cName}
-                            style={[styles.postnetCityCard, isSelected && styles.postnetCityCardActive]}
-                            onPress={() => handleSelectPostnetCity(cName)}
-                            activeOpacity={0.8}
-                          >
-                            <View style={styles.postnetCityIconBadge}>
-                              <Text style={{ fontSize: 13 }}>{isSelected ? "📍" : "🏢"}</Text>
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={[styles.postnetCityName, isSelected && styles.postnetCityNameActive]} numberOfLines={1}>
-                                {cName}
-                              </Text>
-                              <Text style={styles.postnetCitySub}>
-                                {FALLBACK_POSTNET_STORES[cName.toLowerCase()]?.length || 3}+ Branches
-                              </Text>
-                            </View>
-                            {isSelected && (
-                              <View style={styles.citySelectedCheck}>
-                                <Text style={styles.citySelectedCheckText}>✓</Text>
-                              </View>
-                            )}
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                    {POSTNET_AVAILABLE_CITIES.length > 3 && (
-                      <TouchableOpacity
-                        style={styles.showMoreCitiesBtn}
-                        onPress={() => setShowAllPostnetCities(!showAllPostnetCities)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.showMoreCitiesBtnText}>
-                          {showAllPostnetCities ? "▴ Show Fewer Cities" : `▾ Show More Cities (${POSTNET_AVAILABLE_CITIES.length - 3} More)`}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
 
                   {/* PostNet City / Suburb & Postal Code Inputs */}
                   <View style={[styles.rowInputs, { marginBottom: 12 }]}>
@@ -3593,7 +3685,7 @@ const Checkout = ({ navigation, route }) => {
                       {showCityDropdown && (
                         <View style={styles.predictionsDropdown}>
                           <View style={styles.predictionsHeader}>
-                            <Text style={styles.predictionsHeaderText}>SUGGESTED CITIES</Text>
+                            <Text style={styles.predictionsHeaderText}>SELECT CITY</Text>
                             <TouchableOpacity onPress={() => setShowCityDropdown(false)}>
                               <Text style={{ color: "#aaa", fontSize: 11 }}>✕ Close</Text>
                             </TouchableOpacity>
@@ -3692,22 +3784,22 @@ const Checkout = ({ navigation, route }) => {
                       </View>
                       <View style={{ flex: 1, marginLeft: 8 }}>
                         <Text style={styles.selectedBranchBannerTitle}>
-                          {preferredPostnetStore.name} ({preferredPostnetStore.distance} km away)
+                          Collection Point: {preferredPostnetStore.name}
                         </Text>
-                        <Text style={styles.selectedBranchBannerAddress} numberOfLines={1}>
+                        <Text style={styles.selectedBranchBannerAddress} numberOfLines={2}>
                           {preferredPostnetStore.address}
                         </Text>
+                        {preferredPostnetStore.postalCode ? (
+                          <Text style={{ color: "#f5c242", fontSize: 10, marginTop: 2, fontWeight: "700" }}>
+                            Postal Code: {preferredPostnetStore.postalCode} • {preferredPostnetStore.distance ? `${preferredPostnetStore.distance} km away` : "Nearest branch"}
+                          </Text>
+                        ) : null}
                       </View>
-                      <TouchableOpacity onPress={() => setPreferredPostnetStore(null)}>
-                        <Text style={{ color: "#f5c242", fontSize: 11, fontWeight: "700", textDecorationLine: "underline" }}>
-                          Change
-                        </Text>
-                      </TouchableOpacity>
                     </View>
                   )}
 
                   {/* Nearest Regional Hub Warning Banner (Mobile) */}
-                  {usingNearestCity && !preferredPostnetStore && postnetStores.length > 0 && (
+                  {usingNearestCity && postnetStores.length > 0 && (
                     <View style={styles.nearestCityBanner}>
                       <Text style={{ fontSize: 18, marginRight: 8 }}>📍</Text>
                       <View style={{ flex: 1 }}>
@@ -3720,76 +3812,109 @@ const Checkout = ({ navigation, route }) => {
                     </View>
                   )}
 
-                  {/* Nearby Branches List */}
-                  {!preferredPostnetStore && (
+                  {/* Loading indicator */}
+                  {isLoadingPostnet && (
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14 }}>
+                      <ActivityIndicator size="small" color="#c99742" />
+                      <Text style={{ color: "#c99742", fontSize: 12, marginLeft: 8, fontWeight: "600" }}>
+                        Finding available PostNet branches in {city}...
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Available Locations Header & Search */}
+                  <View style={{ marginTop: 8, marginBottom: 8 }}>
+                    <Text style={{ color: "#f5c242", fontSize: 11, fontWeight: "800", letterSpacing: 0.5, marginBottom: 6 }}>
+                      AVAILABLE POSTNET LOCATIONS IN {(city || "SOUTH AFRICA").toUpperCase()} ({filteredPostnetStores.length})
+                    </Text>
+                    <View style={styles.branchSearchBox}>
+                      <Text style={{ fontSize: 13, marginRight: 6 }}>🔍</Text>
+                      <TextInput
+                        style={styles.branchSearchInput}
+                        placeholder={`Filter ${city} branches by mall, area or street...`}
+                        placeholderTextColor="#666"
+                        value={branchSearch}
+                        onChangeText={setBranchSearch}
+                      />
+                      {branchSearch.length > 0 && (
+                        <TouchableOpacity onPress={() => setBranchSearch("")}>
+                          <Text style={{ color: "#888", fontSize: 12, paddingHorizontal: 4 }}>✕</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+
+                  {/* List of Available Locations */}
+                  {filteredPostnetStores.length > 0 ? (
                     <>
-                      <View style={styles.branchSearchBox}>
-                        <Text style={{ fontSize: 13, marginRight: 6 }}>🔍</Text>
-                        <TextInput
-                          style={styles.branchSearchInput}
-                          placeholder={`Filter ${city} branch by mall, area or street...`}
-                          placeholderTextColor="#666"
-                          value={branchSearch}
-                          onChangeText={setBranchSearch}
-                        />
-                        {branchSearch.length > 0 && (
-                          <TouchableOpacity onPress={() => setBranchSearch("")}>
-                            <Text style={{ color: "#888", fontSize: 12, paddingHorizontal: 4 }}>✕</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-
-                      {filteredPostnetStores.length > 0 ? (
-                        <>
-                          {(showAllPostnetBranches || branchSearch.trim().length > 0 ? filteredPostnetStores : filteredPostnetStores.slice(0, 3)).map((store, idx) => {
-                            return (
-                              <View key={store.id || idx} style={styles.postnetStoreCard}>
-                                <View style={{ flex: 1 }}>
-                                  <View style={styles.storeNameRow}>
-                                    <Text style={styles.storeName}>{store.name}</Text>
-                                    {store.distance !== null && store.distance !== undefined && (
-                                      <View style={styles.distanceBadge}>
-                                        <Text style={styles.distanceBadgeText}>{store.distance} km away</Text>
-                                      </View>
-                                    )}
-                                  </View>
-                                  <Text style={styles.storeAddress}>{store.address}</Text>
-                                  {store.telephone ? <Text style={styles.storePhone}>📞 {store.telephone}</Text> : null}
-                                </View>
-                                <TouchableOpacity
-                                  style={styles.selectStoreBtn}
-                                  onPress={() => {
-                                    setPreferredPostnetStore(store);
-                                    if (store.postalCode) setPostalCode(store.postalCode);
-                                    showMessage(`📍 Selected ${store.name}`);
-                                  }}
-                                >
-                                  <Text style={styles.selectStoreBtnText}>SELECT STORE</Text>
-                                </TouchableOpacity>
+                      {(showAllPostnetBranches || branchSearch.trim().length > 0 ? filteredPostnetStores : filteredPostnetStores.slice(0, 4)).map((store, idx) => {
+                        const isStoreSelected = preferredPostnetStore?.id === store.id || preferredPostnetStore?.name === store.name;
+                        return (
+                          <TouchableOpacity
+                            key={store.id || idx}
+                            style={[styles.postnetStoreCard, isStoreSelected && styles.postnetStoreCardSelected]}
+                            onPress={() => {
+                              setPreferredPostnetStore(store);
+                              if (store.postalCode) setPostalCode(store.postalCode);
+                              showMessage(`📍 Selected ${store.name}`);
+                            }}
+                            activeOpacity={0.8}
+                          >
+                            <View style={{ marginRight: 10, marginTop: 2 }}>
+                              <View style={[
+                                styles.selectedBranchCheckCircle,
+                                { width: 22, height: 22, borderRadius: 11 },
+                                isStoreSelected ? { backgroundColor: "#10b981" } : { backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.2)" }
+                              ]}>
+                                <Text style={{ color: isStoreSelected ? "#000" : "transparent", fontSize: 11, fontWeight: "900" }}>✓</Text>
                               </View>
-                            );
-                          })}
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <View style={styles.storeNameRow}>
+                                <Text style={[styles.storeName, isStoreSelected && { color: "#f5c242", fontWeight: "800" }]}>{store.name}</Text>
+                                {store.distance !== null && store.distance !== undefined && (
+                                  <View style={styles.distanceBadge}>
+                                    <Text style={styles.distanceBadgeText}>{store.distance} km away</Text>
+                                  </View>
+                                )}
+                              </View>
+                              <Text style={styles.storeAddress}>{store.address}</Text>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 }}>
+                                {store.postalCode ? <Text style={{ color: "#888", fontSize: 10, fontFamily: "monospace" }}>📮 Code: {store.postalCode}</Text> : null}
+                                {store.telephone ? <Text style={styles.storePhone}>📞 {store.telephone}</Text> : null}
+                              </View>
+                              {isStoreSelected ? (
+                                <View style={{ marginTop: 6, alignSelf: "flex-start", backgroundColor: "rgba(16, 185, 129, 0.15)", borderWidth: 1, borderColor: "rgba(16, 185, 129, 0.4)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 }}>
+                                  <Text style={{ color: "#10b981", fontSize: 9.5, fontWeight: "800" }}>✓ SELECTED COLLECTION POINT</Text>
+                                </View>
+                              ) : (
+                                <View style={{ marginTop: 6, alignSelf: "flex-start", backgroundColor: "rgba(201, 151, 66, 0.12)", borderWidth: 1, borderColor: "rgba(201, 151, 66, 0.3)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 }}>
+                                  <Text style={{ color: "#f5c242", fontSize: 9.5, fontWeight: "700" }}>TAP TO CHOOSE THIS LOCATION</Text>
+                                </View>
+                              )}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
 
-                          {filteredPostnetStores.length > 3 && !branchSearch.trim() && (
-                            <TouchableOpacity
-                              style={styles.showMoreBranchesBtn}
-                              onPress={() => setShowAllPostnetBranches(!showAllPostnetBranches)}
-                              activeOpacity={0.8}
-                            >
-                              <Text style={styles.showMoreBranchesBtnText}>
-                                {showAllPostnetBranches ? "▴ Show Fewer Branches" : `▾ Show More Branches (${filteredPostnetStores.length - 3} More)`}
-                              </Text>
-                            </TouchableOpacity>
-                          )}
-                        </>
-                      ) : (
-                        <View style={styles.emptyStoresBox}>
-                          <Text style={styles.emptyStoresText}>
-                            No PostNet branches found matching "{branchSearch}". Try selecting another city above.
+                      {filteredPostnetStores.length > 4 && !branchSearch.trim() && (
+                        <TouchableOpacity
+                          style={styles.showMoreBranchesBtn}
+                          onPress={() => setShowAllPostnetBranches(!showAllPostnetBranches)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.showMoreBranchesBtnText}>
+                            {showAllPostnetBranches ? "▴ Show Fewer Locations" : `▾ Show All Available Locations (${filteredPostnetStores.length} Available)`}
                           </Text>
-                        </View>
+                        </TouchableOpacity>
                       )}
                     </>
+                  ) : (
+                    <View style={styles.emptyStoresBox}>
+                      <Text style={styles.emptyStoresText}>
+                        No PostNet branches found matching "{branchSearch}". Try typing your suburb or city above.
+                      </Text>
+                    </View>
                   )}
                 </View>
               )}

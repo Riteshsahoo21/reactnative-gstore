@@ -15,13 +15,21 @@ import {
 import { Picker } from '@react-native-picker/picker';
 import LinearGradient from 'react-native-linear-gradient';
 import axios from 'axios';
-import { API_BASE } from '../resources/data/Constants';
+import { API_BASE, setActiveApiBase } from '../resources/data/Constants';
+import CountryCodePickerModal, { CountryFlagImage } from './CountryCodePickerModal';
 
 const Register = ({ navigation }) => {
   const [title, setTitle] = useState('Mr');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
+  const [countryCode, setCountryCode] = useState('+27');
+  const [countryPickerVisible, setCountryPickerVisible] = useState(false);
+  const [selectedCountryObj, setSelectedCountryObj] = useState({
+    country: 'ZA',
+    name: 'South Africa',
+    dialCode: '+27',
+  });
   const [mobileNumber, setMobileNumber] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -31,10 +39,12 @@ const Register = ({ navigation }) => {
   const postRegisterEndpoint = async (payload) => {
     const candidates = [
       `${API_BASE}/auth/register`,
-      'http://localhost:5000/api/auth/register',
-      'http://127.0.0.1:5000/api/auth/register',
-      'http://10.0.2.2:5000/api/auth/register',
-      'http://192.168.1.9:5000/api/auth/register',
+      ...(__DEV__ ? [
+        'http://localhost:5000/api/auth/register',
+        'http://127.0.0.1:5000/api/auth/register',
+        'http://10.0.2.2:5000/api/auth/register',
+        'http://192.168.1.9:5000/api/auth/register',
+      ] : []),
     ];
     const uniqueCandidates = [...new Set(candidates)];
     let lastError = null;
@@ -43,11 +53,14 @@ const Register = ({ navigation }) => {
       try {
         const res = await axios.post(url, payload, {
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          timeout: 3500,
+          timeout: 12000,
           _skipRewrite: true,
         });
         if (res && res.data) {
-          setActiveApiBase('http://localhost:5000/api');
+          const root = url.replace(/\/auth\/register.*$/, '');
+          if (typeof setActiveApiBase === 'function') {
+            setActiveApiBase(root || API_BASE);
+          }
           return res.data;
         }
       } catch (err) {
@@ -84,10 +97,14 @@ const Register = ({ navigation }) => {
     setLoading(true);
 
     try {
+      const rawNum = mobileNumber.trim().replace(/[^\d]/g, '');
+      const cleanNum = rawNum.startsWith('0') ? rawNum.slice(1) : rawNum;
+      const fullPhone = cleanNum ? `${countryCode}${cleanNum}` : '';
+
       const payload = {
         name: `${title} ${firstName.trim()} ${lastName.trim()}`.trim(),
         email: email.trim().toLowerCase(),
-        phone: mobileNumber.trim(),
+        phone: fullPhone,
         password: password.trim(),
       };
 
@@ -176,14 +193,25 @@ const Register = ({ navigation }) => {
           />
 
           <Text style={styles.fieldLabel}>MOBILE PHONE (OPTIONAL)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="+27 82 123 4567"
-            placeholderTextColor="#666"
-            onChangeText={setMobileNumber}
-            value={mobileNumber}
-            keyboardType="phone-pad"
-          />
+          <View style={styles.phoneInputRow}>
+            <TouchableOpacity
+              style={styles.countryBadge}
+              activeOpacity={0.7}
+              onPress={() => setCountryPickerVisible(true)}
+            >
+              <CountryFlagImage iso={selectedCountryObj?.country || 'ZA'} size={15} style={{ marginRight: 6 }} />
+              <Text style={styles.countryCodeText}>{countryCode}</Text>
+              <Text style={styles.countryChevron}>⌄</Text>
+            </TouchableOpacity>
+            <TextInput
+              style={styles.phoneInput}
+              placeholder="82 123 4567"
+              placeholderTextColor="#666"
+              onChangeText={setMobileNumber}
+              value={mobileNumber}
+              keyboardType="phone-pad"
+            />
+          </View>
 
           <Text style={styles.fieldLabel}>PASSWORD</Text>
           <TextInput
@@ -247,6 +275,17 @@ const Register = ({ navigation }) => {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <CountryCodePickerModal
+        visible={countryPickerVisible}
+        onClose={() => setCountryPickerVisible(false)}
+        onSelect={(country) => {
+          setSelectedCountryObj(country);
+          setCountryCode(country.dialCode || country.code || '+27');
+          setCountryPickerVisible(false);
+        }}
+        selectedCountry={selectedCountryObj?.country || 'ZA'}
+      />
     </KeyboardAvoidingView>
   );
 };
@@ -257,6 +296,43 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#080706',
+  },
+  phoneInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  countryBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#15120e',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    marginRight: 8,
+  },
+  countryCodeText: {
+    color: '#d4af37',
+    fontSize: 13.5,
+    fontWeight: '700',
+  },
+  countryChevron: {
+    color: '#d4af37',
+    fontSize: 13,
+    marginLeft: 4,
+  },
+  phoneInput: {
+    flex: 1,
+    backgroundColor: '#15120e',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 10,
+    color: '#fff',
+    fontSize: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
   scrollContent: {
     paddingHorizontal: 20,

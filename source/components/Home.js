@@ -41,6 +41,7 @@ import {
   IMAGES_ICON,
   IMAGES_ICON_SELECTED,
   MENU_HAMBURGER,
+  NOTIFICATION_ICON,
 } from "../resources/data/Images";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import ConfirmationPopup from "../widgets/ConfirmationPopup";
@@ -56,6 +57,7 @@ import Offers from "./Offers";
 import Shop from "./Shop";
 import EventsHub from "./events/EventsHub";
 import CustomerDashboard from "./CustomerDashboard";
+import NotificationBell from "./NotificationBell";
 import { API_BASE } from "../resources/data/Constants";
 import LinearGradient from "react-native-linear-gradient";
 
@@ -308,7 +310,7 @@ const Home = ({ navigation, route }) => {
   const menuScaleAnim = useRef(new Animated.Value(1)).current;
   const vipPulseAnim = useRef(new Animated.Value(1)).current;
   const itemAnimations = useRef(
-    Array.from({ length: 13 }, () => new Animated.Value(0))
+    Array.from({ length: 14 }, () => new Animated.Value(0))
   ).current;
 
   // Staggered slide/fade entrance when drawer opens
@@ -502,11 +504,12 @@ const handleLogout = async () => {
       <View style={styles.centerContainer}>
         <Image
           source={require("../resources/assets/logo.webp")}
-          style={[styles.headerLogo, { height: headerHeight * 0.9 }]}
+          style={[styles.headerLogo, { height: headerHeight * 0.65 }]}
         />
       </View>
 
       <View style={styles.sideContainer}>
+        <NotificationBell navigation={navigation} />
         <HeaderWishlistIcon navigation={navigation} />
         <TouchableOpacity onPress={() => navigation.navigate("Cart")}>
           <Image source={CART_ICON} style={styles.headerIcon} />
@@ -687,6 +690,7 @@ const handleLogout = async () => {
             >
               {[
                 { label: "Home", icon: HOME_ICON, onPress: () => setNavigationIndex(0), subtitle: "Main Vault & Curated Releases" },
+                { label: "Notifications & Alerts 🔔", icon: NOTIFICATION_ICON, onPress: () => { setOpenDrawer(false); navigation.navigate("NotificationsScreen"); }, subtitle: "Real-Time Auction, Order & Event Updates" },
                 { label: "Shop", icon: require("../resources/images/store.png"), onPress: () => setNavigationIndex(1), subtitle: "Full Luxury Wine & Spirits Catalog" },
                 { label: "Categories", icon: FILLER_ICON, onPress: () => setNavigationIndex(2), subtitle: "Browse by Vintage, Region & Spirit" },
                 { label: "Customer Dashboard", icon: require("../resources/images/group.png"), onPress: () => setNavigationIndex(3), subtitle: "Your Private Collector Overview" },
@@ -810,8 +814,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   sideContainer: { flexDirection: "row", alignItems: "center" },
-  centerContainer: { flex: 1, alignItems: "center", justifyContent: "center" },
-  headerLogo: { width: width * 0.48, height: 44, resizeMode: "contain" },
+  centerContainer: { flex: 1, alignItems: "flex-start", justifyContent: "center", paddingLeft: 12 },
+  headerLogo: { width: width * 0.40, height: 44, resizeMode: "contain" },
   headerIcon: { width: 28, height: 28, resizeMode: "contain", marginHorizontal: 6 },
   menuBtn: {
     padding: 2,

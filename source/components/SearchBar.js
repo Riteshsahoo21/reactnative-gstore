@@ -1,9 +1,33 @@
-/* eslint-disable prettier/prettier */
 import React from "react";
-import { View, TextInput, Image, StyleSheet } from "react-native";
+import { View, TextInput, Image, StyleSheet, TouchableOpacity, Text } from "react-native";
 import Colors from "../resources/colors/Colors";
+import SearchAutoRecommend from "./SearchAutoRecommend";
 
-const SearchBar = ({ query, setQuery, placeholder = "Search anything..." }) => {
+const SearchBar = ({
+  query,
+  setQuery,
+  placeholder = "Search anything...",
+  products,
+  navigation,
+  categories,
+  onSelectProduct,
+  onSearchSubmit,
+}) => {
+  if (products && products.length > 0) {
+    return (
+      <SearchAutoRecommend
+        query={query}
+        setQuery={setQuery}
+        placeholder={placeholder}
+        products={products}
+        navigation={navigation}
+        categories={categories}
+        onSelectProduct={onSelectProduct}
+        onSearchSubmit={onSearchSubmit}
+      />
+    );
+  }
+
   return (
     <View style={styles.searchContainer}>
       <Image
@@ -17,6 +41,11 @@ const SearchBar = ({ query, setQuery, placeholder = "Search anything..." }) => {
         value={query}
         onChangeText={setQuery}
       />
+      {query && query.length > 0 && (
+        <TouchableOpacity onPress={() => setQuery("")} style={{ paddingHorizontal: 6 }}>
+          <Text style={{ color: "#777777", fontSize: 16 }}>✕</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 };

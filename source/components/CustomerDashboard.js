@@ -25,6 +25,7 @@ import axios from "axios";
 import { APP_FONT } from "../resources/data/Fonts";
 import { API_BASE } from "../resources/data/Constants";
 import BidderVerificationModal from "./auction/BidderVerificationModal";
+import NotificationBell from "./NotificationBell";
 
 const { width } = Dimensions.get("window");
 
@@ -47,6 +48,7 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
   const [wishlistCount, setWishlistCount] = useState(0);
   const [bidsCount, setBidsCount] = useState(0);
   const [ticketsCount, setTicketsCount] = useState(0);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
 
   // Edit Profile Modal (Includes Name, Phone, and Password Update)
   const [isEditProfileVisible, setIsEditProfileVisible] = useState(false);
@@ -140,9 +142,11 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
       if (token) {
         const candidates = [
           API_BASE,
-          "http://127.0.0.1:5000/api",
-          "http://localhost:5000/api",
-          "http://10.0.2.2:5000/api",
+          ...(__DEV__ ? [
+            "http://127.0.0.1:5000/api",
+            "http://localhost:5000/api",
+            "http://10.0.2.2:5000/api",
+          ] : []),
         ];
         let fetchedData = null;
         for (const base of [...new Set(candidates.filter(Boolean))]) {
@@ -506,11 +510,16 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
       loadUserData();
     });
 
+    const subNotif = DeviceEventEmitter.addListener("notificationsUpdated", ({ unreadCount }) => {
+      setUnreadNotificationsCount(typeof unreadCount === "number" ? unreadCount : 0);
+    });
+
     return () => {
       subWishlist.remove();
       subUserLogin.remove();
       subUserLogout.remove();
       subUserAgeVerified.remove();
+      subNotif.remove();
     };
   }, [loadUserData]);
 
@@ -524,6 +533,14 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
     if (!editName.trim()) {
       showMessage("Please enter your name");
       return;
+    }
+
+    if (editEmail && editEmail.trim()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(editEmail.trim())) {
+        showMessage("Please enter a valid email address");
+        return;
+      }
     }
 
     const hasPasswordChange = Boolean(newPassword.trim());
@@ -547,6 +564,7 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
       const token = userToken || (await AsyncStorage.getItem("userToken"));
       const payload = {
         name: editName.trim(),
+        email: (editEmail || "").trim().toLowerCase(),
         phone: editPhone.trim(),
         phoneNumber: editPhone.trim(),
       };
@@ -581,6 +599,9 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
 
       await AsyncStorage.setItem("userName", editName.trim());
       await AsyncStorage.setItem("userPhone", editPhone.trim());
+      if (editEmail.trim()) {
+        await AsyncStorage.setItem("userEmail", editEmail.trim().toLowerCase());
+      }
       if (updatedUser) {
         await AsyncStorage.setItem("userInfo", JSON.stringify(updatedUser));
       }
@@ -588,6 +609,7 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
       setUser((prev) => ({
         ...prev,
         name: editName.trim(),
+        email: editEmail.trim().toLowerCase(),
         phone: editPhone.trim(),
         ...(updatedUser
           ? {
@@ -1178,12 +1200,15 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
           )}
           <Text style={styles.topBarTitle}>Customer Dashboard</Text>
         </View>
-        <TouchableOpacity
-          onPress={() => setIsEditProfileVisible(true)}
-          style={styles.editHeaderBtn}
-        >
-          <Text style={styles.editHeaderBtnText}>Edit Profile</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <NotificationBell navigation={navigation} />
+          <TouchableOpacity
+            onPress={() => setIsEditProfileVisible(true)}
+            style={styles.editHeaderBtn}
+          >
+            <Text style={styles.editHeaderBtnText}>Edit Profile</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -1223,242 +1248,6 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
             <Text style={styles.profilePhone}>{user?.phone || ""}</Text>
           </View>
         </LinearGradient>
-
-        {/* 18+ Legal Age & Identity Verification (KYC) Card */}
-        <View style={styles.kycCardContainer}>
-          {/* Card Header */}
-          <View style={styles.kycHeaderRow}>
-            <View style={styles.kycHeaderLeft}>
-              <View
-                style={[
-                  styles.kycHeaderBadge,
-                  isKycVerified
-                    ? styles.kycHeaderBadgeVerified
-                    : isKycPending
-                    ? styles.kycHeaderBadgePending
-                    : isKycRejected
-                    ? styles.kycHeaderBadgeRejected
-                    : styles.kycHeaderBadgeUnverified,
-                ]}
-              >
-                <Text style={styles.kycHeaderBadgeIcon}>
-                  {isKycVerified ? "👑" : isKycPending ? "⏱" : isKycRejected ? "✕" : "⚖️"}
-                </Text>
-              </View>
-              <View style={{ flex: 1, marginLeft: 10 }}>
-                <Text style={styles.kycHeaderTitle}>
-                  {minKycAge}+ Legal Age & Identity Verification
-                </Text>
-                <Text style={styles.kycHeaderSubtitle}>
-                  Dual Compliance for Store Wine/Spirits and Live Auctions
-                </Text>
-              </View>
-            </View>
-
-            {/* Status Tag Pill */}
-            <View
-              style={[
-                styles.kycStatusTag,
-                isKycVerified
-                  ? styles.kycStatusTagVerified
-                  : isKycPending
-                  ? styles.kycStatusTagPending
-                  : isKycRejected
-                  ? styles.kycStatusTagRejected
-                  : styles.kycStatusTagUnverified,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.kycStatusTagText,
-                  isKycVerified
-                    ? styles.kycStatusTagTextVerified
-                    : isKycPending
-                    ? styles.kycStatusTagTextPending
-                    : isKycRejected
-                    ? styles.kycStatusTagTextRejected
-                    : styles.kycStatusTagTextUnverified,
-                ]}
-              >
-                {isKycVerified
-                  ? `✓ ${minKycAge}+ Verified`
-                  : isKycPending
-                  ? "⏱ Under Review"
-                  : isKycRejected
-                  ? "✕ Rejected"
-                  : `Not Verified (${minKycAge}+)`}
-              </Text>
-            </View>
-          </View>
-
-          {/* STATE 1: UNREGISTERED / NOT VERIFIED */}
-          {isKycUnregistered && (
-            <View style={styles.kycUnregisteredWrap}>
-              <Text style={styles.kycExplainerText}>
-                Under South African liquor legislation (National Liquor Act) and auction compliance regulations, complete your legal adult age ({minKycAge}+) verification once. This unlocks pre-cleared store product purchases across all fine wines & spirits, and qualifies your account for live auctions.
-              </Text>
-
-              <View style={styles.kycBenefitsGrid}>
-                {/* Store Purchases Benefit */}
-                <View style={styles.kycBenefitCard}>
-                  <View style={styles.kycBenefitTitleRow}>
-                    <Text style={styles.kycBenefitIcon}>🍷</Text>
-                    <Text style={styles.kycBenefitTitle}>Store Product Purchases</Text>
-                  </View>
-                  <Text style={styles.kycBenefitDesc}>
-                    Clears 18+ liquor compliance. Enjoy 1-click checkout with no document requests.
-                  </Text>
-                  <Text style={styles.kycBenefitBadge}>✓ Required for Fine Spirits</Text>
-                </View>
-
-                {/* Auction Bidding Benefit */}
-                <View style={styles.kycBenefitCard}>
-                  <View style={styles.kycBenefitTitleRow}>
-                    <Text style={styles.kycBenefitIcon}>🏛️</Text>
-                    <Text style={styles.kycBenefitTitle}>Live Auction Bidding</Text>
-                  </View>
-                  <Text style={styles.kycBenefitDesc}>
-                    Assigns your official Public Bidder Number with verified standard limit.
-                  </Text>
-                  <Text style={[styles.kycBenefitBadge, { color: "#c99742" }]}>✓ Bidding Included</Text>
-                </View>
-              </View>
-
-              <TouchableOpacity
-                style={styles.kycVerifyBtn}
-                onPress={() => setIsVerificationModalVisible(true)}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.kycVerifyBtnText}>
-                  Verify {minKycAge}+ Identity (Store & Auctions) →
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* STATE 2: PENDING COMPLIANCE REVIEW */}
-          {isKycPending && (
-            <View style={styles.kycPendingBox}>
-              <View style={styles.kycPendingHeader}>
-                <Text style={styles.kycPendingIcon}>⏱</Text>
-                <Text style={styles.kycPendingTitle}>18+ Identity Verification Under Review</Text>
-              </View>
-              <Text style={styles.kycPendingDesc}>
-                Your official identification document has been securely submitted and is undergoing review by compliance officers. Once approved, your account will be permanently pre-cleared for instant store wine & spirits checkout and live auction bidding.
-              </Text>
-              {(bidderProfile?.bidderNumber || user?.bidderNumber) && (
-                <View style={styles.kycBidderNumberRow}>
-                  <Text style={styles.kycBidderNumberLabel}>Assigned Bidder Number:</Text>
-                  <Text style={styles.kycBidderNumberValue}>
-                    {bidderProfile?.bidderNumber || user?.bidderNumber}
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* STATE 3: REJECTED */}
-          {isKycRejected && (
-            <View style={styles.kycRejectedBox}>
-              <View style={styles.kycRejectedHeader}>
-                <Text style={styles.kycRejectedIcon}>✕</Text>
-                <Text style={styles.kycRejectedTitle}>18+ Verification Application Rejected</Text>
-              </View>
-              <Text style={styles.kycRejectedDesc}>
-                {bidderProfile?.bidderRejectionReason ||
-                  user?.bidderRejectionReason ||
-                  "Your submitted identification documents could not be validated."}
-              </Text>
-              <TouchableOpacity
-                style={styles.kycResubmitBtn}
-                onPress={() => setIsVerificationModalVisible(true)}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.kycResubmitBtnText}>
-                  Re-submit 18+ Verification Documents →
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* STATE 4: APPROVED / VERIFIED */}
-          {isKycVerified && (
-            <View style={styles.kycVerifiedGrid}>
-              <View style={styles.kycMetricCard}>
-                <Text style={styles.kycMetricLabel}>STORE ORDERS</Text>
-                <Text style={styles.kycMetricValueSuccess}>✓ 18+ Pre-Cleared</Text>
-                <Text style={styles.kycMetricSub}>Instant Spirit Checkout</Text>
-              </View>
-              <View style={styles.kycMetricCard}>
-                <Text style={styles.kycMetricLabel}>BIDDER NUMBER</Text>
-                <Text style={styles.kycMetricValueGold}>
-                  {bidderProfile?.bidderNumber || user?.bidderNumber || "GS-B1088"}
-                </Text>
-                <Text style={styles.kycMetricSub}>Live Auctions Active</Text>
-              </View>
-              <View style={styles.kycMetricCard}>
-                <Text style={styles.kycMetricLabel}>AUCTION TIER</Text>
-                <Text style={styles.kycMetricValue}>
-                  {bidderProfile?.bidderLevel
-                    ? bidderProfile.bidderLevel.replace(/_/g, " ").toUpperCase()
-                    : "STANDARD VERIFIED"}
-                </Text>
-                <Text style={styles.kycMetricSub}>
-                  Limit: R{Number(bidderProfile?.biddingLimit || 50000).toLocaleString()}
-                </Text>
-              </View>
-              <View style={styles.kycMetricCard}>
-                <Text style={styles.kycMetricLabel}>DEPOSIT STATUS</Text>
-                <Text
-                  style={[
-                    styles.kycMetricValue,
-                    bidderProfile?.bidderDepositStatus === "paid" && { color: "#34d399" },
-                  ]}
-                >
-                  {bidderProfile?.bidderDepositStatus === "paid"
-                    ? `R${Number(bidderProfile.bidderDepositAmount || 5000).toLocaleString()} (Paid)`
-                    : bidderProfile?.bidderDepositStatus === "pending"
-                    ? "Under Review"
-                    : "None Required"}
-                </Text>
-                <Text style={styles.kycMetricSub}>100% Escrow Protected</Text>
-              </View>
-            </View>
-          )}
-
-          {/* VIP Escrow Upgrade CTA */}
-          <TouchableOpacity
-            style={styles.kycVipUpgradeBtn}
-            onPress={() => navigation.navigate("AuctionVipCheckout", { user })}
-            activeOpacity={0.88}
-          >
-            <LinearGradient
-              colors={["#2b1f09", "#1a1306", "#0f0c05"]}
-              style={styles.kycVipUpgradeGrad}
-            >
-              <View style={styles.kycVipUpgradeLeft}>
-                <Text style={styles.kycVipUpgradeCrown}>👑</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.kycVipUpgradeTitle}>
-                    {bidderProfile?.bidderDepositStatus === "paid"
-                      ? "VIP Escrow Guarantee Active (R5,000)"
-                      : "VIP Bidding Privilege • R5,000 Refundable Escrow"}
-                  </Text>
-                  <Text style={styles.kycVipUpgradeSub}>
-                    {bidderProfile?.bidderDepositStatus === "paid"
-                      ? "Escrow deposit held securely. R250,000+ certified bidding limit unlocked."
-                      : "Deposit R5,000 into escrow to unlock unlimited auction lots. 100% refundable."}
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.kycVipUpgradePill}>
-                <Text style={styles.kycVipUpgradePillText}>
-                  {bidderProfile?.bidderDepositStatus === "paid" ? "VIEW ESCROW" : "DEPOSIT →"}
-                </Text>
-              </View>
-            </LinearGradient>
-          </TouchableOpacity>
-        </View>
 
         {/* Super Coins Loyalty Quick Card */}
         <TouchableOpacity
@@ -1573,6 +1362,28 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
           <TouchableOpacity
             style={styles.menuRow}
             activeOpacity={0.7}
+            onPress={() => navigation.navigate("NotificationsScreen")}
+          >
+            <View style={[styles.menuIconCircle, { backgroundColor: "rgba(212, 175, 55, 0.15)" }]}>
+              <Text style={styles.menuEmoji}>🔔</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={styles.menuTitle}>Notifications & Alerts</Text>
+                {unreadNotificationsCount > 0 && (
+                  <View style={{ backgroundColor: "#c9a35b", paddingHorizontal: 6, paddingVertical: 1, borderRadius: 10 }}>
+                    <Text style={{ color: "#000", fontSize: 9.5, fontWeight: "800" }}>{unreadNotificationsCount} NEW</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={styles.menuSubtitle}>Live order updates, auction bids & tasting alerts</Text>
+            </View>
+            <Text style={styles.menuChevron}>›</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.menuRow}
+            activeOpacity={0.7}
             onPress={() => navigation.navigate("MyOrders")}
           >
             <View style={styles.menuIconCircle}>
@@ -1643,6 +1454,243 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
               <Text style={styles.menuSubtitle}>Upcoming auction closes & tasting schedules</Text>
             </View>
             <Text style={styles.menuChevron}>›</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Section: Live Auctions & 18+ Bidder Compliance */}
+        <Text style={styles.sectionHeading}>LIVE AUCTIONS & 18+ COMPLIANCE</Text>
+        <View style={styles.kycCardContainer}>
+          {/* Card Header */}
+          <View style={styles.kycHeaderRow}>
+            <View style={styles.kycHeaderLeft}>
+              <View
+                style={[
+                  styles.kycHeaderBadge,
+                  isKycVerified
+                    ? styles.kycHeaderBadgeVerified
+                    : isKycPending
+                    ? styles.kycHeaderBadgePending
+                    : isKycRejected
+                    ? styles.kycHeaderBadgeRejected
+                    : styles.kycHeaderBadgeUnverified,
+                ]}
+              >
+                <Text style={styles.kycHeaderBadgeIcon}>
+                  {isKycVerified ? "👑" : isKycPending ? "⏱" : isKycRejected ? "✕" : "🏛️"}
+                </Text>
+              </View>
+              <View style={{ flex: 1, marginLeft: 10 }}>
+                <Text style={styles.kycHeaderTitle}>
+                  {minKycAge}+ Live Auction Bidder Verification
+                </Text>
+                <Text style={styles.kycHeaderSubtitle}>
+                  Required exclusively for live auction bidding & rare lot acquisitions
+                </Text>
+              </View>
+            </View>
+
+            {/* Status Tag Pill */}
+            <View
+              style={[
+                styles.kycStatusTag,
+                isKycVerified
+                  ? styles.kycStatusTagVerified
+                  : isKycPending
+                  ? styles.kycStatusTagPending
+                  : isKycRejected
+                  ? styles.kycStatusTagRejected
+                  : styles.kycStatusTagUnverified,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.kycStatusTagText,
+                  isKycVerified
+                    ? styles.kycStatusTagTextVerified
+                    : isKycPending
+                    ? styles.kycStatusTagTextPending
+                    : isKycRejected
+                    ? styles.kycStatusTagTextRejected
+                    : styles.kycStatusTagTextUnverified,
+                ]}
+              >
+                {isKycVerified
+                  ? `✓ ${minKycAge}+ Bidder Approved`
+                  : isKycPending
+                  ? "⏱ Under Review"
+                  : isKycRejected
+                  ? "✕ Rejected"
+                  : `Auction Unverified (${minKycAge}+)`}
+              </Text>
+            </View>
+          </View>
+
+          {/* STATE 1: UNREGISTERED / NOT VERIFIED */}
+          {isKycUnregistered && (
+            <View style={styles.kycUnregisteredWrap}>
+              <Text style={styles.kycExplainerText}>
+                Under auction compliance regulations, complete your legal adult age ({minKycAge}+) verification once to participate in live auctions, place bids on rare allocated lots, and receive your official Public Bidder Number.
+              </Text>
+
+              <View style={styles.kycBenefitsGrid}>
+                {/* Live Auction Bidding Benefit */}
+                <View style={styles.kycBenefitCard}>
+                  <View style={styles.kycBenefitTitleRow}>
+                    <Text style={styles.kycBenefitIcon}>🏛️</Text>
+                    <Text style={styles.kycBenefitTitle}>Live Floor Bidding</Text>
+                  </View>
+                  <Text style={styles.kycBenefitDesc}>
+                    Assigns your official Public Bidder Number with certified standard bidding limit.
+                  </Text>
+                  <Text style={[styles.kycBenefitBadge, { color: "#c99742" }]}>✓ Required for Auctions</Text>
+                </View>
+
+                {/* Provenance & Escrow Guarantee */}
+                <View style={styles.kycBenefitCard}>
+                  <View style={styles.kycBenefitTitleRow}>
+                    <Text style={styles.kycBenefitIcon}>🛡️</Text>
+                    <Text style={styles.kycBenefitTitle}>Escrow Protection</Text>
+                  </View>
+                  <Text style={styles.kycBenefitDesc}>
+                    Authenticated rare cellar lots with guaranteed condition reports & secure escrow.
+                  </Text>
+                  <Text style={styles.kycBenefitBadge}>✓ Certified Bidding</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={styles.kycVerifyBtn}
+                onPress={() => setIsVerificationModalVisible(true)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.kycVerifyBtnText}>
+                  Verify {minKycAge}+ for Live Auctions →
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* STATE 2: PENDING COMPLIANCE REVIEW */}
+          {isKycPending && (
+            <View style={styles.kycPendingBox}>
+              <View style={styles.kycPendingHeader}>
+                <Text style={styles.kycPendingIcon}>⏱</Text>
+                <Text style={styles.kycPendingTitle}>18+ Auction Verification Under Review</Text>
+              </View>
+              <Text style={styles.kycPendingDesc}>
+                Your official identification document has been securely submitted and is undergoing review by auction compliance officers. Once approved, your account will be activated for live auction bidding and your Public Bidder Number will be certified.
+              </Text>
+              {(bidderProfile?.bidderNumber || user?.bidderNumber) && (
+                <View style={styles.kycBidderNumberRow}>
+                  <Text style={styles.kycBidderNumberLabel}>Assigned Bidder Number:</Text>
+                  <Text style={styles.kycBidderNumberValue}>
+                    {bidderProfile?.bidderNumber || user?.bidderNumber}
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* STATE 3: REJECTED */}
+          {isKycRejected && (
+            <View style={styles.kycRejectedBox}>
+              <View style={styles.kycRejectedHeader}>
+                <Text style={styles.kycRejectedIcon}>✕</Text>
+                <Text style={styles.kycRejectedTitle}>18+ Auction Verification Rejected</Text>
+              </View>
+              <Text style={styles.kycRejectedDesc}>
+                {bidderProfile?.bidderRejectionReason ||
+                  user?.bidderRejectionReason ||
+                  "Your submitted identification documents could not be validated."}
+              </Text>
+              <TouchableOpacity
+                style={styles.kycResubmitBtn}
+                onPress={() => setIsVerificationModalVisible(true)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.kycResubmitBtnText}>
+                  Re-submit 18+ Verification Documents →
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* STATE 4: APPROVED / VERIFIED */}
+          {isKycVerified && (
+            <View style={styles.kycVerifiedGrid}>
+              <View style={styles.kycMetricCard}>
+                <Text style={styles.kycMetricLabel}>BIDDER STATUS</Text>
+                <Text style={styles.kycMetricValueSuccess}>✓ 18+ Qualified</Text>
+                <Text style={styles.kycMetricSub}>Live Bidding Active</Text>
+              </View>
+              <View style={styles.kycMetricCard}>
+                <Text style={styles.kycMetricLabel}>BIDDER NUMBER</Text>
+                <Text style={styles.kycMetricValueGold}>
+                  {bidderProfile?.bidderNumber || user?.bidderNumber || "GS-B1088"}
+                </Text>
+                <Text style={styles.kycMetricSub}>Live Floor & Room</Text>
+              </View>
+              <View style={styles.kycMetricCard}>
+                <Text style={styles.kycMetricLabel}>AUCTION TIER</Text>
+                <Text style={styles.kycMetricValue}>
+                  {bidderProfile?.bidderLevel
+                    ? bidderProfile.bidderLevel.replace(/_/g, " ").toUpperCase()
+                    : "STANDARD VERIFIED"}
+                </Text>
+                <Text style={styles.kycMetricSub}>
+                  Limit: R{Number(bidderProfile?.biddingLimit || 50000).toLocaleString()}
+                </Text>
+              </View>
+              <View style={styles.kycMetricCard}>
+                <Text style={styles.kycMetricLabel}>DEPOSIT STATUS</Text>
+                <Text
+                  style={[
+                    styles.kycMetricValue,
+                    bidderProfile?.bidderDepositStatus === "paid" && { color: "#34d399" },
+                  ]}
+                >
+                  {bidderProfile?.bidderDepositStatus === "paid"
+                    ? `R${Number(bidderProfile.bidderDepositAmount || 5000).toLocaleString()} (Paid)`
+                    : bidderProfile?.bidderDepositStatus === "pending"
+                    ? "Under Review"
+                    : "None Required"}
+                </Text>
+                <Text style={styles.kycMetricSub}>100% Escrow Protected</Text>
+              </View>
+            </View>
+          )}
+
+          {/* VIP Escrow Upgrade CTA */}
+          <TouchableOpacity
+            style={styles.kycVipUpgradeBtn}
+            onPress={() => navigation.navigate("AuctionVipCheckout", { user })}
+            activeOpacity={0.88}
+          >
+            <LinearGradient
+              colors={["#2b1f09", "#1a1306", "#0f0c05"]}
+              style={styles.kycVipUpgradeGrad}
+            >
+              <View style={styles.kycVipUpgradeLeft}>
+                <Text style={styles.kycVipUpgradeCrown}>👑</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.kycVipUpgradeTitle}>
+                    {bidderProfile?.bidderDepositStatus === "paid"
+                      ? "VIP Escrow Guarantee Active (R5,000)"
+                      : "VIP Bidding Privilege • R5,000 Refundable Escrow"}
+                  </Text>
+                  <Text style={styles.kycVipUpgradeSub}>
+                    {bidderProfile?.bidderDepositStatus === "paid"
+                      ? "Escrow deposit held securely. R250,000+ certified bidding limit unlocked."
+                      : "Deposit R5,000 into escrow to unlock unlimited auction lots. 100% refundable."}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.kycVipUpgradePill}>
+                <Text style={styles.kycVipUpgradePillText}>
+                  {bidderProfile?.bidderDepositStatus === "paid" ? "VIEW ESCROW" : "DEPOSIT →"}
+                </Text>
+              </View>
+            </LinearGradient>
           </TouchableOpacity>
         </View>
 
@@ -1831,13 +1879,16 @@ const CustomerDashboard = ({ navigation, onBack, isActive }) => {
 
               <View style={styles.labelWithNoteRow}>
                 <Text style={styles.inputLabel}>Email Address</Text>
-                <Text style={styles.inputNoteReadOnly}>Cannot be changed</Text>
+                <Text style={styles.inputNoteHighlight}>Order receipts & updates</Text>
               </View>
               <TextInput
-                style={[styles.input, styles.inputDisabled]}
+                style={styles.input}
                 value={editEmail}
-                editable={false}
-                placeholder="Email"
+                onChangeText={setEditEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="your.email@example.com"
                 placeholderTextColor="#666"
               />
 

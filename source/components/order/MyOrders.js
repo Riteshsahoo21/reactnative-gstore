@@ -24,9 +24,11 @@ const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
 
 const API_CANDIDATES = [
   API_BASE,
-  "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
-  "http://10.0.2.2:5000/api",
+  ...(__DEV__ ? [
+    "http://localhost:5000/api",
+    "http://192.168.1.9:5000/api",
+    "http://10.0.2.2:5000/api",
+  ] : []),
 ];
 
 const getImageUrl = (imagePath) => {
@@ -39,7 +41,10 @@ const getImageUrl = (imagePath) => {
 const OrderItem = ({ item, navigation, onOrderUpdated }) => {
   const isPaid = item.isPaid || item.paymentStatus === "Paid";
   const isPickup = item.deliveryPreference === 'pickup' || Boolean(item.selectedPostnetStore);
-  const latestMsg = item.latestAdminMessage || (item.adminMessages && item.adminMessages.length > 0 ? item.adminMessages[item.adminMessages.length - 1] : null);
+  const latestMsg = [
+    item.latestAdminMessage,
+    ...(Array.isArray(item.adminMessages) ? [...item.adminMessages].reverse() : []),
+  ].find((notice) => typeof notice?.message === "string" && notice.message.trim().length > 0) || null;
   const items = (item.items && item.items.length > 0)
     ? item.items
     : (item.orderItems && item.orderItems.length > 0)
@@ -87,8 +92,8 @@ const OrderItem = ({ item, navigation, onOrderUpdated }) => {
         </Text>
       </View>
 
-      {/* Concierge / Out of Stock Alert Banner */}
-      {latestMsg && (
+      {/* Concierge / Out of Stock Alert Banner - strictly shown only when an admin has pushed a message */}
+      {latestMsg && typeof latestMsg.message === "string" && latestMsg.message.trim().length > 0 && (
         <View style={{ marginTop: 8, padding: 9, borderRadius: 8, backgroundColor: latestMsg.type === 'emergency' || latestMsg.type === 'stock_issue' ? "rgba(225, 29, 72, 0.15)" : "rgba(217, 119, 6, 0.15)", borderWidth: 1, borderColor: latestMsg.type === 'emergency' || latestMsg.type === 'stock_issue' ? "rgba(225, 29, 72, 0.4)" : "rgba(217, 119, 6, 0.4)" }}>
           <Text style={{ color: latestMsg.type === 'emergency' || latestMsg.type === 'stock_issue' ? "#fda4af" : "#fcd34d", fontSize: 10, fontWeight: "700", textTransform: "uppercase", marginBottom: 2 }}>
             {latestMsg.type === 'stock_issue' ? "⚠️ Out of Stock Notice" : latestMsg.type === 'emergency' ? "🚨 Urgent Notice" : "💬 Concierge Notice"}

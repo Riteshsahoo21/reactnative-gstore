@@ -58,13 +58,15 @@ const WhiskyBrands = ({ navigation }) => {
       setLoading(true);
       const candidates = [
         `${API_BASE}/products`,
-        'http://192.168.1.9:5000/api/products',
-        'http://localhost:5000/api/products',
+        ...(__DEV__ ? [
+          'http://192.168.1.9:5000/api/products',
+          'http://localhost:5000/api/products',
+        ] : []),
       ];
       let data = null;
       for (const url of candidates) {
         try {
-          const res = await axios.get(url, { timeout: 3500 });
+          const res = await axios.get(url, { timeout: 12000 });
           if (res?.data && Array.isArray(res.data)) {
             data = res.data;
             break;

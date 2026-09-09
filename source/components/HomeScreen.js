@@ -23,6 +23,7 @@ import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import VideoSlider from "./VideoSlider";
 import SearchBar from "./SearchBar";
+import SearchAutoRecommend from "./SearchAutoRecommend";
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import { API_BASE, getActiveServerHost, getCandidateBases, getActiveApiBase, setActiveApiBase } from "../resources/data/Constants";
@@ -375,12 +376,14 @@ const handleAddToCartInstant = async (product) => {
     const cleanPath = path.startsWith('/') ? path : `/${path}`;
     const baseCandidates = typeof getCandidateBases === 'function' ? getCandidateBases() : [];
     const urls = [
-      ...baseCandidates.map((b) => `${String(b).replace(/\/+$/, '')}${cleanPath}`),
-      `http://192.168.1.102:5000/api${cleanPath}`,
-      `http://127.0.0.1:5000/api${cleanPath}`,
-      `http://localhost:5000/api${cleanPath}`,
-      `http://10.0.2.2:5000/api${cleanPath}`,
       `${API_BASE}${cleanPath}`,
+      ...baseCandidates.map((b) => `${String(b).replace(/\/+$/, '')}${cleanPath}`),
+      ...(__DEV__ ? [
+        `http://192.168.1.102:5000/api${cleanPath}`,
+        `http://127.0.0.1:5000/api${cleanPath}`,
+        `http://localhost:5000/api${cleanPath}`,
+        `http://10.0.2.2:5000/api${cleanPath}`,
+      ] : []),
     ];
     return [...new Set(urls.filter(Boolean))];
   };
@@ -394,7 +397,7 @@ const handleAddToCartInstant = async (product) => {
 
         for (const url of catCandidates) {
           try {
-            catRes = await axios.get(url, { timeout: 3500 });
+            catRes = await axios.get(url, { timeout: 12000 });
             if (catRes?.data) {
               const root = url.replace(/\/categories.*$/, '');
               if (typeof setActiveApiBase === 'function') setActiveApiBase(root);
@@ -426,7 +429,7 @@ const handleAddToCartInstant = async (product) => {
 
         for (const url of prodCandidates) {
           try {
-            prodRes = await axios.get(url, { timeout: 3500 });
+            prodRes = await axios.get(url, { timeout: 12000 });
             if (prodRes?.data && Array.isArray(prodRes.data)) {
               const root = url.replace(/\/products.*$/, '');
               if (typeof setActiveApiBase === 'function') setActiveApiBase(root);
@@ -545,7 +548,7 @@ const handleAddToCartInstant = async (product) => {
         const evtCandidates = getCandidateUrls('/events');
         for (const url of evtCandidates) {
           try {
-            const evtRes = await axios.get(url, { timeout: 4500, _skipRewrite: true });
+            const evtRes = await axios.get(url, { timeout: 12000, _skipRewrite: true });
             if (evtRes?.data && Array.isArray(evtRes.data)) {
               const now = new Date();
               const sortedEvents = [...evtRes.data].sort((a, b) => {
@@ -574,7 +577,7 @@ const handleAddToCartInstant = async (product) => {
         for (const url of aucCandidates) {
           try {
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 4500);
+            const timer = setTimeout(() => controller.abort(), 12000);
             const res = await fetch(url, { signal: controller.signal, _skipRewrite: true });
             clearTimeout(timer);
             if (res && res.ok) {
@@ -608,7 +611,7 @@ const handleAddToCartInstant = async (product) => {
           for (const url of dashCandidates) {
             try {
               const controller = new AbortController();
-              const timer = setTimeout(() => controller.abort(), 3500);
+              const timer = setTimeout(() => controller.abort(), 10000);
               const res = await fetch(url, {
                 headers: { Authorization: `Bearer ${token}` },
                 signal: controller.signal,
@@ -950,36 +953,25 @@ const handleAddToCartInstant = async (product) => {
           </View>
         </TouchableOpacity>
 
-        <View style={{ zIndex: 100 }}>
-          <SearchBar query={searchQuery} setQuery={setSearchQuery} placeholder="Search products..." />
-          {searchResults.length > 0 && (
-            <View style={styles.searchResultsContainer}>
-              {searchResults.map((item, index) => (
-                <TouchableOpacity
-                  key={item.id || item.productid || index}
-                  style={styles.searchResultItem}
-                  onPress={() => {
-                    setSearchQuery("");
-                    navigation.push("ProductDetails", {
-                      product: item,
-                      category: categories.find((cat) => cat?.id === item?.category_id) || null,
-                      related_products: allProducts
-                        .filter((p) => p && (p.id || p.productid) !== (item?.id || item?.productid))
-                        .slice(0, 8),
-                    });
-                  }}
-                >
-                  <Image source={{ uri: getImageUrl(item.image) }} style={styles.searchResultImg} />
-                  <View style={styles.searchResultTextContainer}>
-                    <Text style={styles.searchResultName} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.searchResultPrice} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
-                      R{formatPrice(item.offer_active ? item.offer_price : item.price)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
+        <View style={{ zIndex: 10000, elevation: 12 }}>
+          <SearchAutoRecommend
+            query={searchQuery}
+            setQuery={setSearchQuery}
+            products={allProducts}
+            categories={categories}
+            navigation={navigation}
+            placeholder="Search rare bottles, fine wines, spirits..."
+            showShopViewAll={true}
+            shopViewAllText="Explore all in Cellar →"
+            onSearchSubmit={(q) => {
+              if (q && q.trim()) {
+                navigation.navigate("ViewAll", {
+                  category_title: q.trim(),
+                  search_query: q.trim(),
+                });
+              }
+            }}
+          />
         </View>
 
         {/* 🏆 Luxury Won Auction Notification Banner (matches web AuctionWinnerHomeAlert.jsx) */}

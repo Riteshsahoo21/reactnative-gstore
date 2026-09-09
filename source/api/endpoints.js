@@ -222,6 +222,10 @@ export const ENDPOINTS = {
   },
   NOTIFICATIONS: {
     LIST: '/notifications',
+    MARK_READ: (id) => `/notifications/${id}/read`,
+    MARK_ALL_READ: '/notifications/read-all',
+    DELETE: (id) => `/notifications/${id}`,
+    CLEAR_ALL: '/notifications/clear-all',
   },
   ENQUIRIES: {
     TRADE: '/trade-enquiries',

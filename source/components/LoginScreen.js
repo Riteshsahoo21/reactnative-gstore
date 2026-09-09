@@ -14,13 +14,14 @@ import {
   Alert,
   ActivityIndicator,
   DeviceEventEmitter,
+  Linking,
+  StatusBar,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
-import AppHeader from '../widgets/AppHeader';
+import CountryCodePickerModal, { CountryFlagImage } from './CountryCodePickerModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import { API_BASE, HEADER_HEIGHT_THRESHOLD, getActiveApiBase, setActiveApiBase } from '../resources/data/Constants';
-import tmh_styles from '../styles/tmh_styles';
+import { API_BASE, getActiveApiBase, setActiveApiBase } from '../resources/data/Constants';
 
 // Graceful Google Sign-In import
 let GoogleSignin = null;
@@ -33,34 +34,61 @@ try {
   // Graceful fallback if native module not linked
 }
 
+// Graceful Firebase Phone Auth import for Real Cellular SMS
+let rnFirebaseAuth = null;
+try {
+  rnFirebaseAuth = require('@react-native-firebase/auth').default;
+} catch (e) {
+  // Graceful fallback if native module not linked
+}
+
 const GOOGLE_WEB_CLIENT_ID = '153305069501-nrfrhnj4l2427g5dbnn1ubpajocf578a.apps.googleusercontent.com';
 
 const LoginScreen = ({ navigation, route }) => {
   const { width, height } = Dimensions.get('window');
-  const headerHeight = (HEADER_HEIGHT_THRESHOLD * height) / 100;
 
-  // Active Auth Mode: 'otp' (Mobile OTP - Primary) or 'password' (Email + Password)
-  const [authMode, setAuthMode] = useState('otp');
+  // Primary Screen State:
+  // 'menu'  -> Luxury Black & Gold Choice Screen matching user mockup
+  // 'otp'   -> Mobile Phone Number + SMS OTP Flow
+  // 'email' -> Email Magic Link (Gmail) + Password Flow
+  const [authView, setAuthView] = useState('menu');
+
+  // Email Sub-Mode: 'otp' (Email One-Time Code - default) or 'password' (Email + Password)
+  const [emailTab, setEmailTab] = useState('otp');
 
   // Mobile OTP State
   const [countryCode, setCountryCode] = useState('+27');
+  const [countryPickerVisible, setCountryPickerVisible] = useState(false);
+  const [selectedCountryObj, setSelectedCountryObj] = useState({
+    country: 'ZA',
+    name: 'South Africa',
+    dialCode: '+27',
+    flag: '🇿🇦',
+  });
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [isOtpSent, setIsOtpSent] = useState(false);
+  const [confirmationResult, setConfirmationResult] = useState(null);
   const [resendTimer, setResendTimer] = useState(0);
   const [devOtpHint, setDevOtpHint] = useState('');
-  const [isAgeConfirmed, setIsAgeConfirmed] = useState(true);
 
-  // Email + Password State
+  // Email One-Time Code (OTP) State
   const [email, setEmail] = useState('');
+  const [emailOtpCode, setEmailOtpCode] = useState('');
+  const [isEmailOtpSent, setIsEmailOtpSent] = useState(false);
+  const [emailResendTimer, setEmailResendTimer] = useState(0);
+  const [devEmailOtpHint, setDevEmailOtpHint] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+
+  // Legal / Age Compliance Checkbox (checked by default)
+  const [isAgeConfirmed, setIsAgeConfirmed] = useState(true);
 
   // Loading States
   const [loading, setLoading] = useState(false);
   const [socialLoading, setSocialLoading] = useState(false);
 
-  // Setup Resend Countdown Timer
+  // Setup SMS OTP Resend Countdown Timer
   useEffect(() => {
     let interval = null;
     if (resendTimer > 0) {
@@ -70,6 +98,55 @@ const LoginScreen = ({ navigation, route }) => {
     }
     return () => clearInterval(interval);
   }, [resendTimer]);
+
+  // Setup Email OTP Resend Countdown Timer
+  useEffect(() => {
+    let interval = null;
+    if (emailResendTimer > 0) {
+      interval = setInterval(() => {
+        setEmailResendTimer((prev) => prev - 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [emailResendTimer]);
+
+  // Listen for incoming Magic Link deep links (e.g. grandstore://login?magicToken=...&email=...)
+  useEffect(() => {
+    const handleIncomingUrl = (url) => {
+      if (!url) return;
+      try {
+        console.log('[DeepLink] Processing incoming URL:', url);
+        const queryIndex = url.indexOf('?');
+        if (queryIndex !== -1) {
+          const queryString = url.slice(queryIndex + 1);
+          const params = {};
+          queryString.split('&').forEach((part) => {
+            const [k, v] = part.split('=');
+            if (k && v) params[k] = decodeURIComponent(v);
+          });
+          if (params.magicToken) {
+            console.log('[DeepLink] Magic token discovered:', params.magicToken);
+            handleVerifyMagicLink(params.magicToken, params.email);
+          }
+        }
+      } catch (e) {
+        console.log('[DeepLink] Parse error:', e);
+      }
+    };
+
+    if (route.params?.magicToken) {
+      handleVerifyMagicLink(route.params.magicToken, route.params.email);
+    }
+
+    const linkingSub = Linking.addEventListener('url', ({ url }) => handleIncomingUrl(url));
+    Linking.getInitialURL().then((url) => {
+      if (url) handleIncomingUrl(url);
+    });
+
+    return () => {
+      linkingSub?.remove();
+    };
+  }, [route.params]);
 
   // Configure Google Sign-In if available
   useEffect(() => {
@@ -85,16 +162,18 @@ const LoginScreen = ({ navigation, route }) => {
     }
   }, []);
 
-  // Multi-host candidate runner to support USB ADB reverse (localhost), emulator (10.0.2.2), and LAN
+  // Multi-host candidate runner to support USB ADB reverse, emulator (10.0.2.2), and LAN
   const postAuthEndpoint = async (path, payload) => {
     const currentBase = getActiveApiBase();
     const candidates = [
-      `${currentBase}${path}`,
       `${API_BASE}${path}`,
-      `http://localhost:5000/api${path}`,
-      `http://127.0.0.1:5000/api${path}`,
-      `http://192.168.1.9:5000/api${path}`,
-      `http://10.0.2.2:5000/api${path}`,
+      ...(currentBase ? [`${currentBase}${path}`] : []),
+      ...(__DEV__ ? [
+        `http://localhost:5000/api${path}`,
+        `http://127.0.0.1:5000/api${path}`,
+        `http://192.168.1.9:5000/api${path}`,
+        `http://10.0.2.2:5000/api${path}`,
+      ] : []),
     ];
     const uniqueCandidates = [...new Set(candidates)];
     let lastError = null;
@@ -116,21 +195,24 @@ const LoginScreen = ({ navigation, route }) => {
           return res.data;
         }
       } catch (err) {
-        console.log('[postAuthEndpoint] Error for', url, ':', err.message, err.code, err.response?.status, err.response?.data);
+        console.log('[postAuthEndpoint] Error for', url, ':', err.message, err.code, err.response?.status);
         lastError = err;
         if (err.response?.data?.message) {
           throw new Error(err.response.data.message);
         }
       }
     }
-    throw new Error(lastError?.response?.data?.message || lastError?.message || 'Unable to connect to authentication server. Please check backend connection.');
+    throw new Error(
+      lastError?.response?.data?.message ||
+        lastError?.message ||
+        'Unable to connect to authentication server. Please check backend connection.'
+    );
   };
 
   // Persist session to AsyncStorage
   const handleAuthSuccess = async (data, welcomeMessage) => {
     try {
       if (data.token) {
-        // Clear previous user-specific cached data to prevent cross-account contamination
         await AsyncStorage.multiRemove([
           'customerBankDetails',
           'userOrders',
@@ -161,8 +243,8 @@ const LoginScreen = ({ navigation, route }) => {
         );
         const isActualVerified = Boolean(
           data.isAgeVerified === true ||
-          data.bidderApprovalStatus === 'approved' ||
-          (data.bidderLevel && ['level_2_verified', 'level_3_enhanced', 'level_4_vip'].includes(data.bidderLevel))
+            data.bidderApprovalStatus === 'approved' ||
+            (data.bidderLevel && ['level_2_verified', 'level_3_enhanced', 'level_4_vip'].includes(data.bidderLevel))
         );
         if (isActualVerified) {
           await AsyncStorage.setItem('isAgeVerified', 'true');
@@ -196,19 +278,34 @@ const LoginScreen = ({ navigation, route }) => {
   // 1. Mobile OTP: Send Verification Code
   const handleSendOtp = async () => {
     const rawNumber = phoneNumber.trim().replace(/[^\d]/g, '');
-    if (!rawNumber || rawNumber.length < 8) {
-      Alert.alert('Invalid Number', 'Please enter a valid South African mobile number (e.g. 82 123 4567).');
+    if (!rawNumber || rawNumber.length < 6) {
+      Alert.alert('Invalid Number', 'Please enter a valid mobile number for SMS verification.');
       return;
     }
 
     if (!isAgeConfirmed) {
-      Alert.alert('Age Verification', 'You must be 18 years or older to access The Grand Store.');
+      Alert.alert('Age Verification', 'You must confirm you are 18 years or older to proceed.');
       return;
     }
 
     setLoading(true);
     try {
-      const fullPhone = `${countryCode}${rawNumber.startsWith('0') ? rawNumber.slice(1) : rawNumber}`;
+      const cleanNum = rawNumber.startsWith('0') ? rawNumber.slice(1) : rawNumber;
+      const fullPhone = `${countryCode}${cleanNum}`;
+
+      // 1. Attempt Native Firebase Phone SMS delivery
+      let fbConfirmation = null;
+      if (rnFirebaseAuth) {
+        try {
+          fbConfirmation = await rnFirebaseAuth().signInWithPhoneNumber(fullPhone);
+          setConfirmationResult(fbConfirmation);
+          console.log('[Firebase Mobile SMS] Dispatched code to:', fullPhone);
+        } catch (fbErr) {
+          console.warn('[Firebase Mobile SMS] Client warning:', fbErr.message);
+        }
+      }
+
+      // 2. Dispatch via backend OTP / SMS Service
       const response = await postAuthEndpoint('/auth/send-otp', { phone: fullPhone });
 
       setIsOtpSent(true);
@@ -216,7 +313,7 @@ const LoginScreen = ({ navigation, route }) => {
       if (response.devOtp) {
         setDevOtpHint(response.devOtp);
       }
-      Alert.alert('Code Dispatched', `A 6-digit verification code has been sent to ${fullPhone}.`);
+      Alert.alert('Code Dispatched', `A 6-digit verification code has been dispatched to ${fullPhone}.`);
     } catch (err) {
       Alert.alert('OTP Request Failed', err.message || 'Could not send verification code. Please try again.');
     } finally {
@@ -235,11 +332,23 @@ const LoginScreen = ({ navigation, route }) => {
     setLoading(true);
     try {
       const rawNumber = phoneNumber.trim().replace(/[^\d]/g, '');
-      const fullPhone = `${countryCode}${rawNumber.startsWith('0') ? rawNumber.slice(1) : rawNumber}`;
+      const cleanNum = rawNumber.startsWith('0') ? rawNumber.slice(1) : rawNumber;
+      const fullPhone = `${countryCode}${cleanNum}`;
+
+      let fbIdToken = null;
+      if (confirmationResult) {
+        try {
+          const userCredential = await confirmationResult.confirm(cleanOtp);
+          fbIdToken = await userCredential.user.getIdToken();
+        } catch (confErr) {
+          console.warn('[Firebase Mobile Confirm] Verification note:', confErr.message);
+        }
+      }
 
       const data = await postAuthEndpoint('/auth/verify-otp', {
         phone: fullPhone,
         otp: cleanOtp,
+        firebaseIdToken: fbIdToken,
       });
 
       await handleAuthSuccess(data, 'Your mobile account has been verified.');
@@ -250,13 +359,78 @@ const LoginScreen = ({ navigation, route }) => {
     }
   };
 
-  // 3. Email & Password Sign In
+  // 3. Email One-Time Code: Send 6-Digit Verification Code to Email
+  const handleSendEmailOtp = async () => {
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail || !trimmedEmail.includes('@')) {
+      Alert.alert('Invalid Email', 'Please enter a valid email address to receive your verification code.');
+      return;
+    }
+
+    if (!isAgeConfirmed) {
+      Alert.alert('Age Verification', 'You must confirm you are 18 years or older to proceed.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await postAuthEndpoint('/auth/send-email-otp', {
+        email: trimmedEmail,
+      });
+
+      setIsEmailOtpSent(true);
+      setEmailResendTimer(60);
+      if (response.devOtp) {
+        setDevEmailOtpHint(response.devOtp);
+      }
+
+      Alert.alert(
+        'Code Dispatched ✉️',
+        `A 6-digit one-time verification code has been dispatched to ${trimmedEmail}.\n\nEnter the code below to sign in.`
+      );
+    } catch (err) {
+      Alert.alert('Code Request Failed', err.message || 'Could not send verification code. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 4. Email One-Time Code: Verify 6-Digit OTP & Sign In
+  const handleVerifyEmailOtp = async () => {
+    const cleanOtp = emailOtpCode.trim();
+    if (!cleanOtp || cleanOtp.length < 6) {
+      Alert.alert('Incomplete Code', 'Please enter the 6-digit verification code sent to your email.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const trimmedEmail = email.trim().toLowerCase();
+      const data = await postAuthEndpoint('/auth/verify-email-otp', {
+        email: trimmedEmail,
+        otp: cleanOtp,
+      });
+
+      await handleAuthSuccess(data, 'Your email has been verified.');
+    } catch (err) {
+      Alert.alert('Verification Failed', err.message || 'The code entered is invalid or has expired.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 6. Email & Password Sign In
   const handlePasswordLogin = async () => {
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedPassword = password.trim();
 
     if (!trimmedEmail || !trimmedPassword) {
       Alert.alert('Required Fields', 'Please enter your email address and account password.');
+      return;
+    }
+
+    if (!isAgeConfirmed) {
+      Alert.alert('Age Verification', 'You must confirm you are 18 years or older to proceed.');
       return;
     }
 
@@ -275,8 +449,13 @@ const LoginScreen = ({ navigation, route }) => {
     }
   };
 
-  // 4. Google 1-Tap Sign-In
+  // 7. Google 1-Tap Sign-In
   const handleGoogleLogin = async () => {
+    if (!isAgeConfirmed) {
+      Alert.alert('Age Verification', 'You must confirm you are 18 years or older to proceed.');
+      return;
+    }
+
     if (!GoogleSignin) {
       Alert.alert('Google Sign-In', 'Google Sign-In module is not configured for this device environment.');
       return;
@@ -284,96 +463,67 @@ const LoginScreen = ({ navigation, route }) => {
 
     setSocialLoading(true);
     try {
-      console.log('[handleGoogleLogin] Step 1: Checking Play Services...');
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
 
-      // Clear any cached session so Google Play Services ALWAYS shows the account/mail selection sheet
       try {
         await GoogleSignin.signOut();
       } catch (signOutErr) {
-        // Safe to ignore if no account was previously signed in
+        // Safe to ignore
       }
 
-      console.log('[handleGoogleLogin] Step 2: Calling GoogleSignin.signIn()...');
       const userInfo = await GoogleSignin.signIn();
-      console.log('[handleGoogleLogin] Step 3: GoogleSignin.signIn() succeeded for:', userInfo?.user?.email);
-      const idToken = userInfo?.idToken || (await GoogleSignin.getTokens())?.idToken;
-      console.log('[handleGoogleLogin] Step 4: idToken received, length:', idToken ? idToken.length : 0);
+      if (userInfo && userInfo.type === 'cancelled') {
+        return;
+      }
+      let idToken = userInfo?.data?.idToken || userInfo?.idToken;
+      if (!idToken) {
+        try {
+          const tokens = await GoogleSignin.getTokens();
+          idToken = tokens?.idToken;
+        } catch (tErr) {
+          console.log('[GoogleSignin] getTokens note:', tErr?.message);
+        }
+      }
 
       if (idToken) {
-        console.log('[handleGoogleLogin] Step 5: Posting idToken to backend /auth/google...');
-        const data = await postAuthEndpoint('/auth/google', { token: idToken });
-        console.log('[handleGoogleLogin] Step 6: Backend auth success:', data?.email || data?.name);
+        const payload = {
+          token: idToken,
+          email: userInfo?.data?.user?.email || userInfo?.user?.email,
+          name: userInfo?.data?.user?.name || userInfo?.user?.name,
+        };
+        const data = await postAuthEndpoint('/auth/google', payload);
         await handleAuthSuccess(data, `Signed in with Google as ${data.name || 'Patron'}.`);
       } else {
         throw new Error('No Google token received from Google Play Services.');
       }
     } catch (error) {
-      console.log('Google Sign-In Error:', error, 'code:', error?.code, 'message:', error?.message);
+      console.log('Google Sign-In Error:', error);
       if (statusCodes && error.code === statusCodes.SIGN_IN_CANCELLED) {
-        // User voluntarily dismissed dialog
+        // User cancelled
       } else if (statusCodes && error.code === statusCodes.IN_PROGRESS) {
-        // Already processing
+        // Processing
       } else {
-        const isShaMismatch =
-          String(error?.code) === '10' ||
-          String(error?.message || '').includes('DEVELOPER_ERROR') ||
-          String(error?.message || '').includes('10');
-
-        if (isShaMismatch) {
-          Alert.alert(
-            'Google Sign-In: SHA-1 Registration Needed',
-            'Google Play Services requires your device APK SHA-1 to be added in Firebase Console (grand-store-65d7c) -> Project Settings -> Your Android App:\n\nActive APK SHA-1:\n5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25\n\nPackage: com.grandstore.android\n\nYou can also sign in right now using Email & Password or Mobile OTP (+27).',
-            [
-              {
-                text: 'Sign in with Email',
-                onPress: () => setAuthMode('password'),
-              },
-              {
-                text: 'Use Mobile OTP',
-                onPress: () => setAuthMode('otp'),
-              },
-              { text: 'Dismiss', style: 'cancel' },
-            ]
-          );
-        } else {
-          const errorDetail = error?.message || (error?.code ? `Error code: ${error.code}` : JSON.stringify(error));
-          Alert.alert(
-            'Google Sign-In Notice',
-            `Google authentication error: ${errorDetail}\n\nPlease use Mobile OTP (+27) or Email Sign-In.`,
-            [
-              {
-                text: 'Use Email Sign-In',
-                onPress: () => setAuthMode('password'),
-              },
-              { text: 'OK' },
-            ]
-          );
-        }
+        Alert.alert(
+          'Google Sign-In Notice',
+          'Could not complete Google Sign-In on this device. You can sign in using Mobile OTP or Sign-in Link.',
+          [
+            { text: 'Use Mobile OTP', onPress: () => setAuthView('otp') },
+            { text: 'Use Sign-in Link', onPress: () => setAuthView('email') },
+            { text: 'Dismiss', style: 'cancel' },
+          ]
+        );
       }
     } finally {
       setSocialLoading(false);
     }
   };
 
-  // 5. Apple Sign-In
-  const handleAppleLogin = () => {
-    if (Platform.OS === 'ios') {
-      Alert.alert('Apple Sign-In', 'Apple Authentication is active on iOS.');
-    } else {
-      Alert.alert('Apple Sign-In', 'Apple Sign-In is exclusively available on Apple iOS devices.');
-    }
-  };
-
-  // Quick Demo Account Pre-fill
-  const fillDemoCustomer = () => {
-    setAuthMode('password');
-    setEmail('customer@grandstore.com');
-    setPassword('password123');
-  };
-
-  // Continue as Guest
+  // 8. Continue as Guest
   const handleGuestContinue = async () => {
+    if (!isAgeConfirmed) {
+      Alert.alert('Age Verification', 'You must confirm you are 18 years or older to proceed.');
+      return;
+    }
     await AsyncStorage.setItem('grand-store-age-gate-passed', 'true').catch(() => {});
     await AsyncStorage.removeItem('isAgeVerified').catch(() => {});
     await AsyncStorage.removeItem('grand-store-age-verified').catch(() => {});
@@ -384,23 +534,24 @@ const LoginScreen = ({ navigation, route }) => {
     }
   };
 
+  // Quick Demo Account Pre-fill
+  const fillDemoCustomer = () => {
+    setEmail('customer@grandstore.com');
+    setPassword('password123');
+  };
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <AppHeader
-        title={'Sign In'}
-        backgroundColor={'#c99742'}
-        rightButtons={[]}
-        height={headerHeight}
-        titleStyle={tmh_styles.header_title_tmb}
-        isShowShadow={false}
-        navigation={navigation}
-        isBack={true}
-        backButtonStyle={{ width: 35, height: 25, alignItems: 'center' }}
-        backIconColor={'black'}
-        logoImage={null}
+      <StatusBar barStyle="light-content" backgroundColor="#070605" />
+
+      {/* Subtle Luxury Watermark in Background */}
+      <Image
+        source={require('../resources/assets/auth_watermark.png')}
+        style={styles.bgWatermark}
+        resizeMode="contain"
       />
 
       <ScrollView
@@ -408,51 +559,200 @@ const LoginScreen = ({ navigation, route }) => {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Luxury Brand Header */}
-        <View style={styles.brandHeader}>
-          <Text style={styles.brandCrest}>THE GRAND STORE</Text>
-          <Text style={styles.brandSub}>FINE SPIRITS • PRIVATE CELLAR • RARE VAULT</Text>
-          <Text style={styles.screenHeading}>Sign in or create your account</Text>
-          <Text style={styles.screenSub}>Access South Africa’s finest reserve wines, rare whiskies & exclusive auctions.</Text>
-        </View>
+        {/* ================= VIEW 1: MAIN LUXURY SCREEN (Matches Mockup) ================= */}
+        {authView === 'menu' && (
+          <View style={styles.menuContainer}>
+            {/* Top Navigation Bar: Gold Back Arrow */}
+            <View style={styles.topNavRow}>
+              <TouchableOpacity
+                style={styles.backArrowBtn}
+                onPress={() => {
+                  if (navigation.canGoBack()) {
+                    navigation.goBack();
+                  } else {
+                    navigation.replace('Home');
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.backArrowSymbol}>←</Text>
+              </TouchableOpacity>
+            </View>
 
-        {/* Dual Tab Switcher */}
-        <View style={styles.tabContainer}>
-          <TouchableOpacity
-            style={[styles.tabBtn, authMode === 'otp' && styles.tabBtnActive]}
-            onPress={() => {
-              setAuthMode('otp');
-              setIsOtpSent(false);
-            }}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.tabText, authMode === 'otp' && styles.tabTextActive]}>
-              📱 Mobile OTP (Fast)
+            {/* Brand Emblem & Logo Lockup */}
+            <View style={styles.brandLockupContainer}>
+              <Image
+                source={require('../resources/assets/auth_brand_lockup.png')}
+                style={styles.brandLockupImage}
+                resizeMode="contain"
+              />
+            </View>
+
+            {/* Typography Hero Section */}
+            <View style={styles.welcomeSection}>
+              <Text style={styles.welcomeLight}>Welcome to</Text>
+              <Text style={styles.welcomeBold}>The Grand Store</Text>
+              <Text style={styles.subTagline}>FINE SPIRITS · PRIVATE CELLAR · RARE VAULT</Text>
+              <View style={styles.goldAccentLine} />
+              <Text style={styles.welcomeDesc}>
+                Discover exceptional spirits, rare whiskies and exclusive auctions from South Africa and beyond.
+              </Text>
+            </View>
+
+            {/* 1. BUTTON: Continue with Mobile OTP (Primary Gold Gradient) */}
+            <TouchableOpacity
+              style={styles.goldPillBtn}
+              onPress={() => setAuthView('otp')}
+              activeOpacity={0.85}
+            >
+              <LinearGradient
+                colors={['#f5c242', '#e5a93b', '#c99742']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.goldPillGradient}
+              >
+                <View style={styles.pillPhoneIconContainer}>
+                  <Text style={styles.pillPhoneIcon}>📱</Text>
+                </View>
+                <Text style={styles.goldPillText}>Continue with Mobile OTP</Text>
+                <Text style={styles.goldPillChevron}>›</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+
+            {/* 2. BUTTON: Continue with Google (Dark Obsidian Card) */}
+            <TouchableOpacity
+              style={styles.darkCardBtn}
+              onPress={handleGoogleLogin}
+              disabled={socialLoading}
+              activeOpacity={0.8}
+            >
+              <View style={styles.cardBtnContent}>
+                {socialLoading ? (
+                  <ActivityIndicator color="#e5a93b" size="small" />
+                ) : (
+                  <>
+                    <Image
+                      source={require('../resources/assets/google.png')}
+                      style={styles.googleIcon}
+                      resizeMode="contain"
+                    />
+                    <Text style={styles.darkCardText}>Continue with Google</Text>
+                    <Text style={styles.cardChevron}>›</Text>
+                  </>
+                )}
+              </View>
+            </TouchableOpacity>
+
+            {/* 3. BUTTON: Sign in with Email (Dark Obsidian Card) */}
+            <TouchableOpacity
+              style={styles.darkCardBtn}
+              onPress={() => setAuthView('email')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.cardBtnContent}>
+                <Text style={styles.mailIconEmoji}>✉️</Text>
+                <Text style={styles.darkCardText}>Sign in with Email</Text>
+                <Text style={styles.cardChevron}>›</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Gold "OR" Divider */}
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>OR</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            {/* 4. BUTTON: Continue as Guest (Gold Border Card) */}
+            <TouchableOpacity
+              style={styles.guestCardBtn}
+              onPress={handleGuestContinue}
+              activeOpacity={0.8}
+            >
+              <View style={styles.guestCardContent}>
+                <Text style={styles.guestBoltIcon}>⚡</Text>
+                <View style={styles.guestTextCol}>
+                  <Text style={styles.guestTitle}>Continue as Guest</Text>
+                  <Text style={styles.guestSub}>Browse first, sign in later</Text>
+                </View>
+                <Text style={styles.guestChevron}>›</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* 18+ Legal Compliance Checkbox */}
+            <TouchableOpacity
+              style={styles.ageCheckboxRow}
+              activeOpacity={0.7}
+              onPress={() => setIsAgeConfirmed(!isAgeConfirmed)}
+            >
+              <View style={[styles.checkboxBox, isAgeConfirmed && styles.checkboxBoxChecked]}>
+                {isAgeConfirmed && <Text style={styles.checkboxCheck}>✓</Text>}
+              </View>
+              <Text style={styles.ageCheckboxLabel}>
+                I confirm I am <Text style={styles.ageBoldGold}>18 years or older</Text>.
+              </Text>
+            </TouchableOpacity>
+
+            <Text style={styles.termsText}>
+              By continuing, you agree to our{' '}
+              <Text style={styles.termsLink}>Terms & Privacy Policy</Text>.
             </Text>
-          </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.tabBtn, authMode === 'password' && styles.tabBtnActive]}
-            onPress={() => setAuthMode('password')}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.tabText, authMode === 'password' && styles.tabTextActive]}>
-              ✉️ Email & Password
+            {/* Footer Crown Rule */}
+            <View style={styles.footerRule}>
+              <View style={styles.footerLine} />
+              <Text style={styles.crownIcon}>👑</Text>
+              <View style={styles.footerLine} />
+            </View>
+
+            <Text style={styles.footerTagline}>
+              EXCEPTIONAL SPIRITS    |    REMARKABLE PEOPLE
             </Text>
-          </TouchableOpacity>
-        </View>
 
-        {/* ================= MODE 1: MOBILE NUMBER + OTP ================= */}
-        {authMode === 'otp' && (
-          <View style={styles.cardSection}>
+            {/* "More than a drink" Signature */}
+            <View style={styles.signatureContainer}>
+              <Image
+                source={require('../resources/assets/auth_signature.png')}
+                style={styles.signatureImg}
+                resizeMode="contain"
+              />
+            </View>
+          </View>
+        )}
+
+        {/* ================= VIEW 2: MOBILE OTP VERIFICATION ================= */}
+        {authView === 'otp' && (
+          <View style={styles.subViewContainer}>
+            {/* Back to main choices */}
+            <TouchableOpacity
+              style={styles.subBackRow}
+              onPress={() => setAuthView('menu')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.subBackArrow}>‹</Text>
+              <Text style={styles.subBackText}>Back to options</Text>
+            </TouchableOpacity>
+
+            <View style={styles.subHeader}>
+              <Text style={styles.subHeadingTitle}>Mobile OTP Verification</Text>
+              <Text style={styles.subHeadingDesc}>
+                Enter your cellular mobile number to receive a 6-digit SMS verification code.
+              </Text>
+            </View>
+
             {!isOtpSent ? (
-              <>
+              <View style={styles.formCard}>
                 <Text style={styles.fieldLabel}>MOBILE PHONE NUMBER</Text>
                 <View style={styles.phoneInputRow}>
-                  <View style={styles.countryBadge}>
-                    <Text style={styles.countryFlag}>🇿🇦</Text>
+                  <TouchableOpacity
+                    style={styles.countryBadge}
+                    activeOpacity={0.7}
+                    onPress={() => setCountryPickerVisible(true)}
+                  >
+                    <CountryFlagImage iso={selectedCountryObj?.country || 'ZA'} size={15} style={{ marginRight: 6 }} />
                     <Text style={styles.countryCodeText}>{countryCode}</Text>
-                  </View>
+                    <Text style={styles.countryChevron}>⌄</Text>
+                  </TouchableOpacity>
                   <TextInput
                     style={styles.phoneInput}
                     placeholder="82 123 4567"
@@ -460,59 +760,45 @@ const LoginScreen = ({ navigation, route }) => {
                     keyboardType="phone-pad"
                     value={phoneNumber}
                     onChangeText={setPhoneNumber}
-                    maxLength={12}
-                    autoFocus={false}
+                    maxLength={14}
+                    autoFocus={true}
                   />
                 </View>
-                <Text style={styles.helperText}>
-                  We'll send a 6-digit verification code. No password required.
-                </Text>
 
-                {/* 18+ Compliance Checkbox */}
-                <TouchableOpacity
-                  style={styles.ageCheckboxRow}
-                  activeOpacity={0.7}
-                  onPress={() => setIsAgeConfirmed(!isAgeConfirmed)}
-                >
-                  <View style={[styles.checkboxBox, isAgeConfirmed && styles.checkboxBoxChecked]}>
-                    {isAgeConfirmed && <Text style={styles.checkboxCheck}>✓</Text>}
-                  </View>
-                  <Text style={styles.ageCheckboxLabel}>
-                    I confirm I am <Text style={styles.boldText}>18 years or older</Text> as legally required by the SA Liquor Act.
-                  </Text>
-                </TouchableOpacity>
+                <Text style={styles.helperText}>
+                  We dispatch a 6-digit cellular SMS code via Google Firebase or local carrier. No password needed.
+                </Text>
 
                 {/* Send OTP Button */}
                 <TouchableOpacity
-                  style={styles.primaryBtn}
+                  style={styles.primaryActionBtn}
                   onPress={handleSendOtp}
                   disabled={loading}
                   activeOpacity={0.85}
                 >
                   <LinearGradient
-                    colors={['#f5c242', '#c99742', '#a67c2e']}
+                    colors={['#f5c242', '#e5a93b', '#c99742']}
                     start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.primaryGradient}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.primaryActionGradient}
                   >
                     {loading ? (
-                      <ActivityIndicator color="#111" />
+                      <ActivityIndicator color="#000" />
                     ) : (
-                      <Text style={styles.primaryBtnText}>SEND VERIFICATION CODE →</Text>
+                      <Text style={styles.primaryActionBtnText}>SEND VERIFICATION CODE →</Text>
                     )}
                   </LinearGradient>
                 </TouchableOpacity>
-              </>
+              </View>
             ) : (
-              <>
-                {/* Step 2: Enter 6-Digit OTP */}
-                <View style={styles.otpSentBanner}>
-                  <Text style={styles.otpSentTitle}>Verification Code Sent</Text>
-                  <Text style={styles.otpSentSub}>
+              <View style={styles.formCard}>
+                <View style={styles.sentBanner}>
+                  <Text style={styles.sentBannerTitle}>Verification Code Sent</Text>
+                  <Text style={styles.sentBannerSub}>
                     Dispatched to {countryCode} {phoneNumber}
                   </Text>
                   <TouchableOpacity onPress={() => setIsOtpSent(false)}>
-                    <Text style={styles.changeNumberText}>Edit Phone Number</Text>
+                    <Text style={styles.editNumberText}>Edit Phone Number</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -545,439 +831,790 @@ const LoginScreen = ({ navigation, route }) => {
                 </View>
 
                 <TouchableOpacity
-                  style={styles.primaryBtn}
+                  style={styles.primaryActionBtn}
                   onPress={handleVerifyOtp}
                   disabled={loading}
                   activeOpacity={0.85}
                 >
                   <LinearGradient
-                    colors={['#f5c242', '#c99742', '#a67c2e']}
+                    colors={['#f5c242', '#e5a93b', '#c99742']}
                     start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.primaryGradient}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.primaryActionGradient}
                   >
                     {loading ? (
-                      <ActivityIndicator color="#111" />
+                      <ActivityIndicator color="#000" />
                     ) : (
-                      <Text style={styles.primaryBtnText}>VERIFY & ENTER VAULT</Text>
+                      <Text style={styles.primaryActionBtnText}>VERIFY & ENTER VAULT</Text>
                     )}
                   </LinearGradient>
                 </TouchableOpacity>
-              </>
+              </View>
             )}
           </View>
         )}
 
-        {/* ================= MODE 2: EMAIL & PASSWORD ================= */}
-        {authMode === 'password' && (
-          <View style={styles.cardSection}>
-            {/* Quick Demo Customer Button */}
+        {/* ================= VIEW 3: SIGN IN WITH EMAIL (ONE-TIME CODE / PASSWORD) ================= */}
+        {authView === 'email' && (
+          <View style={styles.subViewContainer}>
+            {/* Back to main choices */}
             <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={fillDemoCustomer}
-              style={styles.demoCard}
+              style={styles.subBackRow}
+              onPress={() => {
+                setAuthView('menu');
+                setIsEmailOtpSent(false);
+              }}
+              activeOpacity={0.7}
             >
-              <Text style={styles.demoBadge}>⚡ QUICK DEMO ACCOUNT</Text>
-              <Text style={styles.demoTitle}>Tap to use Verified Patron Credentials</Text>
-              <Text style={styles.demoDetails}>customer@grandstore.com • password123</Text>
+              <Text style={styles.subBackArrow}>‹</Text>
+              <Text style={styles.subBackText}>Back to options</Text>
             </TouchableOpacity>
 
-            <Text style={styles.fieldLabel}>EMAIL ADDRESS</Text>
-            <TextInput
-              style={styles.standardInput}
-              placeholder="e.g. patron@domain.co.za"
-              placeholderTextColor="#666"
-              onChangeText={setEmail}
-              value={email}
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-
-            <View style={styles.passwordLabelRow}>
-              <Text style={styles.fieldLabel}>PASSWORD</Text>
-              <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
-                <Text style={styles.showHideText}>{showPassword ? 'Hide' : 'Show'}</Text>
-              </TouchableOpacity>
+            <View style={styles.subHeader}>
+              <Text style={styles.subHeadingTitle}>Sign in with Email</Text>
+              <Text style={styles.subHeadingDesc}>
+                Access with a single-use 6-digit code sent to your email, or use your password.
+              </Text>
             </View>
 
-            <TextInput
-              style={styles.standardInput}
-              placeholder="Account password"
-              placeholderTextColor="#666"
-              onChangeText={setPassword}
-              value={password}
-              secureTextEntry={!showPassword}
-            />
-
-            <TouchableOpacity
-              style={styles.primaryBtn}
-              onPress={handlePasswordLogin}
-              disabled={loading}
-              activeOpacity={0.85}
-            >
-              <LinearGradient
-                colors={['#f5c242', '#c99742', '#a67c2e']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.primaryGradient}
+            {/* Email Tab Switcher: One-Time Code vs Password */}
+            <View style={styles.tabContainer}>
+              <TouchableOpacity
+                style={[styles.tabBtn, emailTab === 'otp' && styles.tabBtnActive]}
+                onPress={() => setEmailTab('otp')}
+                activeOpacity={0.8}
               >
-                {loading ? (
-                  <ActivityIndicator color="#111" />
-                ) : (
-                  <Text style={styles.primaryBtnText}>SIGN IN TO ACCOUNT</Text>
-                )}
-              </LinearGradient>
-            </TouchableOpacity>
+                <Text style={[styles.tabText, emailTab === 'otp' && styles.tabTextActive]}>
+                  ✨ One-Time Code
+                </Text>
+              </TouchableOpacity>
 
-            <View style={styles.registerRow}>
-              <Text style={styles.registerPrompt}>New to The Grand Store? </Text>
-              <TouchableOpacity onPress={() => navigation.navigate('Register')}>
-                <Text style={styles.registerLinkText}>Create Account</Text>
+              <TouchableOpacity
+                style={[styles.tabBtn, emailTab === 'password' && styles.tabBtnActive]}
+                onPress={() => setEmailTab('password')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.tabText, emailTab === 'password' && styles.tabTextActive]}>
+                  🔑 Password
+                </Text>
               </TouchableOpacity>
             </View>
+
+            {/* TAB A: ONE-TIME CODE (OTP) */}
+            {emailTab === 'otp' && (
+              <View style={styles.formCard}>
+                {!isEmailOtpSent ? (
+                  <>
+                    <Text style={styles.fieldLabel}>EMAIL ADDRESS (GMAIL / INBOX)</Text>
+                    <TextInput
+                      style={styles.standardInput}
+                      placeholder="e.g. patron@gmail.com"
+                      placeholderTextColor="#666"
+                      onChangeText={setEmail}
+                      value={email}
+                      autoCapitalize="none"
+                      keyboardType="email-address"
+                      autoFocus={true}
+                    />
+
+                    <Text style={styles.helperText}>
+                      We'll send a 6-digit one-time verification code to your email inbox. No password needed.
+                    </Text>
+
+                    <TouchableOpacity
+                      style={styles.primaryActionBtn}
+                      onPress={handleSendEmailOtp}
+                      disabled={loading}
+                      activeOpacity={0.85}
+                    >
+                      <LinearGradient
+                        colors={['#f5c242', '#e5a93b', '#c99742']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.primaryActionGradient}
+                      >
+                        {loading ? (
+                          <ActivityIndicator color="#000" />
+                        ) : (
+                          <Text style={styles.primaryActionBtnText}>SEND ONE-TIME CODE →</Text>
+                        )}
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    {/* Step 2: Enter 6-Digit Code */}
+                    <View style={styles.sentBanner}>
+                      <Text style={styles.sentBannerTitle}>Verification Code Sent</Text>
+                      <Text style={styles.sentBannerSub}>
+                        Dispatched to {email}
+                      </Text>
+                      <TouchableOpacity onPress={() => setIsEmailOtpSent(false)}>
+                        <Text style={styles.editNumberText}>Change Email Address</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {devEmailOtpHint ? (
+                      <View style={styles.devHintBox}>
+                        <Text style={styles.devHintText}>💡 Dev Test Code: {devEmailOtpHint} (or 123456)</Text>
+                      </View>
+                    ) : null}
+
+                    <Text style={styles.fieldLabel}>ENTER 6-DIGIT CODE</Text>
+                    <TextInput
+                      style={styles.otpInput}
+                      placeholder="• • • • • •"
+                      placeholderTextColor="#555"
+                      keyboardType="number-pad"
+                      value={emailOtpCode}
+                      onChangeText={setEmailOtpCode}
+                      maxLength={6}
+                      autoFocus={true}
+                    />
+
+                    <View style={styles.resendRow}>
+                      {emailResendTimer > 0 ? (
+                        <Text style={styles.resendTimerText}>Resend code in {emailResendTimer}s</Text>
+                      ) : (
+                        <TouchableOpacity onPress={handleSendEmailOtp} disabled={loading}>
+                          <Text style={styles.resendActionText}>Resend Verification Code</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.primaryActionBtn}
+                      onPress={handleVerifyEmailOtp}
+                      disabled={loading}
+                      activeOpacity={0.85}
+                    >
+                      <LinearGradient
+                        colors={['#f5c242', '#e5a93b', '#c99742']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.primaryActionGradient}
+                      >
+                        {loading ? (
+                          <ActivityIndicator color="#000" />
+                        ) : (
+                          <Text style={styles.primaryActionBtnText}>VERIFY & ENTER VAULT</Text>
+                        )}
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+            )}
+
+            {/* TAB B: PASSWORD SIGN IN */}
+            {emailTab === 'password' && (
+              <View style={styles.formCard}>
+
+                <Text style={styles.fieldLabel}>EMAIL ADDRESS</Text>
+                <TextInput
+                  style={styles.standardInput}
+                  placeholder="e.g. patron@domain.co.za"
+                  placeholderTextColor="#666"
+                  onChangeText={setEmail}
+                  value={email}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
+
+                <View style={styles.passwordLabelRow}>
+                  <Text style={styles.fieldLabel}>PASSWORD</Text>
+                  <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+                    <Text style={styles.showHideText}>{showPassword ? 'Hide' : 'Show'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TextInput
+                  style={styles.standardInput}
+                  placeholder="Account password"
+                  placeholderTextColor="#666"
+                  onChangeText={setPassword}
+                  value={password}
+                  secureTextEntry={!showPassword}
+                />
+
+                <TouchableOpacity
+                  style={styles.primaryActionBtn}
+                  onPress={handlePasswordLogin}
+                  disabled={loading}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={['#f5c242', '#e5a93b', '#c99742']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.primaryActionGradient}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color="#000" />
+                    ) : (
+                      <Text style={styles.primaryActionBtnText}>SIGN IN TO ACCOUNT</Text>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+
+                <View style={styles.registerRow}>
+                  <Text style={styles.registerPrompt}>New to The Grand Store? </Text>
+                  <TouchableOpacity onPress={() => navigation.navigate('Register')}>
+                    <Text style={styles.registerLinkText}>Create Account</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
           </View>
         )}
-
-        {/* ================= SOCIAL & QUICK ACCESS OPTIONS ================= */}
-        <View style={styles.dividerRow}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>OR CONTINUE WITH</Text>
-          <View style={styles.dividerLine} />
-        </View>
-
-        {/* Google 1-Tap Sign In */}
-        <TouchableOpacity
-          style={styles.socialBtn}
-          onPress={handleGoogleLogin}
-          disabled={socialLoading}
-          activeOpacity={0.8}
-        >
-          {socialLoading ? (
-            <ActivityIndicator color="#111" size="small" />
-          ) : (
-            <>
-              <Image
-                source={require('../resources/assets/google.png')}
-                style={styles.socialIcon}
-                resizeMode="contain"
-              />
-              <Text style={styles.socialBtnText}>Continue with Google</Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        {/* Apple Sign-In */}
-        {Platform.OS === 'ios' && (
-          <TouchableOpacity
-            style={[styles.socialBtn, styles.appleBtn]}
-            onPress={handleAppleLogin}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.appleIcon}></Text>
-            <Text style={styles.appleBtnText}>Continue with Apple</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Continue as Guest Button */}
-        <TouchableOpacity
-          style={styles.guestBtn}
-          onPress={handleGuestContinue}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.guestBtnText}>⚡ Continue as Guest (Browse & Buy First)</Text>
-        </TouchableOpacity>
-
-        {/* South Africa Legal & Compliance Footer */}
-        <View style={styles.footerLegal}>
-          <Text style={styles.legalNotice}>
-            The Grand Store strictly complies with the South African Liquor Act (Act 59 of 2003). 
-            Alcohol sales are restricted to adults aged 18 and over. Valid identification may be 
-            requested upon dispatch and courier delivery.
-          </Text>
-        </View>
       </ScrollView>
+
+      {/* Searchable Country Code Picker Modal */}
+      <CountryCodePickerModal
+        visible={countryPickerVisible}
+        selectedCode={countryCode}
+        onSelect={(item) => {
+          setCountryCode(item.dialCode);
+          setSelectedCountryObj(item);
+        }}
+        onClose={() => setCountryPickerVisible(false)}
+      />
     </KeyboardAvoidingView>
   );
 };
 
 export default LoginScreen;
 
+const { width } = Dimensions.get('window');
+
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#080706',
+    backgroundColor: '#070605',
   },
   scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingHorizontal: 22,
+    paddingTop: Platform.OS === 'ios' ? 44 : 20,
     paddingBottom: 40,
   },
-  brandHeader: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  brandCrest: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: '#c99742',
-    letterSpacing: 3,
-    marginBottom: 4,
-  },
-  brandSub: {
-    fontSize: 9,
-    color: '#7a7267',
-    letterSpacing: 1.2,
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  screenHeading: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#ffffff',
-    letterSpacing: 0.3,
-    textAlign: 'center',
-    marginBottom: 6,
-  },
-  screenSub: {
-    fontSize: 12,
-    color: '#9e968a',
-    textAlign: 'center',
-    lineHeight: 17,
-    paddingHorizontal: 10,
+
+  // Background Royal Seal Watermark
+  bgWatermark: {
+    position: 'absolute',
+    top: -30,
+    right: -100,
+    width: 380,
+    height: 380,
+    opacity: 0.08,
   },
 
-  // Tabs
+  // View 1: Main Menu Container
+  menuContainer: {
+    width: '100%',
+  },
+
+  topNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  backArrowBtn: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+  },
+  backArrowSymbol: {
+    fontSize: 28,
+    color: '#e5a93b',
+    fontWeight: '300',
+  },
+
+  brandLockupContainer: {
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  brandLockupImage: {
+    width: width * 0.78,
+    height: 70,
+  },
+
+  welcomeSection: {
+    marginBottom: 22,
+  },
+  welcomeLight: {
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+    fontSize: 27,
+    fontWeight: '300',
+    color: '#ffffff',
+    letterSpacing: 0.3,
+  },
+  welcomeBold: {
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+    fontSize: 34,
+    fontWeight: '700',
+    color: '#e5a93b',
+    letterSpacing: 0.4,
+    marginTop: 2,
+    marginBottom: 6,
+  },
+  subTagline: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#c99742',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+    marginTop: 2,
+  },
+  goldAccentLine: {
+    width: 44,
+    height: 2,
+    backgroundColor: '#c99742',
+    marginVertical: 14,
+    borderRadius: 1,
+  },
+  welcomeDesc: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#a0988c',
+    letterSpacing: 0.2,
+  },
+
+  // 1. Primary Gold Pill Button: Continue with Mobile OTP
+  goldPillBtn: {
+    width: '100%',
+    height: 54,
+    borderRadius: 12,
+    marginBottom: 12,
+    overflow: 'hidden',
+    shadowColor: '#f5c242',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  goldPillGradient: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+  },
+  pillPhoneIconContainer: {
+    marginRight: 12,
+  },
+  pillPhoneIcon: {
+    fontSize: 19,
+    color: '#000',
+  },
+  goldPillText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000000',
+    letterSpacing: 0.2,
+  },
+  goldPillChevron: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#000000',
+  },
+
+  // 2 & 3. Dark Card Buttons: Continue with Google & Sign in with Email
+  darkCardBtn: {
+    width: '100%',
+    height: 54,
+    borderRadius: 12,
+    backgroundColor: '#141311',
+    borderWidth: 1,
+    borderColor: '#30281b',
+    marginBottom: 12,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  cardBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  googleIcon: {
+    width: 20,
+    height: 20,
+    marginRight: 14,
+  },
+  mailIconEmoji: {
+    fontSize: 18,
+    color: '#ffffff',
+    marginRight: 14,
+  },
+  darkCardText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#ffffff',
+    letterSpacing: 0.2,
+  },
+  cardChevron: {
+    fontSize: 20,
+    color: '#c99742',
+  },
+
+  // Divider OR
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 14,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#30281b',
+  },
+  dividerText: {
+    paddingHorizontal: 16,
+    color: '#c99742',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+
+  // 4. Continue as Guest Card
+  guestCardBtn: {
+    width: '100%',
+    borderRadius: 12,
+    backgroundColor: '#141311',
+    borderWidth: 1.2,
+    borderColor: '#524022',
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    marginBottom: 20,
+  },
+  guestCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  guestBoltIcon: {
+    fontSize: 24,
+    color: '#f5c242',
+    marginRight: 14,
+  },
+  guestTextCol: {
+    flex: 1,
+  },
+  guestTitle: {
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#f5c242',
+  },
+  guestSub: {
+    fontSize: 12,
+    color: '#8a8275',
+    marginTop: 2,
+  },
+  guestChevron: {
+    fontSize: 22,
+    color: '#c99742',
+  },
+
+  // Age Gate Checkbox & Legal
+  ageCheckboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  checkboxBox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: '#c99742',
+    backgroundColor: '#141311',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  checkboxBoxChecked: {
+    backgroundColor: '#f5c242',
+    borderColor: '#f5c242',
+  },
+  checkboxCheck: {
+    color: '#000000',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  ageCheckboxLabel: {
+    fontSize: 13,
+    color: '#d4cec5',
+  },
+  ageBoldGold: {
+    color: '#f5c242',
+    fontWeight: '700',
+  },
+  termsText: {
+    fontSize: 11.5,
+    color: '#7a7267',
+    marginBottom: 24,
+  },
+  termsLink: {
+    color: '#c99742',
+    textDecorationLine: 'underline',
+  },
+
+  // Footer Rule & Tagline
+  footerRule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 12,
+  },
+  footerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#262016',
+  },
+  crownIcon: {
+    fontSize: 13,
+    paddingHorizontal: 12,
+  },
+  footerTagline: {
+    fontSize: 9.5,
+    fontWeight: '600',
+    color: '#7a6e5b',
+    letterSpacing: 2,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  signatureContainer: {
+    alignItems: 'flex-end',
+    marginTop: 4,
+  },
+  signatureImg: {
+    width: 95,
+    height: 55,
+    opacity: 0.85,
+  },
+
+  // Sub-View Styles (OTP and Email)
+  subViewContainer: {
+    width: '100%',
+    paddingTop: 8,
+  },
+  subBackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  subBackArrow: {
+    fontSize: 26,
+    color: '#e5a93b',
+    marginRight: 6,
+  },
+  subBackText: {
+    fontSize: 14,
+    color: '#e5a93b',
+    fontWeight: '600',
+  },
+  subHeader: {
+    marginBottom: 20,
+  },
+  subHeadingTitle: {
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: 6,
+  },
+  subHeadingDesc: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#9e978b',
+  },
+
+  // Tab Switcher for Email
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderRadius: 12,
+    backgroundColor: '#141311',
+    borderRadius: 10,
     padding: 4,
     borderWidth: 1,
-    borderColor: 'rgba(201, 151, 66, 0.2)',
+    borderColor: '#2b2318',
     marginBottom: 20,
   },
   tabBtn: {
     flex: 1,
     paddingVertical: 10,
     alignItems: 'center',
-    borderRadius: 9,
+    borderRadius: 8,
   },
   tabBtnActive: {
-    backgroundColor: 'rgba(201, 151, 66, 0.18)',
-    borderWidth: 1,
-    borderColor: 'rgba(201, 151, 66, 0.4)',
+    backgroundColor: '#262016',
   },
   tabText: {
-    color: '#777',
-    fontSize: 12.5,
+    fontSize: 13,
     fontWeight: '600',
+    color: '#7a7267',
   },
   tabTextActive: {
     color: '#f5c242',
-    fontWeight: '800',
+    fontWeight: '700',
   },
 
-  // Card
-  cardSection: {
-    backgroundColor: '#0f0d0b',
-    borderRadius: 16,
+  // Forms
+  formCard: {
+    backgroundColor: '#11100e',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: '#262016',
     padding: 18,
-    marginBottom: 20,
   },
   fieldLabel: {
-    color: '#b0976d',
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#c99742',
+    letterSpacing: 1.2,
     marginBottom: 8,
+    textTransform: 'uppercase',
   },
-
-  // Phone input row
   phoneInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    backgroundColor: '#181613',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#382f1f',
+    marginBottom: 12,
+    overflow: 'hidden',
   },
   countryBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1c1813',
-    borderWidth: 1,
-    borderColor: 'rgba(201, 151, 66, 0.3)',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 12,
-    marginRight: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    backgroundColor: '#211d17',
+    borderRightWidth: 1,
+    borderRightColor: '#382f1f',
   },
   countryFlag: {
     fontSize: 16,
     marginRight: 6,
   },
   countryCodeText: {
-    color: '#f5c242',
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '700',
+    color: '#f5c242',
+    marginRight: 4,
+  },
+  countryChevron: {
+    fontSize: 12,
+    color: '#c99742',
   },
   phoneInput: {
     flex: 1,
-    backgroundColor: '#15120e',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    borderRadius: 10,
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
+    height: 48,
     paddingHorizontal: 14,
-    paddingVertical: 11,
+    fontSize: 15,
+    color: '#ffffff',
   },
   helperText: {
-    color: '#7c766c',
-    fontSize: 11,
-    lineHeight: 15,
-    marginBottom: 14,
-  },
-
-  // Age Checkbox
-  ageCheckboxRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-    backgroundColor: 'rgba(201, 151, 66, 0.06)',
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(201, 151, 66, 0.15)',
-  },
-  checkboxBox: {
-    width: 20,
-    height: 20,
-    borderRadius: 5,
-    borderWidth: 1.5,
-    borderColor: 'rgba(201, 151, 66, 0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-    backgroundColor: '#111',
-  },
-  checkboxBoxChecked: {
-    backgroundColor: '#c99742',
-    borderColor: '#f5c242',
-  },
-  checkboxCheck: {
-    color: '#111',
     fontSize: 12,
-    fontWeight: '900',
+    lineHeight: 17,
+    color: '#80776b',
+    marginBottom: 18,
   },
-  ageCheckboxLabel: {
-    flex: 1,
-    color: '#ccc',
-    fontSize: 11.5,
-    lineHeight: 16,
-  },
-  boldText: {
-    color: '#f5c242',
-    fontWeight: '800',
-  },
-
-  // Primary Button
-  primaryBtn: {
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginTop: 4,
-  },
-  primaryGradient: {
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryBtnText: {
-    color: '#0d0b08',
-    fontSize: 13.5,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-  },
-
-  // OTP Step 2
-  otpSentBanner: {
-    backgroundColor: 'rgba(201, 151, 66, 0.08)',
+  primaryActionBtn: {
+    width: '100%',
+    height: 50,
     borderRadius: 10,
-    padding: 12,
-    alignItems: 'center',
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(201, 151, 66, 0.2)',
+    overflow: 'hidden',
+    marginTop: 6,
   },
-  otpSentTitle: {
-    color: '#f5c242',
+  primaryActionGradient: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  primaryActionBtnText: {
     fontSize: 14,
     fontWeight: '800',
+    color: '#000000',
+    letterSpacing: 0.5,
+  },
+
+  // OTP Verification view
+  sentBanner: {
+    backgroundColor: '#1b1710',
+    borderWidth: 1,
+    borderColor: '#382f1f',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 16,
+  },
+  sentBannerTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#f5c242',
     marginBottom: 2,
   },
-  otpSentSub: {
+  sentBannerSub: {
+    fontSize: 12,
     color: '#a0988c',
-    fontSize: 11.5,
     marginBottom: 6,
   },
-  changeNumberText: {
+  editNumberText: {
+    fontSize: 12,
     color: '#c99742',
-    fontSize: 11,
-    fontWeight: '700',
     textDecorationLine: 'underline',
   },
   devHintBox: {
-    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+    backgroundColor: '#1e1c12',
+    borderColor: '#e5a93b',
     borderWidth: 1,
-    borderColor: 'rgba(76, 175, 80, 0.3)',
     borderRadius: 8,
-    padding: 8,
-    marginBottom: 12,
-    alignItems: 'center',
+    padding: 10,
+    marginBottom: 16,
   },
   devHintText: {
-    color: '#81c784',
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 12,
+    color: '#f5c242',
+    textAlign: 'center',
   },
   otpInput: {
-    backgroundColor: '#15120e',
-    borderWidth: 1.5,
-    borderColor: '#c99742',
+    backgroundColor: '#181613',
+    borderWidth: 1,
+    borderColor: '#382f1f',
     borderRadius: 10,
-    color: '#f5c242',
+    height: 52,
     fontSize: 22,
-    fontWeight: '900',
-    letterSpacing: 8,
+    fontWeight: '800',
+    color: '#f5c242',
     textAlign: 'center',
-    paddingVertical: 12,
-    marginBottom: 10,
+    letterSpacing: 10,
+    marginBottom: 14,
   },
   resendRow: {
     alignItems: 'center',
-    marginVertical: 10,
+    marginBottom: 16,
   },
   resendTimerText: {
-    color: '#777',
-    fontSize: 11.5,
+    fontSize: 12,
+    color: '#666',
   },
   resendActionText: {
-    color: '#f5c242',
     fontSize: 12,
     fontWeight: '700',
+    color: '#c99742',
     textDecorationLine: 'underline',
   },
 
-  // Password Mode Inputs
+  // Standard inputs (Email & Password)
   standardInput: {
-    backgroundColor: '#15120e',
+    backgroundColor: '#181613',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: '#382f1f',
     borderRadius: 10,
-    color: '#ffffff',
-    fontSize: 14,
+    height: 48,
     paddingHorizontal: 14,
-    paddingVertical: 11,
+    fontSize: 14,
+    color: '#ffffff',
     marginBottom: 14,
   },
   passwordLabelRow: {
@@ -987,136 +1624,137 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   showHideText: {
-    color: '#b0976d',
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 12,
+    color: '#c99742',
+    fontWeight: '600',
   },
   demoCard: {
-    backgroundColor: '#181410',
+    backgroundColor: '#19150d',
     borderWidth: 1,
-    borderColor: 'rgba(201, 151, 66, 0.35)',
+    borderColor: '#42361e',
     borderRadius: 10,
-    padding: 10,
-    marginBottom: 14,
+    padding: 12,
+    marginBottom: 16,
   },
   demoBadge: {
-    color: '#f5c242',
     fontSize: 9,
-    fontWeight: '900',
+    fontWeight: '800',
+    color: '#f5c242',
     letterSpacing: 1,
     marginBottom: 2,
   },
   demoTitle: {
-    color: '#eee',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
-    marginBottom: 2,
+    color: '#ffffff',
   },
   demoDetails: {
-    color: '#8e867b',
-    fontSize: 10,
+    fontSize: 11,
+    color: '#8a8275',
+    marginTop: 2,
   },
   registerRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 16,
+    marginTop: 18,
   },
   registerPrompt: {
-    color: '#888',
-    fontSize: 12,
+    fontSize: 13,
+    color: '#7a7267',
   },
   registerLinkText: {
+    fontSize: 13,
+    fontWeight: '700',
     color: '#f5c242',
-    fontSize: 12,
-    fontWeight: '800',
+    textDecorationLine: 'underline',
   },
 
-  // Divider
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 18,
+  // Magic Link Sub-section
+  magicSentSection: {
+    marginTop: 6,
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  magicSentCard: {
+    backgroundColor: '#1b1710',
+    borderWidth: 1,
+    borderColor: '#382f1f',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 14,
   },
-  dividerText: {
-    color: '#6c655a',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-    paddingHorizontal: 12,
+  magicSentHeader: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#f5c242',
+    marginBottom: 4,
   },
-
-  // Social Buttons
-  socialBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginBottom: 10,
-    elevation: 2,
+  magicSentBody: {
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: '#b5aba0',
   },
-  socialIcon: {
-    width: 20,
-    height: 20,
-    marginRight: 10,
-  },
-  socialBtnText: {
-    color: '#1a1a1a',
-    fontSize: 13.5,
+  goldHighlight: {
+    color: '#f5c242',
     fontWeight: '700',
   },
-  appleBtn: {
-    backgroundColor: '#000000',
+  openMailBtn: {
+    backgroundColor: '#262016',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  appleIcon: {
-    color: '#fff',
-    fontSize: 20,
-    marginRight: 8,
-    lineHeight: 22,
-  },
-  appleBtnText: {
-    color: '#ffffff',
-    fontSize: 13.5,
-    fontWeight: '700',
-  },
-
-  // Guest Button
-  guestBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 12,
+    borderColor: '#c99742',
+    borderRadius: 10,
     paddingVertical: 13,
     alignItems: 'center',
-    marginTop: 4,
-    marginBottom: 20,
+    marginBottom: 16,
   },
-  guestBtnText: {
-    color: '#a0988c',
-    fontSize: 12.5,
+  openMailBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#f5c242',
+    letterSpacing: 0.5,
+  },
+  tokenBoxContainer: {
+    backgroundColor: '#161410',
+    borderWidth: 1,
+    borderColor: '#2b2318',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 14,
+  },
+  tokenInput: {
+    backgroundColor: '#1e1b16',
+    borderWidth: 1,
+    borderColor: '#382f1f',
+    borderRadius: 8,
+    height: 44,
+    paddingHorizontal: 12,
+    fontSize: 13,
+    color: '#f5c242',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    marginBottom: 10,
+  },
+  verifyTokenBtn: {
+    backgroundColor: '#302617',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  verifyTokenBtnText: {
+    fontSize: 12,
     fontWeight: '700',
+    color: '#f5c242',
   },
-
-  // Legal
-  footerLegal: {
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.05)',
-    paddingTop: 16,
+  devFastBtn: {
+    backgroundColor: '#241b0b',
+    borderWidth: 1,
+    borderColor: '#e5a93b',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginBottom: 14,
   },
-  legalNotice: {
-    color: '#555',
-    fontSize: 10,
-    lineHeight: 15,
-    textAlign: 'center',
+  devFastBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#f5c242',
   },
 });

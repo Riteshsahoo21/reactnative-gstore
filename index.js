@@ -40,6 +40,7 @@ import AuctionCheckout from './source/components/auction/AuctionCheckout';
 import AuctionVipCheckout from './source/components/auction/AuctionVipCheckout';
 import MyBids from './source/components/auction/MyBids';
 import CustomerDashboard from './source/components/CustomerDashboard';
+import NotificationsScreen from './source/components/NotificationsScreen';
 import GlobalAgeVerificationModal from './source/components/GlobalAgeVerificationModal';
 const Rootstack = createNativeStackNavigator();
 
@@ -50,12 +51,14 @@ const linking = {
       SplashScreen: 'splash',
       HomeScreen: 'home',
       CustomerDashboard: 'dashboard',
+      NotificationsScreen: 'notifications',
       AuctionsHub: 'auctions',
       AuctionLotDetails: 'lot',
       AuctionVipCheckout: 'vip-checkout',
       EventTicketPass: 'tickets',
       EventsHub: 'events',
       MyOrders: 'orders',
+      LoginScreen: 'login',
     },
   },
 };
@@ -224,6 +227,11 @@ const App = () => {
         <Rootstack.Screen
           name="CustomerDashboard"
           component={CustomerDashboard}
+          options={{ headerShown: false }}
+        />
+        <Rootstack.Screen
+          name="NotificationsScreen"
+          component={NotificationsScreen}
           options={{ headerShown: false }}
         />
       </Rootstack.Navigator>

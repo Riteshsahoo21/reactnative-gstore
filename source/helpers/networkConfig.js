@@ -22,54 +22,39 @@ const getMetroHost = () => {
 
 const metroHost = getMetroHost();
 
-// Ordered list of candidate backend URLs (fastest & most reliable first)
+// Ordered list of candidate backend URLs (deployed production API is always primary)
 export const getCandidateBases = () => {
   const list = [];
 
+  // Primary: Always deployed production Grand Store API first
+  list.push('https://api.grandstoreglobal.com/api');
+
+  if (activeApiBase && activeApiBase !== 'https://api.grandstoreglobal.com/api') {
+    list.push(activeApiBase);
+  }
+
+  // Fallback local candidates for development testing only
   if (__DEV__) {
-    // 127.0.0.1 & Localhost (works for physical Android device with ADB reverse & iOS simulator)
     list.push('http://127.0.0.1:5000/api');
     list.push('http://localhost:5000/api');
 
-    // Dynamic Metro host if loaded over LAN Wi-Fi
     if (metroHost) {
       list.push(`http://${metroHost}:5000/api`);
     }
 
-    // Local PC Wi-Fi IPs
     list.push('http://192.168.1.102:5000/api');
     list.push('http://192.168.1.9:5000/api');
 
-    // Android emulator host loopback
     if (Platform.OS === 'android') {
       list.push('http://10.0.2.2:5000/api');
     }
-
-    if (activeApiBase) {
-      list.push(activeApiBase);
-    }
-
-    // Production Base URL fallback
-    list.push('https://api.grandstoreglobal.com/api');
-  } else {
-    if (activeApiBase) {
-      list.push(activeApiBase);
-    }
-    list.push('https://api.grandstoreglobal.com/api');
-    list.push('http://127.0.0.1:5000/api');
-    list.push('http://localhost:5000/api');
-    if (metroHost) {
-      list.push(`http://${metroHost}:5000/api`);
-    }
-    list.push('http://192.168.1.102:5000/api');
   }
 
   return [...new Set(list.filter(Boolean))];
 };
 
-let activeApiBase = __DEV__
-  ? 'http://127.0.0.1:5000/api'
-  : 'https://api.grandstoreglobal.com/api';
+// Default active API base is ALWAYS the deployed production endpoint
+let activeApiBase = 'https://api.grandstoreglobal.com/api';
 let isProbing = false;
 
 export const getActiveApiBase = () => activeApiBase;
@@ -80,6 +65,10 @@ export const getActiveServerHost = () => {
 
 export const setActiveApiBase = (newBase) => {
   if (!newBase || typeof newBase !== 'string') return;
+  // In production / release builds, never switch to localhost or 127.0.0.1
+  if (!__DEV__ && (newBase.includes('localhost') || newBase.includes('127.0.0.1') || newBase.includes('10.0.2.2'))) {
+    return;
+  }
   const clean = newBase.replace(/\/+$/, '');
   const formatted = clean.endsWith('/api') ? clean : `${clean}/api`;
   if (activeApiBase !== formatted) {
@@ -145,7 +134,7 @@ export const probeBackend = async () => {
   for (const base of candidates) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
 
       const res = await (global._rawFetch || fetch)(`${base}/health`, {
         method: 'GET',
@@ -233,7 +222,7 @@ export const initNetworkResilience = () => {
             ...originalConfig,
             url: newUrl,
             _skipRewrite: true, // Prevent request interceptor from overriding candidate
-            timeout: Math.min(originalConfig.timeout || 3000, 2000),
+            timeout: Math.max(originalConfig.timeout || 8000, 6000),
           };
 
           const res = await axios(newConfig);

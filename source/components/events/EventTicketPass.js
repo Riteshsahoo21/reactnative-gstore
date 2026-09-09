@@ -35,30 +35,20 @@ import {
 const { width } = Dimensions.get("window");
 
 const getEventApiCandidates = () => {
-  const list = [];
-  if (__DEV__) {
-    list.push(
-      "http://127.0.0.1:5000/api",
-      "http://localhost:5000/api",
-      "http://192.168.1.102:5000/api",
-      "http://10.0.2.2:5000/api"
-    );
-  }
-  const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : null;
-  if (active) {
-    list.push(active);
-  }
+  const active = typeof getActiveApiBase === "function" ? getActiveApiBase() : API_BASE;
+  const list = [API_BASE, active];
   if (typeof getCandidateBases === "function") {
     list.push(...getCandidateBases());
   }
-  list.push(
-    API_BASE,
-    "http://127.0.0.1:5000/api",
-    "http://192.168.1.102:5000/api",
-    "http://localhost:5000/api",
-    "http://10.0.2.2:5000/api",
-    "http://192.168.1.9:5000/api"
-  );
+  if (__DEV__) {
+    list.push(
+      "http://127.0.0.1:5000/api",
+      "http://192.168.1.102:5000/api",
+      "http://localhost:5000/api",
+      "http://10.0.2.2:5000/api",
+      "http://192.168.1.9:5000/api"
+    );
+  }
   return [...new Set(list.filter(Boolean))];
 };
 
@@ -188,15 +178,17 @@ export default function EventTicketPass({ route, navigation }) {
       const candidates = typeof getCandidateBases === "function" ? getCandidateBases() : [];
       let workingHost = null;
 
-      // Prioritize local reversed host (adb reverse port 5000), LAN IP, and active server
+      // Prioritize deployed domain, active server host, and LAN IP only if __DEV__
       const candidateHosts = [
-        "http://127.0.0.1:5000",
-        "http://localhost:5000",
+        "https://api.grandstoreglobal.com",
         ...(typeof getActiveServerHost === "function" ? [getActiveServerHost()] : []),
         ...candidates.map((c) => (c ? c.replace(/\/api\/?$/, "") : null)),
-        "http://192.168.1.102:5000",
-        "http://10.0.2.2:5000",
-        "https://api.grandstoreglobal.com",
+        ...(__DEV__ ? [
+          "http://127.0.0.1:5000",
+          "http://localhost:5000",
+          "http://192.168.1.102:5000",
+          "http://10.0.2.2:5000",
+        ] : []),
       ].filter(Boolean);
 
       const uniqueHosts = [...new Set(candidateHosts)];
@@ -222,7 +214,7 @@ export default function EventTicketPass({ route, navigation }) {
       }
 
       if (!workingHost) {
-        workingHost = "http://127.0.0.1:5000";
+        workingHost = "https://api.grandstoreglobal.com";
       }
 
       const downloadUrl = `${workingHost}/api/events/bookings/${targetId}/ticket-pdf?download=1`;

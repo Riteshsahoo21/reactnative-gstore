@@ -26,6 +26,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { API_BASE } from "../resources/data/Constants";
 import { getCategoryIcon } from "../helpers/categoryIcons";
+import SearchAutoRecommend from "./SearchAutoRecommend";
 
 const { width } = Dimensions.get("window");
 const cardWidth = (width - 40) / 2;
@@ -139,15 +140,17 @@ const Shop = ({ navigation, onBack, route }) => {
     try {
       const candidates = [
         `${API_BASE}/products`,
-        "http://localhost:5000/api/products",
-        "http://192.168.1.9:5000/api/products",
-        "http://10.0.2.2:5000/api/products",
+        ...(__DEV__ ? [
+          "http://localhost:5000/api/products",
+          "http://192.168.1.9:5000/api/products",
+          "http://10.0.2.2:5000/api/products",
+        ] : []),
       ];
       const uniqueUrls = [...new Set(candidates)];
       let rawData = [];
       for (const url of uniqueUrls) {
         try {
-          const res = await axios.get(url, { timeout: 4000 });
+          const res = await axios.get(url, { timeout: 12000 });
           if (res?.data && Array.isArray(res.data)) {
             rawData = res.data;
             break;
@@ -732,25 +735,20 @@ const Shop = ({ navigation, onBack, route }) => {
         </View>
       </View>
 
-      {/* Real-time Search Input */}
-      <View style={styles.searchContainer}>
-        <Image
-          source={require("../resources/assets/discover.png")}
-          style={styles.searchIcon}
-          resizeMode="contain"
-        />
-        <TextInput
-          style={styles.searchInput}
+      {/* Real-time Search Input with Auto Recommendations */}
+      <View style={{ zIndex: 10000, elevation: 12 }}>
+        <SearchAutoRecommend
+          query={searchQuery}
+          setQuery={setSearchQuery}
+          products={products}
+          navigation={navigation}
           placeholder="Search bottles, brands, styles..."
-          placeholderTextColor="#777777"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
+          showShopViewAll={true}
+          shopViewAllText="Filter {count} bottles in Cellar →"
+          onSearchSubmit={(q) => {
+            setSearchQuery(q);
+          }}
         />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchQuery("")}>
-            <Text style={{ color: "#777777", fontSize: 16, paddingHorizontal: 6 }}>✕</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
       {/* Horizontal Category Chips */}

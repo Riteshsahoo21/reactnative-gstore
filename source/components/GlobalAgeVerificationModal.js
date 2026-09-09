@@ -85,9 +85,13 @@ export default function GlobalAgeVerificationModal() {
             colors={["#16130d", "#0c0b09", "#060504"]}
             style={styles.cardGradient}
           >
-            {/* Top Crest / Luxury Seal */}
-            <View style={styles.crestCircle}>
-              <Text style={styles.crestEmoji}>🍷</Text>
+            {/* Grand Store Brand Logo */}
+            <View style={styles.logoWrap}>
+              <Image
+                source={require("../resources/assets/logo.webp")}
+                style={styles.logoImage}
+                resizeMode="contain"
+              />
             </View>
 
             <Text style={styles.kicker}>THE GRAND STORE • PRIVATE RESERVE</Text>
@@ -174,19 +178,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     alignItems: "center",
   },
-  crestCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "rgba(201, 151, 66, 0.12)",
-    borderWidth: 1.5,
-    borderColor: "#c99742",
+  logoWrap: {
+    width: "100%",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 16,
+    paddingHorizontal: 10,
   },
-  crestEmoji: {
-    fontSize: 26,
+  logoImage: {
+    width: width * 0.65,
+    height: 52,
+    resizeMode: "contain",
   },
   kicker: {
     color: "#d8b76d",

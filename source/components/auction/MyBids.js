@@ -18,14 +18,17 @@ import LinearGradient from "react-native-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import AppHeader from "../../widgets/AppHeader";
 import { API_BASE, getActiveServerHost } from "../../resources/data/Constants";
+import BidderVerificationModal from "./BidderVerificationModal";
 
 const { width } = Dimensions.get("window");
 
 const API_CANDIDATES = [
   API_BASE,
-  "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
-  "http://10.0.2.2:5000/api",
+  ...(__DEV__ ? [
+    "http://localhost:5000/api",
+    "http://192.168.1.9:5000/api",
+    "http://10.0.2.2:5000/api",
+  ] : []),
 ];
 
 const resolveImage = (img) => {
@@ -40,6 +43,7 @@ export default function MyBids({ navigation }) {
   const [wonLots, setWonLots] = useState([]);
   const [watchlist, setWatchlist] = useState([]);
   const [bidderProfile, setBidderProfile] = useState(null);
+  const [isVerificationModalVisible, setIsVerificationModalVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [user, setUser] = useState(null);
@@ -286,21 +290,47 @@ export default function MyBids({ navigation }) {
       {/* Bidder Status Top Banner */}
       {bidderProfile && (
         <View style={styles.bidderProfileBanner}>
-          <View style={styles.profileLeftCol}>
-            <Text style={styles.profileStatusIcon}>{bidderProfile.isVerified ? "🛡️" : "⏳"}</Text>
-            <View>
+          <View style={[styles.profileLeftCol, { flex: 1 }]}>
+            <Text style={styles.profileStatusIcon}>
+              {bidderProfile.isVerified
+                ? "🛡️"
+                : bidderProfile.isPending || bidderProfile.bidderApprovalStatus === "pending_approval"
+                ? "⏱"
+                : "🏛️"}
+            </Text>
+            <View style={{ flex: 1 }}>
               <Text style={styles.profileTitle}>
                 {bidderProfile.isVerified
                   ? `Approved Bidder • ${bidderProfile.bidderNumber || "VIP"}`
-                  : "Bidder Verification Pending"}
+                  : bidderProfile.isPending || bidderProfile.bidderApprovalStatus === "pending_approval"
+                  ? "18+ Bidder Verification Under Review"
+                  : "18+ Verification Required to Bid"}
               </Text>
               <Text style={styles.profileLimit}>
-                Certified Bidding Limit:{" "}
-                <Text style={styles.profileLimitVal}>
-                  R{Number(bidderProfile.biddingLimit || 0).toLocaleString()}
-                </Text>
+                {bidderProfile.isVerified ? (
+                  <>
+                    Certified Bidding Limit:{" "}
+                    <Text style={styles.profileLimitVal}>
+                      R{Number(bidderProfile.biddingLimit || 0).toLocaleString()}
+                    </Text>
+                  </>
+                ) : bidderProfile.isPending || bidderProfile.bidderApprovalStatus === "pending_approval" ? (
+                  "Your credentials are being reviewed by auction compliance officers"
+                ) : (
+                  "Complete 18+ compliance to unlock live bidding & rare lots"
+                )}
               </Text>
             </View>
+            {!bidderProfile.isVerified &&
+              !(bidderProfile.isPending || bidderProfile.bidderApprovalStatus === "pending_approval") && (
+                <TouchableOpacity
+                  style={styles.verifyBidderBtn}
+                  onPress={() => setIsVerificationModalVisible(true)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.verifyBidderBtnText}>Verify 18+</Text>
+                </TouchableOpacity>
+              )}
           </View>
         </View>
       )}
@@ -390,6 +420,13 @@ export default function MyBids({ navigation }) {
           }
         />
       )}
+
+      {/* 18+ Bidder Verification Modal */}
+      <BidderVerificationModal
+        visible={isVerificationModalVisible}
+        onClose={() => setIsVerificationModalVisible(false)}
+        onSuccess={() => loadData(true)}
+      />
     </SafeAreaView>
   );
 }
@@ -421,6 +458,19 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: "rgba(201, 151, 66, 0.2)",
+  },
+  verifyBidderBtn: {
+    backgroundColor: "#c99742",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  verifyBidderBtnText: {
+    color: "#000",
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
   },
   profileLeftCol: {
     flexDirection: "row",

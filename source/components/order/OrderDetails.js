@@ -22,9 +22,11 @@ const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
 
 const API_CANDIDATES = [
   API_BASE,
-  "http://localhost:5000/api",
-  "http://192.168.1.9:5000/api",
-  "http://10.0.2.2:5000/api",
+  ...(__DEV__ ? [
+    "http://localhost:5000/api",
+    "http://192.168.1.9:5000/api",
+    "http://10.0.2.2:5000/api",
+  ] : []),
 ];
 
 const getImageUrl = (imagePath) => {
@@ -299,7 +301,10 @@ export default function OrderDetails({ route, navigation }) {
     String(order.courierName || "").toLowerCase().includes("postnet") ||
     !!order.pickupStore;
 
-  const latestAdminMsg = order.latestAdminMessage || (order.adminMessages && order.adminMessages.length > 0 ? order.adminMessages[order.adminMessages.length - 1] : null);
+  const latestAdminMsg = [
+    order.latestAdminMessage,
+    ...(Array.isArray(order.adminMessages) ? [...order.adminMessages].reverse() : []),
+  ].find((notice) => typeof notice?.message === "string" && notice.message.trim().length > 0) || null;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -353,8 +358,8 @@ export default function OrderDetails({ route, navigation }) {
           </View>
         </View>
 
-        {/* Concierge Custom Advisory / Out of Stock / Emergency Notice Card */}
-        {latestAdminMsg && (
+        {/* Concierge Custom Advisory / Out of Stock / Emergency Notice Card - strictly shown only when an admin has pushed a message */}
+        {latestAdminMsg && typeof latestAdminMsg.message === "string" && latestAdminMsg.message.trim().length > 0 && (
           <View style={[
             styles.card,
             {

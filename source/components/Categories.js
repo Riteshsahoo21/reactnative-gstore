@@ -44,16 +44,18 @@ const Categories = ({ navigation, onBack }) => {
     try {
       const candidates = [
         `${API_BASE}/categories`,
-        'http://localhost:5000/api/categories',
-        'http://192.168.1.9:5000/api/categories',
-        'http://10.0.2.2:5000/api/categories',
+        ...(__DEV__ ? [
+          'http://localhost:5000/api/categories',
+          'http://192.168.1.9:5000/api/categories',
+          'http://10.0.2.2:5000/api/categories',
+        ] : []),
       ];
       const uniqueCandidates = [...new Set(candidates)];
       let response = null;
 
       for (const url of uniqueCandidates) {
         try {
-          response = await axios.get(url, { timeout: 3000 });
+          response = await axios.get(url, { timeout: 12000 });
           if (response?.data) break;
         } catch (e) {
           // try next

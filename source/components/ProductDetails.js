@@ -97,7 +97,7 @@ const ProductDetails = ({ navigation, route }) => {
       if (!pid) return;
       const res = await axios.get(
         `${API_BASE}/social-proof/reviews/product/${encodeURIComponent(pid)}`,
-        { timeout: 3500 }
+        { timeout: 10000 }
       );
       if (res.data?.success) {
         const reviewList = Array.isArray(res.data.data) ? res.data.data : [];
