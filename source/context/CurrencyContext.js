@@ -204,6 +204,49 @@ export const getCurrencyForCountryCode = (countryCode) => {
   return code === 'ZA' ? 'ZAR' : 'USD';
 };
 
+// Timezone to primary ISO-2 country code mapping (Instant, zero-network fallback)
+const TIMEZONE_TO_COUNTRY = {
+  'Asia/Calcutta': 'IN', 'Asia/Kolkata': 'IN',
+  'Europe/London': 'GB',
+  'America/New_York': 'US', 'America/Chicago': 'US', 'America/Denver': 'US',
+  'America/Los_Angeles': 'US', 'America/Phoenix': 'US', 'America/Detroit': 'US',
+  'America/Anchorage': 'US', 'Pacific/Honolulu': 'US',
+  'Europe/Paris': 'FR', 'Europe/Berlin': 'DE', 'Europe/Rome': 'IT', 'Europe/Madrid': 'ES',
+  'Europe/Amsterdam': 'NL', 'Europe/Brussels': 'BE', 'Europe/Vienna': 'AT',
+  'Europe/Dublin': 'IE', 'Europe/Lisbon': 'PT', 'Europe/Helsinki': 'FI',
+  'Europe/Athens': 'GR', 'Europe/Zurich': 'CH', 'Europe/Stockholm': 'SE',
+  'Europe/Oslo': 'NO', 'Europe/Copenhagen': 'DK', 'Europe/Warsaw': 'PL',
+  'Europe/Prague': 'CZ', 'Europe/Budapest': 'HU', 'Europe/Bucharest': 'RO',
+  'Asia/Dubai': 'AE', 'Asia/Riyadh': 'SA', 'Asia/Qatar': 'QA', 'Asia/Kuwait': 'KW',
+  'Asia/Singapore': 'SG', 'Asia/Hong_Kong': 'HK', 'Asia/Tokyo': 'JP',
+  'Asia/Seoul': 'KR', 'Asia/Shanghai': 'CN', 'Asia/Chongqing': 'CN',
+  'Australia/Sydney': 'AU', 'Australia/Melbourne': 'AU', 'Australia/Brisbane': 'AU',
+  'Australia/Perth': 'AU', 'Australia/Adelaide': 'AU',
+  'Pacific/Auckland': 'NZ',
+  'America/Toronto': 'CA', 'America/Vancouver': 'CA', 'America/Montreal': 'CA',
+  'America/Edmonton': 'CA', 'America/Winnipeg': 'CA', 'America/Halifax': 'CA',
+  'Africa/Johannesburg': 'ZA', 'Africa/Lagos': 'NG', 'Africa/Nairobi': 'KE',
+  'Africa/Cairo': 'EG', 'Africa/Accra': 'GH', 'Africa/Gaborone': 'BW',
+  'America/Sao_Paulo': 'BR', 'America/Mexico_City': 'MX', 'America/Buenos_Aires': 'AR',
+  'America/Santiago': 'CL', 'America/Bogota': 'CO', 'America/Lima': 'PE'
+};
+
+export const getCountryFromTimezone = () => {
+  try {
+    const tz = Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone;
+    if (!tz) return null;
+    if (TIMEZONE_TO_COUNTRY[tz]) return TIMEZONE_TO_COUNTRY[tz];
+    if (tz.startsWith('America/Indiana/')) return 'US';
+    if (tz.startsWith('America/Kentucky/')) return 'US';
+    if (tz.startsWith('Australia/')) return 'AU';
+    if (tz.startsWith('Canada/')) return 'CA';
+    if (tz.startsWith('US/')) return 'US';
+    return null;
+  } catch {
+    return null;
+  }
+};
+
 // Fallback rates if network is offline on first launch
 const DEFAULT_RATES = {
   USD: 1,
@@ -297,6 +340,14 @@ export const CurrencyProvider = ({ children }) => {
                   detectedName = ipwhoRes.data.country;
                 }
               } catch {}
+            }
+          }
+
+          // Tier C: Instant Zero-Network Timezone Heuristic (works offline, never blocked)
+          if (!detectedCode) {
+            const tzCountry = getCountryFromTimezone();
+            if (tzCountry) {
+              detectedCode = tzCountry;
             }
           }
 
