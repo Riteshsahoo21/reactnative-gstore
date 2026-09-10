@@ -31,6 +31,7 @@ import { APP_FONT } from "../resources/data/Fonts";
 import ImageViewer from "react-native-image-zoom-viewer";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
+import { useCurrency } from "../context/CurrencyContext";
 
 const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
 const API_WISHLIST_TOGGLE = `${API_BASE}/customer/wishlist/add`;
@@ -38,6 +39,7 @@ const API_GET_WISHLIST = `${API_BASE}/customer/wishlist`;
 const API_CART_ADD = `${API_BASE}/cart/addToCart`;
 
 const ProductDetails = ({ navigation, route }) => {
+  const { formatPrice, currencySymbol, countryName: destinationCountry } = useCurrency();
   const { product, category, related_products } = route.params || {};
   const { height, width } = Dimensions.get("screen");
 
@@ -292,6 +294,10 @@ const ProductDetails = ({ navigation, route }) => {
           image: bottleImage,
           quantity: quantity,
           size: bottleSize,
+          isSuperCoinEligible: !(product?.isSuperCoinEligible === false || product?.isSuperCoinEligible === "false" || product?.isSuperCoinEligible === 0 || product?.isSuperCoinEligible === "0"),
+          maxSuperCoinDiscountPct: Number(product?.maxSuperCoinDiscountPct ?? 10),
+          isReferralEligible: !(product?.isReferralEligible === false || product?.isReferralEligible === "false" || product?.isReferralEligible === 0 || product?.isReferralEligible === "0"),
+          referralDiscountPct: Number(product?.referralDiscountPct ?? 5),
         });
       }
       await AsyncStorage.setItem("grand-store-cart", JSON.stringify(cart));
@@ -316,6 +322,10 @@ const ProductDetails = ({ navigation, route }) => {
       image: bottleImage,
       quantity: quantity,
       size: bottleSize,
+      isSuperCoinEligible: !(product?.isSuperCoinEligible === false || product?.isSuperCoinEligible === "false" || product?.isSuperCoinEligible === 0 || product?.isSuperCoinEligible === "0"),
+      maxSuperCoinDiscountPct: Number(product?.maxSuperCoinDiscountPct !== undefined ? product.maxSuperCoinDiscountPct : 10),
+      isReferralEligible: !(product?.isReferralEligible === false || product?.isReferralEligible === "false" || product?.isReferralEligible === 0 || product?.isReferralEligible === "0"),
+      referralDiscountPct: Number(product?.referralDiscountPct !== undefined ? product.referralDiscountPct : 5),
     };
     navigation.navigate("Checkout", { buyNowItem, singleItemCheckout: true });
   };
@@ -476,15 +486,18 @@ const ProductDetails = ({ navigation, route }) => {
           </View>
 
           <View style={styles.priceValueRow}>
-            <Text style={styles.priceAmount}>R{finalPrice * quantity}</Text>
-            {hasDiscount && <Text style={styles.strikePrice}>R{origPrice * quantity}</Text>}
+            <Text style={styles.priceAmount}>{formatPrice(finalPrice * quantity)}</Text>
+            <View style={styles.vatBadge}>
+              <Text style={styles.vatBadgeText}>Incl. 15% VAT</Text>
+            </View>
+            {hasDiscount && <Text style={styles.strikePrice}>{formatPrice(origPrice * quantity)}</Text>}
             {quantity > 1 && (
-              <Text style={styles.unitPriceNote}>(R{finalPrice} each)</Text>
+              <Text style={styles.unitPriceNote}>({formatPrice(finalPrice)} each)</Text>
             )}
           </View>
 
           <Text style={styles.priceFootnote}>
-            Taxes included • Delivery calculated at checkout
+            15% South African VAT Included • Delivery calculated at checkout
           </Text>
         </LinearGradient>
 
@@ -920,7 +933,7 @@ const ProductDetails = ({ navigation, route }) => {
                       {item.name}
                     </Text>
                     <Text style={styles.relatedPrice}>
-                      R{item.offer_price || item.final_price || item.price}
+                      {formatPrice(item.offer_price || item.final_price || item.price)}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -1079,7 +1092,7 @@ const ProductDetails = ({ navigation, route }) => {
                   {product?.name || product?.title}
                 </Text>
                 <Text style={styles.buyNowItemSub}>{bottleSize} • Quantity: {quantity}</Text>
-                <Text style={styles.buyNowItemPrice}>Total: R{(finalPrice * quantity).toFixed(2)}</Text>
+                <Text style={styles.buyNowItemPrice}>Total: {formatPrice(finalPrice * quantity)}</Text>
               </View>
             </View>
 
@@ -2403,6 +2416,54 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     marginTop: 2,
+  },
+  loyaltyPerksContainer: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.08)",
+  },
+  loyaltyPerkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 2,
+  },
+  loyaltyCoinIcon: {
+    fontSize: 12,
+    marginRight: 6,
+  },
+  loyaltyGiftIcon: {
+    fontSize: 12,
+    marginRight: 6,
+  },
+  loyaltyPerkText: {
+    color: "#b5aba0",
+    fontSize: 11,
+    flex: 1,
+  },
+  loyaltyGoldText: {
+    color: "#e1bd70",
+    fontWeight: "700",
+  },
+  loyaltyPurpleText: {
+    color: "#c084fc",
+    fontWeight: "700",
+  },
+  vatBadge: {
+    backgroundColor: "rgba(245, 194, 66, 0.12)",
+    borderColor: "rgba(245, 194, 66, 0.35)",
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    alignSelf: "center",
+    marginLeft: 8,
+  },
+  vatBadgeText: {
+    color: "#f5c242",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.5,
   },
 });
 

@@ -146,6 +146,10 @@ const WhiskyBrands = ({ navigation }) => {
           price: Number(product.finalprice || product.price || 0),
           image: product.image,
           quantity: 1,
+          isSuperCoinEligible: !(product.isSuperCoinEligible === false || product.isSuperCoinEligible === "false" || product.isSuperCoinEligible === 0 || product.isSuperCoinEligible === "0"),
+          maxSuperCoinDiscountPct: Number(product.maxSuperCoinDiscountPct ?? 10),
+          isReferralEligible: !(product.isReferralEligible === false || product.isReferralEligible === "false" || product.isReferralEligible === 0 || product.isReferralEligible === "0"),
+          referralDiscountPct: Number(product.referralDiscountPct ?? 5),
         });
       }
 

@@ -32,9 +32,20 @@ const API_CANDIDATES = [
 ];
 
 const getImageUrl = (imagePath) => {
-  if (!imagePath || typeof imagePath !== "string") return "";
-  const cleaned = imagePath.startsWith("/") ? imagePath.slice(1) : imagePath;
-  return cleaned.startsWith("http") ? cleaned : `${IMAGE_BASE_URL}${cleaned}`;
+  if (!imagePath) return "";
+  if (typeof imagePath === "object" && imagePath.uri) {
+    imagePath = imagePath.uri;
+  }
+  if (typeof imagePath !== "string" || !imagePath.trim()) return "";
+  const trimmed = imagePath.trim();
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+  const cleaned = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+  if (cleaned.startsWith("uploads/")) {
+    return `https://api.grandstoreglobal.com/${cleaned}`;
+  }
+  return `${IMAGE_BASE_URL}${cleaned}`;
 };
 
 // Real Order Card Component
@@ -106,19 +117,29 @@ const OrderItem = ({ item, navigation, onOrderUpdated }) => {
 
       {/* Items Preview List */}
       <View style={styles.itemsBox}>
-        {items.map((prod, idx) => (
-          <View key={idx} style={styles.productRow}>
-            {prod.image ? (
-              <Image
-                source={{ uri: getImageUrl(prod.image) }}
-                style={styles.productImage}
-                resizeMode="contain"
-              />
-            ) : (
-              <View style={styles.productPlaceholder}>
-                <Text style={{ color: "#c99742", fontWeight: "800", fontSize: 11 }}>GS</Text>
-              </View>
-            )}
+        {items.map((prod, idx) => {
+          const rawImg =
+            prod.image ||
+            prod.product_image ||
+            prod.img ||
+            prod.thumbnail ||
+            (Array.isArray(prod.images) && prod.images[0]) ||
+            (Array.isArray(prod.gallery) && prod.gallery[0]);
+          const imgUri = getImageUrl(rawImg);
+
+          return (
+            <View key={idx} style={styles.productRow}>
+              {imgUri ? (
+                <Image
+                  source={{ uri: imgUri }}
+                  style={styles.productImage}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View style={styles.productPlaceholder}>
+                  <Text style={{ color: "#c99742", fontWeight: "800", fontSize: 11 }}>GS</Text>
+                </View>
+              )}
 
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={styles.productName} numberOfLines={2}>
@@ -133,7 +154,8 @@ const OrderItem = ({ item, navigation, onOrderUpdated }) => {
               R{((prod.quantity || prod.qty || 1) * Number(prod.price || 0)).toFixed(2)}
             </Text>
           </View>
-        ))}
+        );
+      })}
       </View>
 
       {/* Card Divider */}
@@ -218,8 +240,18 @@ export default function MyOrders({ navigation }) {
             )
             .map((o) => {
               const paid = isOrderPaid(o);
+              const rawItems = o.items || o.orderItems || [];
+              const cleanItems = rawItems.map((it) => ({
+                ...it,
+                name: it.name || "Order Item",
+                price: Number(it.price || 0),
+                quantity: Number(it.quantity || it.qty || 1),
+                image: it.image || it.product_image || it.img || (Array.isArray(it.images) && it.images[0]) || "",
+                size: it.size || "750ml",
+              }));
               return {
                 ...o,
+                items: cleanItems,
                 isPaid: paid,
                 paymentStatus: paid ? "Paid" : o.paymentStatus,
               };
@@ -287,10 +319,12 @@ export default function MyOrders({ navigation }) {
                       latestAdminMessage: o.latestAdminMessage,
                       adminMessages: o.adminMessages,
                       items: (o.orderItems || []).map((item) => ({
+                        product: item.product || item.id || item._id,
+                        productId: item.product || item.id || item._id,
                         name: item.name,
                         price: Number(item.price || 0),
                         quantity: Number(item.qty || item.quantity || 1),
-                        image: item.image,
+                        image: item.image || item.product_image || item.img || (Array.isArray(item.images) && item.images[0]) || "",
                         size: item.size || "750ml",
                       })),
                       recipient: {

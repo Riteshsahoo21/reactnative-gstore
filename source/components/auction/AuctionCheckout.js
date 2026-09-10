@@ -17,6 +17,7 @@ import {
   StatusBar,
   Dimensions,
   Platform,
+  Keyboard,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import { WebView } from "react-native-webview";
@@ -26,6 +27,100 @@ import AppHeader from "../../widgets/AppHeader";
 import { API_BASE, getActiveServerHost } from "../../resources/data/Constants";
 
 const { width } = Dimensions.get("window");
+
+const GOOGLE_MAPS_API_KEY = "AIzaSyBGtqdVoKgd9sCmz2Y8wxuwa0WfDBaymGk";
+
+const CITY_POSTAL_CODES_MAP = {
+  sandton: [
+    { code: "2196", area: "Sandton Central / Sandhurst" },
+    { code: "2146", area: "Gallo Manor / Wendywood" },
+    { code: "2057", area: "Rivonia / Edenburg" },
+    { code: "2191", area: "Bryanston" },
+    { code: "2157", area: "Sunninghill / Woodmead" },
+    { code: "2128", area: "Morningside / Benmore" },
+  ],
+  johannesburg: [
+    { code: "2000", area: "Central / CBD" },
+    { code: "2001", area: "Braamfontein / Newtown" },
+    { code: "2198", area: "Houghton / Norwood" },
+    { code: "2094", area: "Kensington / Bedfordview" },
+    { code: "2092", area: "Westcliff / Melville" },
+    { code: "2193", area: "Parkview / Rosebank" },
+    { code: "2041", area: "Glenvista / Mulbarton" },
+  ],
+  "cape town": [
+    { code: "8001", area: "City Bowl / Gardens" },
+    { code: "8000", area: "Central CBD / Waterfront" },
+    { code: "8005", area: "Green Point / Camps Bay / Sea Point" },
+    { code: "7700", area: "Rondebosch / Claremont / Newlands" },
+    { code: "7800", area: "Constantia / Hout Bay" },
+    { code: "7530", area: "Bellville / Northern Suburbs" },
+    { code: "7441", area: "Bloubergstrand / Table View" },
+  ],
+  durban: [
+    { code: "4001", area: "CBD Central / Marine" },
+    { code: "4000", area: "Durban Central" },
+    { code: "4051", area: "Umhlanga Rocks / La Lucia" },
+    { code: "3610", area: "Pinetown / Kloof" },
+    { code: "4091", area: "Westville / Sherwood" },
+    { code: "4068", area: "Durban North" },
+  ],
+  pretoria: [
+    { code: "0002", area: "Pretoria Central / CBD" },
+    { code: "0001", area: "Pretoria North" },
+    { code: "0081", area: "Menlyn / Brooklyn / Hatfield" },
+    { code: "0181", area: "Waterkloof / Monument Park" },
+    { code: "0157", area: "Centurion / Lyttelton" },
+    { code: "0040", area: "Faerie Glen / Garsfontein" },
+  ],
+  stellenbosch: [
+    { code: "7600", area: "Stellenbosch Central / Winelands" },
+    { code: "7599", area: "University of Stellenbosch" },
+    { code: "7604", area: "Jamestown / De Zalze" },
+  ],
+  centurion: [
+    { code: "0157", area: "Centurion Central / Lyttelton" },
+    { code: "0149", area: "Eldoraigne / Wierdapark" },
+    { code: "0158", area: "Heuweloord / Amberfield" },
+  ],
+  "port elizabeth": [
+    { code: "6001", area: "Central / Summerstrand" },
+    { code: "6070", area: "Walmer" },
+    { code: "6000", area: "Main Port Elizabeth" },
+  ],
+  gqeberha: [
+    { code: "6001", area: "Central / Summerstrand" },
+    { code: "6070", area: "Walmer" },
+    { code: "6000", area: "Main Gqeberha" },
+  ],
+  bloemfontein: [
+    { code: "9301", area: "Central / Westdene" },
+    { code: "9300", area: "CBD" },
+    { code: "9320", area: "Langenhovenpark" },
+  ],
+  "east london": [
+    { code: "5201", area: "Central" },
+    { code: "5241", area: "Beacon Bay" },
+    { code: "5200", area: "East London CBD" },
+  ],
+  paarl: [
+    { code: "7646", area: "Paarl Central / Winelands" },
+    { code: "7620", area: "Paarl North" },
+  ],
+  "somerset west": [
+    { code: "7130", area: "Somerset West Central / Helderberg" },
+  ],
+  george: [
+    { code: "6529", area: "George Central / Garden Route" },
+    { code: "6530", area: "George Main" },
+  ],
+  knysna: [
+    { code: "6571", area: "Knysna Central / The Heads" },
+  ],
+  hermanus: [
+    { code: "7200", area: "Hermanus Central / Whale Coast" },
+  ],
+};
 
 const API_CANDIDATES = [
   API_BASE,
@@ -65,6 +160,12 @@ export default function AuctionCheckout({ route, navigation }) {
     postalCode: "8001",
     country: "South Africa",
   });
+
+  // Google Places Street Address Autocomplete
+  const [isSearchingAddress, setIsSearchingAddress] = useState(false);
+  const [addressPredictions, setAddressPredictions] = useState([]);
+  const [showAddressDropdown, setShowAddressDropdown] = useState(false);
+  const addressSearchTimeout = useRef(null);
 
   // Payment Selection: 'payfast' | 'bank_transfer'
   const [paymentMethod, setPaymentMethod] = useState("payfast");
@@ -117,6 +218,10 @@ export default function AuctionCheckout({ route, navigation }) {
           firstName: names[0] || "",
           lastName: names.slice(1).join(" ") || "",
           phone: parsed.phone || parsed.phoneNumber || "",
+          address: parsed.address || parsed.streetAddress || prev.address,
+          city: parsed.city || prev.city,
+          postalCode: parsed.postalCode || parsed.zipCode || prev.postalCode,
+          country: parsed.country || prev.country,
         }));
       } else if (storedToken) {
         setToken(storedToken);
@@ -125,6 +230,182 @@ export default function AuctionCheckout({ route, navigation }) {
       // ignore
     }
   };
+
+  const handleAddressChange = (text) => {
+    setAddressForm((prev) => ({ ...prev, address: text }));
+
+    if (addressSearchTimeout.current) clearTimeout(addressSearchTimeout.current);
+
+    if (!text || text.trim().length < 3) {
+      setAddressPredictions([]);
+      setShowAddressDropdown(false);
+      return;
+    }
+
+    addressSearchTimeout.current = setTimeout(async () => {
+      try {
+        setIsSearchingAddress(true);
+        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(
+          text.trim()
+        )}&key=${GOOGLE_MAPS_API_KEY}`;
+
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data && data.status === "OK" && Array.isArray(data.predictions)) {
+          setAddressPredictions(data.predictions);
+          setShowAddressDropdown(true);
+        } else {
+          setAddressPredictions([]);
+          setShowAddressDropdown(false);
+        }
+      } catch (err) {
+        console.log("Auction address autocomplete error:", err);
+      } finally {
+        setIsSearchingAddress(false);
+      }
+    }, 320);
+  };
+
+  const handleSelectAddressPrediction = async (prediction) => {
+    Keyboard.dismiss();
+    setShowAddressDropdown(false);
+
+    const mainText = prediction.structured_formatting?.main_text || prediction.description || "";
+    const secondaryText = prediction.structured_formatting?.secondary_text || "";
+    const parts = secondaryText.split(",").map((s) => s.trim()).filter(Boolean);
+
+    let fallbackCity = "";
+    let fallbackCountry = "";
+    if (parts.length >= 2) {
+      fallbackCountry = parts[parts.length - 1];
+      fallbackCity = parts[parts.length - 2];
+    } else if (parts.length === 1) {
+      fallbackCity = parts[0];
+    }
+
+    let initialPostal = "";
+    if (fallbackCity) {
+      const lower = fallbackCity.toLowerCase();
+      if (CITY_POSTAL_CODES_MAP[lower]?.[0]?.code) {
+        initialPostal = CITY_POSTAL_CODES_MAP[lower][0].code;
+      }
+    }
+
+    setAddressForm((prev) => ({
+      ...prev,
+      address: mainText,
+      city: fallbackCity || prev.city,
+      postalCode: initialPostal || prev.postalCode,
+      country: fallbackCountry || prev.country,
+    }));
+
+    try {
+      setIsSearchingAddress(true);
+      const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${prediction.place_id}&fields=address_components,formatted_address,geometry,name&key=${GOOGLE_MAPS_API_KEY}`;
+      const res = await fetch(url);
+      const data = await res.json();
+
+      if (data && data.status === "OK" && data.result) {
+        const components = data.result.address_components || [];
+        let stNumber = "";
+        let route = "";
+        let subpremise = "";
+        let premise = "";
+        let suburb = "";
+        let localityCity = "";
+        let postalTownCity = "";
+        let adminCity = "";
+        let detectedPostal = "";
+        let detectedCountry = "";
+
+        for (const c of components) {
+          const types = c.types || [];
+          if (types.includes("street_number")) stNumber = c.long_name;
+          if (types.includes("route")) route = c.long_name;
+          if (types.includes("subpremise")) subpremise = c.long_name;
+          if (types.includes("premise")) premise = c.long_name;
+          if (types.includes("sublocality_level_1") || types.includes("sublocality")) suburb = c.long_name;
+          if (types.includes("locality")) localityCity = c.long_name;
+          if (types.includes("postal_town")) postalTownCity = c.long_name;
+          if (types.includes("administrative_area_level_2")) adminCity = c.long_name;
+          if (types.includes("postal_code")) detectedPostal = c.long_name;
+          if (types.includes("country")) detectedCountry = c.long_name;
+        }
+
+        const finalCity = localityCity || postalTownCity || suburb || adminCity || fallbackCity;
+
+        let streetLine = "";
+        if (stNumber && route) streetLine = `${stNumber} ${route}`;
+        else if (route) streetLine = route;
+        else if (mainText) streetLine = mainText;
+        else if (data.result.name) streetLine = data.result.name;
+        else streetLine = (data.result.formatted_address || "").split(",")[0];
+
+        if (subpremise) streetLine = `Unit ${subpremise}, ${streetLine}`;
+        else if (premise && !streetLine.includes(premise)) streetLine = `${premise}, ${streetLine}`;
+
+        if (suburb && suburb !== finalCity && !streetLine.includes(suburb)) {
+          streetLine = `${streetLine}, ${suburb}`;
+        }
+
+        if (!detectedPostal && finalCity) {
+          const lowerCity = finalCity.toLowerCase();
+          if (CITY_POSTAL_CODES_MAP[lowerCity]?.[0]?.code) {
+            detectedPostal = CITY_POSTAL_CODES_MAP[lowerCity][0].code;
+          } else {
+            const matchKey = Object.keys(CITY_POSTAL_CODES_MAP).find(
+              (k) => lowerCity.includes(k) || k.includes(lowerCity)
+            );
+            if (matchKey && CITY_POSTAL_CODES_MAP[matchKey]?.[0]?.code) {
+              detectedPostal = CITY_POSTAL_CODES_MAP[matchKey][0].code;
+            }
+          }
+        }
+
+        const resolvedCountry = detectedCountry || fallbackCountry || "South Africa";
+
+        setAddressForm((prev) => ({
+          ...prev,
+          address: streetLine || prev.address,
+          city: finalCity || prev.city,
+          postalCode: detectedPostal || prev.postalCode,
+          country: resolvedCountry || prev.country,
+        }));
+
+        if (resolvedCountry.toLowerCase().includes("south africa") || resolvedCountry.toLowerCase() === "za") {
+          setDynamicShipping(250);
+        } else {
+          setDynamicShipping(1500);
+        }
+      }
+    } catch (err) {
+      console.log("Error fetching place details:", err);
+    } finally {
+      setIsSearchingAddress(false);
+    }
+  };
+
+  const handleCityChange = (text) => {
+    const lower = text.toLowerCase().trim();
+    let newPostal = addressForm.postalCode;
+    if (CITY_POSTAL_CODES_MAP[lower]?.[0]?.code) {
+      newPostal = CITY_POSTAL_CODES_MAP[lower][0].code;
+    }
+    setAddressForm((prev) => ({
+      ...prev,
+      city: text,
+      postalCode: newPostal,
+    }));
+  };
+
+  useEffect(() => {
+    return () => {
+      if (addressSearchTimeout.current) {
+        clearTimeout(addressSearchTimeout.current);
+      }
+    };
+  }, []);
 
   const fetchLot = async () => {
     const targetId = lotId || lot?._id;
@@ -491,7 +772,11 @@ export default function AuctionCheckout({ route, navigation }) {
         </View>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Lot Summary Card (Always Visible) */}
         <View style={styles.lotSummaryCard}>
           <Image source={{ uri: lotImage }} style={styles.lotSummaryThumb} resizeMode="contain" />
@@ -550,36 +835,73 @@ export default function AuctionCheckout({ route, navigation }) {
               />
             </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>STREET ADDRESS</Text>
+            <View style={[styles.inputGroup, { zIndex: 99 }]}>
+              <View style={styles.labelRowWithIcon}>
+                <Text style={styles.inputLabel}>STREET ADDRESS *</Text>
+                {isSearchingAddress && (
+                  <ActivityIndicator size="small" color="#c99742" style={{ marginLeft: 6 }} />
+                )}
+              </View>
               <TextInput
                 style={styles.textInput}
                 value={addressForm.address}
-                onChangeText={(text) => setAddressForm((prev) => ({ ...prev, address: text }))}
-                placeholder="Street address & suite/apartment"
+                onChangeText={handleAddressChange}
+                placeholder="Street address, house or building number..."
                 placeholderTextColor="#666"
               />
+              {showAddressDropdown && addressPredictions.length > 0 && (
+                <View style={styles.predictionsDropdown}>
+                  <View style={styles.predictionsHeader}>
+                    <Text style={styles.predictionsHeaderText}>SUGGESTED ADDRESSES</Text>
+                    <Text style={styles.googlePoweredText}>Powered by Google Maps</Text>
+                  </View>
+                  {addressPredictions.map((p, idx) => (
+                    <TouchableOpacity
+                      key={p.place_id || idx}
+                      style={[
+                        styles.predictionItem,
+                        idx === addressPredictions.length - 1 && { borderBottomWidth: 0 },
+                      ]}
+                      onPress={() => handleSelectAddressPrediction(p)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.predictionPinIcon}>📍</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.predictionMainText} numberOfLines={1}>
+                          {p.structured_formatting?.main_text || p.description}
+                        </Text>
+                        {p.structured_formatting?.secondary_text && (
+                          <Text style={styles.predictionSubText} numberOfLines={1}>
+                            {p.structured_formatting.secondary_text}
+                          </Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
 
             <View style={styles.rowInputs}>
               <View style={styles.halfCol}>
-                <Text style={styles.inputLabel}>CITY</Text>
+                <Text style={styles.inputLabel}>CITY *</Text>
                 <TextInput
                   style={styles.textInput}
                   value={addressForm.city}
-                  onChangeText={(text) => setAddressForm((prev) => ({ ...prev, city: text }))}
+                  onChangeText={handleCityChange}
                   placeholder="City"
                   placeholderTextColor="#666"
                 />
               </View>
               <View style={styles.halfCol}>
-                <Text style={styles.inputLabel}>POSTAL CODE</Text>
+                <Text style={styles.inputLabel}>POSTAL CODE *</Text>
                 <TextInput
                   style={styles.textInput}
                   value={addressForm.postalCode}
                   onChangeText={(text) => setAddressForm((prev) => ({ ...prev, postalCode: text }))}
                   placeholder="Postal Code"
                   placeholderTextColor="#666"
+                  keyboardType="numeric"
                 />
               </View>
             </View>
@@ -589,7 +911,14 @@ export default function AuctionCheckout({ route, navigation }) {
               <TextInput
                 style={styles.textInput}
                 value={addressForm.country}
-                onChangeText={(text) => setAddressForm((prev) => ({ ...prev, country: text }))}
+                onChangeText={(text) => {
+                  setAddressForm((prev) => ({ ...prev, country: text }));
+                  if (text.toLowerCase().includes("south africa") || text.toLowerCase() === "za") {
+                    setDynamicShipping(250);
+                  } else {
+                    setDynamicShipping(1500);
+                  }
+                }}
                 placeholder="South Africa"
                 placeholderTextColor="#666"
               />
@@ -1096,6 +1425,11 @@ const styles = StyleSheet.create({
   inputGroup: {
     marginBottom: 12,
   },
+  labelRowWithIcon: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 4,
+  },
   inputLabel: {
     color: "rgba(255,255,255,0.45)",
     fontSize: 9,
@@ -1112,6 +1446,59 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     color: "#fff",
     fontSize: 13,
+  },
+  predictionsDropdown: {
+    marginTop: 6,
+    backgroundColor: "#16130f",
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "rgba(201, 151, 66, 0.4)",
+    overflow: "hidden",
+    elevation: 10,
+    zIndex: 999,
+  },
+  predictionsHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.06)",
+  },
+  predictionsHeaderText: {
+    color: "#c99742",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+  },
+  googlePoweredText: {
+    color: "#666",
+    fontSize: 9,
+    fontStyle: "italic",
+  },
+  predictionItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.05)",
+  },
+  predictionPinIcon: {
+    fontSize: 14,
+    marginRight: 10,
+  },
+  predictionMainText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  predictionSubText: {
+    color: "#888",
+    fontSize: 11,
+    marginTop: 1,
   },
   actionBtn: {
     borderRadius: 12,

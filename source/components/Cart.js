@@ -59,6 +59,10 @@ const Cart = ({ navigation }) => {
         image: item.image || item.product_image,
         quantity: Math.max(1, Number(item.quantity || 1)),
         size: item.size || "750ml",
+        isSuperCoinEligible: !(item.isSuperCoinEligible === false || item.isSuperCoinEligible === "false" || item.isSuperCoinEligible === 0 || item.isSuperCoinEligible === "0" || item.product?.isSuperCoinEligible === false || item.product?.isSuperCoinEligible === "false"),
+        maxSuperCoinDiscountPct: Number(item.maxSuperCoinDiscountPct ?? item.product?.maxSuperCoinDiscountPct ?? 10),
+        isReferralEligible: !(item.isReferralEligible === false || item.isReferralEligible === "false" || item.isReferralEligible === 0 || item.isReferralEligible === "0" || item.product?.isReferralEligible === false || item.product?.isReferralEligible === "false"),
+        referralDiscountPct: Number(item.referralDiscountPct ?? item.product?.referralDiscountPct ?? 5),
       }));
 
       setCartItems(formatted);

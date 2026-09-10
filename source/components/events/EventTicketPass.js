@@ -766,18 +766,10 @@ export default function EventTicketPass({ route, navigation }) {
         })
       : "Confirmed Date";
 
-    const qrPayload = JSON.stringify({
-      ticketId: b.ticketId,
-      gsReference: b.gsReference,
-      event: eventTitle,
-      date: eventObj.date,
-      tier: b.ticketType,
-      quantity: b.quantity,
-    });
-
+    const ticketCode = b.ticketId || b.gsReference || b._id;
     const qrImageUri =
-      b.qrCodeData ||
-      `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(qrPayload)}`;
+      `https://api.qrserver.com/v1/create-qr-code/?size=600x600&ecc=M&margin=1&data=${encodeURIComponent(ticketCode)}` ||
+      b.qrCodeData;
 
     return (
       <Modal
@@ -1018,14 +1010,8 @@ export default function EventTicketPass({ route, navigation }) {
                 source={{
                   uri:
                     b.qrCodeData ||
-                    `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
-                      JSON.stringify({
-                        ticketId: b.ticketId,
-                        gsReference: b.gsReference,
-                        event: eventObj.title,
-                        tier: b.ticketType,
-                        quantity: b.quantity,
-                      })
+                    `https://api.qrserver.com/v1/create-qr-code/?size=300x300&ecc=M&margin=1&data=${encodeURIComponent(
+                      b.ticketId || b.gsReference || b._id
                     )}`,
                 }}
                 style={styles.qrImage}

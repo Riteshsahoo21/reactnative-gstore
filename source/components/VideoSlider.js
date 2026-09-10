@@ -99,6 +99,8 @@ const VideoSlider = () => {
             poster={item.poster}
             posterResizeMode="cover"
             paused={currentIndex !== index} // Play only current video
+            muted={true}
+            volume={0}
             repeat
           />
         )}

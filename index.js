@@ -42,6 +42,7 @@ import MyBids from './source/components/auction/MyBids';
 import CustomerDashboard from './source/components/CustomerDashboard';
 import NotificationsScreen from './source/components/NotificationsScreen';
 import GlobalAgeVerificationModal from './source/components/GlobalAgeVerificationModal';
+import { CurrencyProvider } from './source/context/CurrencyContext';
 const Rootstack = createNativeStackNavigator();
 
 const linking = {
@@ -65,7 +66,7 @@ const linking = {
 
 const App = () => {
   return (
-    <>
+    <CurrencyProvider>
       <NavigationContainer
         linking={linking}
         ref={navigatorRef => {
@@ -237,7 +238,7 @@ const App = () => {
       </Rootstack.Navigator>
     </NavigationContainer>
     <GlobalAgeVerificationModal />
-    </>
+    </CurrencyProvider>
   );
 };
 

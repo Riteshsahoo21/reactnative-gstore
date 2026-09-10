@@ -1,7 +1,7 @@
 /* eslint-disable react-native/no-inline-styles */
 /* eslint-disable quotes */
 /* eslint-disable prettier/prettier */
-import React, { useState, useMemo, useRef, useEffect } from "react";
+import React, { useState, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -10,11 +10,15 @@ import {
   Image,
   ScrollView,
   StyleSheet,
-  Animated,
   Platform,
   Keyboard,
+  Modal,
+  SafeAreaView,
+  StatusBar,
 } from "react-native";
 import { APP_FONT } from "../resources/data/Fonts";
+
+import { useCurrency } from "../context/CurrencyContext";
 
 const IMAGE_BASE_URL = "https://ik.imagekit.io/thegrandstore/images/products/";
 
@@ -24,22 +28,7 @@ const getImageUrl = (imagePath) => {
   return cleaned.startsWith("http") ? cleaned : `${IMAGE_BASE_URL}${cleaned}`;
 };
 
-const formatPrice = (value) => {
-  if (value === null || value === undefined || value === "") return "0";
-  const cleaned =
-    typeof value === "number"
-      ? value
-      : parseFloat(String(value).replace(/[^0-9.-]+/g, ""));
-  if (isNaN(cleaned)) return String(value).replace(/^R\s*/i, "").trim();
 
-  if (cleaned % 1 === 0) {
-    return cleaned.toLocaleString("en-US");
-  }
-  return cleaned.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-};
 
 const TRENDING_CHIPS = [
   { label: "🥃 Single Malt", query: "Single Malt" },
@@ -55,6 +44,7 @@ const TRENDING_CHIPS = [
 /**
  * Luxury Auto-Recommended Search Component for Mobile React Native
  * Supports:
+ * - Standalone dedicated search overlay that eliminates nested scroll conflicts on Android
  * - Empty query: curated trending searches & top recommended bottles
  * - Active typing: live multi-field predictive matching (name, brand, category, style, country)
  * - Zero match fallback: "You might also like" recommendations
@@ -74,25 +64,9 @@ const SearchAutoRecommend = ({
   showShopViewAll = true,
   shopViewAllText = "View all results in Shop →",
 }) => {
+  const { formatPrice } = useCurrency();
   const [isFocused, setIsFocused] = useState(false);
-  const fadeAnim = useRef(new Animated.Value(0)).current;
   const inputRef = useRef(null);
-
-  useEffect(() => {
-    if (isFocused) {
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }).start();
-    } else {
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [isFocused]);
 
   // Curated top recommended bottles (picks diverse premium bottles across categories)
   const topRecommendations = useMemo(() => {
@@ -105,7 +79,7 @@ const SearchAutoRecommend = ({
 
     for (const p of products) {
       const cat = String(p.category || p.type || "").toLowerCase();
-      if (!seenCats.has(cat) && diverse.length < 6) {
+      if (!seenCats.has(cat) && diverse.length < 8) {
         seenCats.add(cat);
         diverse.push(p);
       } else {
@@ -114,7 +88,7 @@ const SearchAutoRecommend = ({
     }
 
     const combined = [...diverse, ...rest];
-    return combined.slice(0, 6);
+    return combined.slice(0, 10);
   }, [products]);
 
   // Live matching recommendations when typing
@@ -154,13 +128,12 @@ const SearchAutoRecommend = ({
     }
 
     scored.sort((a, b) => b.score - a.score);
-    return scored.map((s) => s.product).slice(0, 8);
+    return scored.map((s) => s.product);
   }, [query, products]);
 
   const handleProductPress = (item) => {
     setIsFocused(false);
     Keyboard.dismiss();
-
     if (onSelectProduct) {
       onSelectProduct(item);
       return;
@@ -169,16 +142,12 @@ const SearchAutoRecommend = ({
     if (navigation && navigation.push) {
       navigation.push("ProductDetails", {
         product: item,
-        category:
-          categories.find((c) => c?.id === item?.category_id) || {
-            name: item.category || "Spirits",
-          },
-        related_products: products
+        category: { name: item.category || "Spirits" },
+        recommendedProducts: products
           .filter(
             (p) =>
-              p &&
               (p.id || p.productid || p._id) !==
-                (item.id || item.productid || item._id)
+              (item.id || item.productid || item._id)
           )
           .slice(0, 8),
       });
@@ -192,7 +161,6 @@ const SearchAutoRecommend = ({
 
   const handleChipPress = (chipQuery) => {
     setQuery(chipQuery);
-    setIsFocused(true);
   };
 
   const handleClear = () => {
@@ -214,54 +182,96 @@ const SearchAutoRecommend = ({
 
   return (
     <View style={[styles.wrapper, containerStyle]}>
-      {/* Search Input Bar */}
-      <View style={[styles.searchBar, isFocused && styles.searchBarFocused]}>
+      {/* Inline Search Bar Trigger (tapping opens the dedicated search view) */}
+      <TouchableOpacity
+        activeOpacity={0.88}
+        onPress={() => setIsFocused(true)}
+        style={[styles.searchBar, inputStyle]}
+      >
         <Image
           source={require("../resources/assets/discover.png")}
-          style={[styles.searchIcon, isFocused && { tintColor: "#f5c242" }]}
+          style={styles.searchIcon}
           resizeMode="contain"
         />
 
-        <TextInput
-          ref={inputRef}
-          style={[styles.input, inputStyle]}
-          placeholder={placeholder}
-          placeholderTextColor="#777777"
-          value={query}
-          onChangeText={(text) => {
-            setQuery(text);
-            if (!isFocused) setIsFocused(true);
-          }}
-          onFocus={() => setIsFocused(true)}
-          returnKeyType="search"
-          onSubmitEditing={handleViewAllInShop}
-        />
+        <Text
+          style={[
+            styles.inputDisplay,
+            query ? styles.inputDisplayTextActive : styles.inputDisplayTextPlaceholder,
+          ]}
+          numberOfLines={1}
+        >
+          {query || placeholder}
+        </Text>
 
         {query.length > 0 && (
           <TouchableOpacity
-            onPress={handleClear}
+            onPress={(e) => {
+              e?.stopPropagation?.();
+              handleClear();
+            }}
             style={styles.clearBtn}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Text style={styles.clearBtnText}>✕</Text>
           </TouchableOpacity>
         )}
+      </TouchableOpacity>
 
-        {isFocused && (
-          <TouchableOpacity
-            onPress={handleDismiss}
-            style={styles.collapseBtn}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.collapseBtnText}>Done</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      {/* Dedicated Search Modal with Completely Independent, Buttery-Smooth Scroll */}
+      <Modal
+        visible={isFocused}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={handleDismiss}
+        statusBarTranslucent={true}
+      >
+        <SafeAreaView style={styles.modalOverlay}>
+          <StatusBar backgroundColor="#0c0b08" barStyle="light-content" />
 
-      {/* Auto Recommended Dropdown Overlay */}
-      {isFocused && (
-        <Animated.View style={[styles.dropdownContainer, { opacity: fadeAnim }]}>
-          {/* Dropdown Header Row */}
+          {/* Modal Header with Live Interactive TextInput */}
+          <View style={styles.modalHeader}>
+            <View style={styles.modalSearchBar}>
+              <Image
+                source={require("../resources/assets/discover.png")}
+                style={[styles.searchIcon, { tintColor: "#f5c242" }]}
+                resizeMode="contain"
+              />
+
+              <TextInput
+                ref={inputRef}
+                style={styles.modalInput}
+                placeholder={placeholder}
+                placeholderTextColor="#777777"
+                value={query}
+                onChangeText={setQuery}
+                autoFocus={true}
+                returnKeyType="search"
+                onSubmitEditing={handleViewAllInShop}
+              />
+
+              {query.length > 0 && (
+                <TouchableOpacity
+                  onPress={handleClear}
+                  style={styles.clearBtn}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Text style={styles.clearBtnText}>✕</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <TouchableOpacity
+              onPress={handleDismiss}
+              style={styles.modalCancelBtn}
+              activeOpacity={0.75}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Text style={styles.modalCancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Sub-Header with Result Category/Count */}
           <View style={styles.dropdownHeader}>
             <Text style={styles.dropdownHeaderTitle}>
               {query.trim().length === 0
@@ -271,20 +281,23 @@ const SearchAutoRecommend = ({
                 : "💡 SEARCH RECOMMENDATIONS"}
             </Text>
 
-            <TouchableOpacity
-              onPress={handleDismiss}
-              style={styles.closeHeaderBtn}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={styles.closeHeaderBtnText}>✕</Text>
-            </TouchableOpacity>
+            {query.trim().length > 0 && (
+              <TouchableOpacity
+                onPress={handleClear}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={styles.clearAllText}>Clear search</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
+          {/* Dedicated Smooth Scroll View (100% native scroll without parent interception) */}
           <ScrollView
-            keyboardShouldPersistTaps="handled"
-            nestedScrollEnabled={true}
-            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="always"
+            keyboardDismissMode="on-drag"
+            showsVerticalScrollIndicator={true}
             style={styles.scrollList}
+            contentContainerStyle={styles.scrollContent}
           >
             {/* When search query is empty: Trending category chips */}
             {query.trim().length === 0 && (
@@ -293,6 +306,7 @@ const SearchAutoRecommend = ({
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="always"
                   contentContainerStyle={styles.chipsRow}
                 >
                   {TRENDING_CHIPS.map((chip, idx) => (
@@ -353,7 +367,7 @@ const SearchAutoRecommend = ({
                           {item.name}
                         </Text>
                         <Text style={styles.productPrice}>
-                          R{formatPrice(price)}
+                          {formatPrice(price)}
                         </Text>
                       </View>
 
@@ -409,7 +423,7 @@ const SearchAutoRecommend = ({
                           {item.name}
                         </Text>
                         <Text style={styles.productPrice}>
-                          R{formatPrice(price)}
+                          {formatPrice(price)}
                         </Text>
                       </View>
 
@@ -443,7 +457,7 @@ const SearchAutoRecommend = ({
                 </Text>
 
                 <View style={styles.productsList}>
-                  {topRecommendations.slice(0, 4).map((item, idx) => {
+                  {topRecommendations.slice(0, 6).map((item, idx) => {
                     const price = item.offer_active
                       ? item.offer_price
                       : item.price;
@@ -476,7 +490,7 @@ const SearchAutoRecommend = ({
                             {item.name}
                           </Text>
                           <Text style={styles.productPrice}>
-                            R{formatPrice(price)}
+                            {formatPrice(price)}
                           </Text>
                         </View>
 
@@ -488,8 +502,8 @@ const SearchAutoRecommend = ({
               </View>
             )}
           </ScrollView>
-        </Animated.View>
-      )}
+        </SafeAreaView>
+      </Modal>
     </View>
   );
 };
@@ -507,31 +521,27 @@ const styles = StyleSheet.create({
     backgroundColor: "#191815",
     borderRadius: 12,
     paddingHorizontal: 12,
-    paddingVertical: Platform.OS === "android" ? 3 : 8,
-    borderColor: "rgba(201, 151, 66, 0.4)",
+    paddingVertical: Platform.OS === "android" ? 7 : 10,
+    borderColor: "rgba(201, 151, 66, 0.45)",
     borderWidth: 1.2,
-  },
-  searchBarFocused: {
-    borderColor: "#f5c242",
-    backgroundColor: "#1e1c17",
-    shadowColor: "#f5c242",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 5,
-    elevation: 6,
   },
   searchIcon: {
     width: 17,
     height: 17,
     tintColor: "#c99742",
-    marginRight: 8,
+    marginRight: 10,
   },
-  input: {
+  inputDisplay: {
     flex: 1,
     fontSize: 14,
-    color: "#f0ece3",
-    paddingVertical: 4,
     fontFamily: APP_FONT,
+    paddingVertical: 2,
+  },
+  inputDisplayTextPlaceholder: {
+    color: "#777777",
+  },
+  inputDisplayTextActive: {
+    color: "#f0ece3",
   },
   clearBtn: {
     paddingHorizontal: 6,
@@ -542,49 +552,59 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "bold",
   },
-  collapseBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    backgroundColor: "rgba(245, 194, 66, 0.15)",
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: "rgba(245, 194, 66, 0.4)",
-    marginLeft: 4,
+
+  // Modal Full Screen Overlay
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "#0d0c0a",
+    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 24) + 6 : 0,
   },
-  collapseBtnText: {
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.08)",
+  },
+  modalSearchBar: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#191815",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "android" ? 4 : 8,
+    borderColor: "#f5c242",
+    borderWidth: 1.2,
+  },
+  modalInput: {
+    flex: 1,
+    fontSize: 14,
+    color: "#f0ece3",
+    paddingVertical: 4,
+    fontFamily: APP_FONT,
+  },
+  modalCancelBtn: {
+    paddingLeft: 12,
+    paddingVertical: 6,
+  },
+  modalCancelBtnText: {
     color: "#f5c242",
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: "700",
   },
 
-  // Dropdown Overlay
-  dropdownContainer: {
-    position: "absolute",
-    top: 52,
-    left: 0,
-    right: 0,
-    backgroundColor: "#12110e",
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: "rgba(245, 194, 66, 0.5)",
-    zIndex: 99999,
-    elevation: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.6,
-    shadowRadius: 12,
-    maxHeight: 440,
-    overflow: "hidden",
-  },
+  // Sub-header
   dropdownHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(255, 255, 255, 0.08)",
-    backgroundColor: "rgba(245, 194, 66, 0.06)",
+    borderBottomColor: "rgba(255, 255, 255, 0.06)",
+    backgroundColor: "rgba(245, 194, 66, 0.04)",
   },
   dropdownHeaderTitle: {
     color: "#f5c242",
@@ -592,23 +612,25 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0.8,
   },
-  closeHeaderBtn: {
-    padding: 3,
+  clearAllText: {
+    color: "rgba(245, 194, 66, 0.8)",
+    fontSize: 11,
+    fontWeight: "600",
   },
-  closeHeaderBtnText: {
-    color: "#888888",
-    fontSize: 14,
-    fontWeight: "bold",
-  },
+
+  // Scroll Container
   scrollList: {
-    maxHeight: 390,
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 60,
   },
 
   // Chips section
   chipsSection: {
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 6,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255, 255, 255, 0.06)",
   },
@@ -628,8 +650,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(245, 194, 66, 0.1)",
     borderColor: "rgba(245, 194, 66, 0.25)",
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
     borderRadius: 20,
   },
   chipText: {
@@ -640,20 +662,20 @@ const styles = StyleSheet.create({
 
   // Products list in dropdown
   productsList: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
   productRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 9,
-    paddingHorizontal: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255, 255, 255, 0.05)",
   },
   productImgWrap: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
     borderRadius: 8,
     backgroundColor: "#000000",
     borderWidth: 1,
@@ -663,8 +685,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   productImg: {
-    width: 38,
-    height: 38,
+    width: 42,
+    height: 42,
   },
   imgPlaceholder: {
     width: "100%",
@@ -680,7 +702,7 @@ const styles = StyleSheet.create({
   },
   productInfo: {
     flex: 1,
-    marginLeft: 11,
+    marginLeft: 12,
     justifyContent: "center",
   },
   tagRow: {
@@ -750,8 +772,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(245, 194, 66, 0.35)",
     borderRadius: 8,
-    paddingVertical: 9,
-    marginTop: 8,
+    paddingVertical: 11,
+    marginTop: 10,
     marginBottom: 4,
     alignItems: "center",
     justifyContent: "center",
@@ -765,11 +787,11 @@ const styles = StyleSheet.create({
 
   // No match
   noMatchContainer: {
-    padding: 16,
+    padding: 20,
     alignItems: "center",
   },
   noMatchEmoji: {
-    fontSize: 26,
+    fontSize: 28,
     marginBottom: 6,
   },
   noMatchTitle: {

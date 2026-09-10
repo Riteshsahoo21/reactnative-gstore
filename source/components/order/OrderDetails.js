@@ -30,9 +30,20 @@ const API_CANDIDATES = [
 ];
 
 const getImageUrl = (imagePath) => {
-  if (!imagePath || typeof imagePath !== "string") return "";
-  const cleaned = imagePath.startsWith("/") ? imagePath.slice(1) : imagePath;
-  return cleaned.startsWith("http") ? cleaned : `${IMAGE_BASE_URL}${cleaned}`;
+  if (!imagePath) return "";
+  if (typeof imagePath === "object" && imagePath.uri) {
+    imagePath = imagePath.uri;
+  }
+  if (typeof imagePath !== "string" || !imagePath.trim()) return "";
+  const trimmed = imagePath.trim();
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+  const cleaned = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+  if (cleaned.startsWith("uploads/")) {
+    return `https://api.grandstoreglobal.com/${cleaned}`;
+  }
+  return `${IMAGE_BASE_URL}${cleaned}`;
 };
 
 export default function OrderDetails({ route, navigation }) {
@@ -91,7 +102,15 @@ export default function OrderDetails({ route, navigation }) {
 
     if (initialOrder) {
       syncPaidStatus(initialOrder).then((finalOrd) => {
-        setOrder(finalOrd);
+        const cleanItems = (finalOrd.items || finalOrd.orderItems || []).map((it) => ({
+          ...it,
+          name: it.name || "Order Item",
+          price: Number(it.price || 0),
+          quantity: Number(it.quantity || it.qty || 1),
+          image: it.image || it.product_image || it.img || (Array.isArray(it.images) && it.images[0]) || "",
+          size: it.size || "750ml",
+        }));
+        setOrder({ ...finalOrd, items: cleanItems });
         setIsLoading(false);
       });
       return;
@@ -111,7 +130,15 @@ export default function OrderDetails({ route, navigation }) {
             !String(parsedLast.name || "").includes("Buld Light")
           ) {
             const synced = await syncPaidStatus(parsedLast);
-            setOrder(synced);
+            const cleanItems = (synced.items || synced.orderItems || []).map((it) => ({
+              ...it,
+              name: it.name || "Order Item",
+              price: Number(it.price || 0),
+              quantity: Number(it.quantity || it.qty || 1),
+              image: it.image || it.product_image || it.img || (Array.isArray(it.images) && it.images[0]) || "",
+              size: it.size || "750ml",
+            }));
+            setOrder({ ...synced, items: cleanItems });
             setIsLoading(false);
             return;
           }
@@ -131,7 +158,16 @@ export default function OrderDetails({ route, navigation }) {
                 !String(o.name || "").includes("Besperados")
             );
             if (cleanList.length > 0) {
-              setOrder(cleanList[0]);
+              const synced = await syncPaidStatus(cleanList[0]);
+              const cleanItems = (synced.items || synced.orderItems || []).map((it) => ({
+                ...it,
+                name: it.name || "Order Item",
+                price: Number(it.price || 0),
+                quantity: Number(it.quantity || it.qty || 1),
+                image: it.image || it.product_image || it.img || (Array.isArray(it.images) && it.images[0]) || "",
+                size: it.size || "750ml",
+              }));
+              setOrder({ ...synced, items: cleanItems });
               setIsLoading(false);
               return;
             }
@@ -174,10 +210,12 @@ export default function OrderDetails({ route, navigation }) {
                       isPaid: first.isPaid || first.paymentStatus === "Paid",
                       courierName: first.shipments?.[0]?.selectedCourier?.courierName || "Courier Guy",
                       items: (first.orderItems || []).map((item) => ({
+                        product: item.product || item.id || item._id,
+                        productId: item.product || item.id || item._id,
                         name: item.name,
                         price: Number(item.price || 0),
                         quantity: Number(item.qty || item.quantity || 1),
-                        image: item.image,
+                        image: item.image || item.product_image || item.img || (Array.isArray(item.images) && item.images[0]) || "",
                         size: item.size || "750ml",
                       })),
                       recipient: {
@@ -438,19 +476,28 @@ export default function OrderDetails({ route, navigation }) {
             const unitPrice = Number(prod.price || 0);
             const lineTotal = qty * unitPrice;
 
-            return (
-              <View key={idx} style={styles.productRow}>
-                {prod.image ? (
-                  <Image
-                    source={{ uri: getImageUrl(prod.image) }}
-                    style={styles.productImg}
-                    resizeMode="contain"
-                  />
-                ) : (
-                  <View style={styles.productPlaceholder}>
-                    <Text style={styles.placeholderText}>GS</Text>
-                  </View>
-                )}
+              const rawImg =
+                prod.image ||
+                prod.product_image ||
+                prod.img ||
+                prod.thumbnail ||
+                (Array.isArray(prod.images) && prod.images[0]) ||
+                (Array.isArray(prod.gallery) && prod.gallery[0]);
+              const imgUri = getImageUrl(rawImg);
+
+              return (
+                <View key={idx} style={styles.productRow}>
+                  {imgUri ? (
+                    <Image
+                      source={{ uri: imgUri }}
+                      style={styles.productImg}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View style={styles.productPlaceholder}>
+                      <Text style={styles.placeholderText}>GS</Text>
+                    </View>
+                  )}
 
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={styles.productTitle} numberOfLines={2}>

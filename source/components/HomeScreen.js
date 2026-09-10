@@ -28,6 +28,8 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import { API_BASE, getActiveServerHost, getCandidateBases, getActiveApiBase, setActiveApiBase } from "../resources/data/Constants";
 import { getCategoryIcon } from "../helpers/categoryIcons";
+import { useCurrency } from "../context/CurrencyContext";
+import LocaleModal from "./LocaleModal";
 
 // === Constants ===
 // === API Constants ===
@@ -46,23 +48,7 @@ const showMessage = (message) => {
   }
 };
 
-// === Price / Currency Formatter (ensures "R" and numbers never wrap) ===
-const formatPrice = (value) => {
-  if (value === null || value === undefined || value === "") return "0";
-  const cleaned =
-    typeof value === "number"
-      ? value
-      : parseFloat(String(value).replace(/[^0-9.-]+/g, ""));
-  if (isNaN(cleaned)) return String(value).replace(/^R\s*/i, "").trim();
-
-  if (cleaned % 1 === 0) {
-    return cleaned.toLocaleString("en-US");
-  }
-  return cleaned.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-};
+// === Constants ===
 
 const DEFAULT_CATEGORIES = [
   { id: 13, name: "Whisky", slug: "whisky" },
@@ -151,6 +137,8 @@ const DEFAULT_AUCTIONS = [
 ];
 
 const HomeScreen = ({ navigation }) => {
+  const { formatPrice, currencySymbol, countryCode, currency, currencyFlagCountry, currencyToCountry, getCountryFlagUri } = useCurrency();
+  const [localeModalVisible, setLocaleModalVisible] = useState(false);
   const [wishlistItemIds, setWishlistItemIds] = useState(new Set());
   const [cartItems, setCartItems] = useState(new Set());
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
@@ -350,14 +338,18 @@ const handleAddToCartInstant = async (product) => {
     if (existingIndex >= 0) {
       cart[existingIndex].quantity = (Number(cart[existingIndex].quantity) || 1) + 1;
     } else {
-      cart.push({
-        id: pid,
-        productid: pid,
-        name: product.title || product.name || product.product_name,
-        price: Number(product.price || product.final_price || 0),
-        image: product.image || product.product_image,
-        quantity: 1,
-      });
+        cart.push({
+          id: pid,
+          productid: pid,
+          name: product.title || product.name || product.product_name,
+          price: Number(product.price || product.final_price || 0),
+          image: product.image || product.product_image,
+          quantity: 1,
+          isSuperCoinEligible: !(product.isSuperCoinEligible === false || product.isSuperCoinEligible === "false" || product.isSuperCoinEligible === 0 || product.isSuperCoinEligible === "0"),
+          maxSuperCoinDiscountPct: Number(product.maxSuperCoinDiscountPct ?? 10),
+          isReferralEligible: !(product.isReferralEligible === false || product.isReferralEligible === "false" || product.isReferralEligible === 0 || product.isReferralEligible === "0"),
+          referralDiscountPct: Number(product.referralDiscountPct ?? 5),
+        });
     }
 
     await AsyncStorage.setItem("grand-store-cart", JSON.stringify(cart));
@@ -830,7 +822,7 @@ const handleAddToCartInstant = async (product) => {
               adjustsFontSizeToFit
               minimumFontScale={0.75}
             >
-              R{formatPrice(displayPrice)}
+              {formatPrice(displayPrice)}
             </Text>
             {hasDiscount && (
               <Text
@@ -839,7 +831,7 @@ const handleAddToCartInstant = async (product) => {
                 adjustsFontSizeToFit
                 minimumFontScale={0.75}
               >
-                R{formatPrice(item.price)}
+                {formatPrice(item.price)}
               </Text>
             )}
           </View>
@@ -936,22 +928,48 @@ const handleAddToCartInstant = async (product) => {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#121212' }}>
-      <ScrollView style={styles.container}>
-        <TouchableOpacity
-          activeOpacity={0.75}
-          style={styles.welcomeBannerTouch}
-          onPress={() => {
-            if (!userName) {
-              navigation.navigate("LoginScreen");
-            }
-          }}
-        >
-          <View style={styles.welcomePillContainer}>
-            <Text style={styles.welcomeText}>
-              {userName ? `Welcome, ${userName}` : "Please sign in →"}
-            </Text>
-          </View>
-        </TouchableOpacity>
+      <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
+        {/* Top Utility Bar: Welcome Pill + Country/Currency Capsule (Option 2) */}
+        <View style={styles.topUtilityRow}>
+          <TouchableOpacity
+            activeOpacity={0.75}
+            style={styles.welcomeBannerTouch}
+            onPress={() => {
+              if (!userName) {
+                navigation.navigate("LoginScreen");
+              }
+            }}
+          >
+            <View style={styles.welcomePillContainer}>
+              <Text style={styles.welcomeText}>
+                {userName ? `Welcome, ${userName}` : "Please sign in →"}
+              </Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.8}
+            style={styles.localeCapsuleTouch}
+            onPress={() => setLocaleModalVisible(true)}
+          >
+            <View style={styles.localeCapsuleInner}>
+              <Image
+                source={{ uri: getCountryFlagUri(countryCode) }}
+                style={styles.capsuleFlag}
+                resizeMode="cover"
+              />
+              <Text style={styles.capsuleCodeText}>{countryCode}</Text>
+              <View style={styles.capsuleDivider} />
+              <Image
+                source={{ uri: getCountryFlagUri(currencyFlagCountry || currencyToCountry?.[currency] || countryCode) }}
+                style={styles.capsuleFlag}
+                resizeMode="cover"
+              />
+              <Text style={styles.capsuleCodeText}>{currency}</Text>
+              <Text style={styles.capsuleChevron}>▾</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
 
         <View style={{ zIndex: 10000, elevation: 12 }}>
           <SearchAutoRecommend
@@ -993,7 +1011,7 @@ const handleAddToCartInstant = async (product) => {
                 AUCTION WON • LOT #{wonAuctionAlert.lotNumber || (wonAuctionAlert._id && wonAuctionAlert._id.slice(-6).toUpperCase()) || "GS-LOT"}
               </Text>
               <Text style={styles.wonAlertDesc} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
-                {wonAuctionAlert.title} — Hammer: R{formatPrice(wonAuctionAlert.winningBid || wonAuctionAlert.currentBid || 0)}
+                {wonAuctionAlert.title} — Hammer: {formatPrice(wonAuctionAlert.winningBid || wonAuctionAlert.currentBid || 0)}
               </Text>
             </View>
             <View style={styles.wonAlertBtn}>
@@ -1163,7 +1181,7 @@ const handleAddToCartInstant = async (product) => {
                           adjustsFontSizeToFit
                           minimumFontScale={0.8}
                         >
-                          {isClosed ? (isSoldOut ? "Passes Sold Out" : "Booking Closed") : (startPrice === null ? "Complimentary" : `From R${formatPrice(startPrice)}`)}
+                          {isClosed ? (isSoldOut ? "Passes Sold Out" : "Booking Closed") : (startPrice === null ? "Complimentary" : `From ${formatPrice(startPrice)}`)}
                         </Text>
                         <View style={[styles.eventHomeBookBtn, isClosed && styles.eventHomeBookBtnClosed]}>
                           <Text style={[styles.eventHomeArrow, isClosed && styles.eventHomeArrowClosed]}>
@@ -1249,7 +1267,7 @@ const handleAddToCartInstant = async (product) => {
                             {isSold ? "Hammer Price" : "Current Leading"}
                           </Text>
                           <Text style={styles.eventHomePrice} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
-                            R{formatPrice(displayPrice)}
+                            {formatPrice(displayPrice)}
                           </Text>
                         </View>
                         <View style={styles.bidNowPill}>
@@ -1346,7 +1364,7 @@ const handleAddToCartInstant = async (product) => {
           marginRight: 8,
         }}
       >
-        R{formatPrice(selectedProduct?.price)}
+        {formatPrice(selectedProduct?.price)}
       </Text>
       <Text
         numberOfLines={1}
@@ -1358,7 +1376,7 @@ const handleAddToCartInstant = async (product) => {
           fontSize: 18,
         }}
       >
-        R{formatPrice(selectedProduct?.offer_price)}
+        {formatPrice(selectedProduct?.offer_price)}
       </Text>
     </>
   ) : (
@@ -1372,7 +1390,7 @@ const handleAddToCartInstant = async (product) => {
         fontSize: 18,
       }}
     >
-      R{formatPrice(selectedProduct?.price)}
+      {formatPrice(selectedProduct?.price)}
     </Text>
   )}
 </View>
@@ -1444,7 +1462,7 @@ const handleAddToCartInstant = async (product) => {
                   {selectedProduct?.size || "750ml"} • 1 bottle
                 </Text>
                 <Text style={styles.buyNowModalItemPrice} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
-                  R{formatPrice(selectedProduct?.offer_active && Number(selectedProduct?.offer_price) > 0
+                  {formatPrice(selectedProduct?.offer_active && Number(selectedProduct?.offer_price) > 0
                     ? selectedProduct?.offer_price
                     : (selectedProduct?.final_price || selectedProduct?.price || 0))}
                 </Text>
@@ -1481,6 +1499,10 @@ const handleAddToCartInstant = async (product) => {
                     image: selectedProduct?.image,
                     quantity: 1,
                     size: selectedProduct?.size || "750ml",
+                    isSuperCoinEligible: !(selectedProduct?.isSuperCoinEligible === false || selectedProduct?.isSuperCoinEligible === "false" || selectedProduct?.isSuperCoinEligible === 0 || selectedProduct?.isSuperCoinEligible === "0"),
+                    maxSuperCoinDiscountPct: Number(selectedProduct?.maxSuperCoinDiscountPct !== undefined ? selectedProduct.maxSuperCoinDiscountPct : 10),
+                    isReferralEligible: !(selectedProduct?.isReferralEligible === false || selectedProduct?.isReferralEligible === "false" || selectedProduct?.isReferralEligible === 0 || selectedProduct?.isReferralEligible === "0"),
+                    referralDiscountPct: Number(selectedProduct?.referralDiscountPct !== undefined ? selectedProduct.referralDiscountPct : 5),
                   };
                   navigation.navigate("Checkout", { buyNowItem, singleItemCheckout: true });
                 }}
@@ -1496,6 +1518,12 @@ const handleAddToCartInstant = async (product) => {
           </View>
         </View>
       </Modal>
+
+      {/* Country & Currency Selection Modal */}
+      <LocaleModal
+        isVisible={localeModalVisible}
+        onClose={() => setLocaleModalVisible(false)}
+      />
     </View>
   );
 };
@@ -1736,29 +1764,75 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "800",
   },
+  topUtilityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 14,
+    marginBottom: 8,
+    gap: 8,
+  },
   welcomeBannerTouch: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 18,
-    marginBottom: 12,
   },
   welcomePillContainer: {
-    backgroundColor: "rgba(201, 151, 66, 0.1)",
-    borderWidth: 1,
-    borderColor: "rgba(201, 151, 66, 0.45)",
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    borderWidth: 1.2,
+    borderColor: "rgba(201, 151, 66, 0.5)",
     borderRadius: 22,
     paddingVertical: 8,
-    paddingHorizontal: 22,
+    paddingHorizontal: 18,
     alignItems: "center",
     justifyContent: "center",
   },
   welcomeText: {
     color: "#f5c242",
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
     textAlign: "center",
     fontFamily: APP_FONT,
+  },
+  localeCapsuleTouch: {
+    borderRadius: 22,
+    overflow: "hidden",
+  },
+  localeCapsuleInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(25, 21, 16, 0.95)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 163, 91, 0.35)",
+    borderRadius: 22,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  capsuleFlag: {
+    width: 17,
+    height: 12,
+    borderRadius: 2.5,
+  },
+  capsuleCodeText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#f5d77f",
+    fontFamily: APP_FONT,
+    letterSpacing: 0.4,
+  },
+  capsuleDivider: {
+    width: 1,
+    height: 12,
+    backgroundColor: "rgba(201, 163, 91, 0.35)",
+    marginHorizontal: 1,
+  },
+  capsuleChevron: {
+    fontSize: 11,
+    color: "#c9a35b",
+    fontWeight: "800",
+    marginLeft: 1,
   },
   centeredSectionHeader: {
     alignItems: "center",

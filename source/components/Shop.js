@@ -274,6 +274,10 @@ const Shop = ({ navigation, onBack, route }) => {
           price: Number(product.final_price || product.price || 0),
           image: product.image,
           quantity: 1,
+          isSuperCoinEligible: !(product.isSuperCoinEligible === false || product.isSuperCoinEligible === "false" || product.isSuperCoinEligible === 0 || product.isSuperCoinEligible === "0"),
+          maxSuperCoinDiscountPct: Number(product.maxSuperCoinDiscountPct ?? 10),
+          isReferralEligible: !(product.isReferralEligible === false || product.isReferralEligible === "false" || product.isReferralEligible === 0 || product.isReferralEligible === "0"),
+          referralDiscountPct: Number(product.referralDiscountPct ?? 5),
         });
       }
 
@@ -1479,6 +1483,10 @@ const Shop = ({ navigation, onBack, route }) => {
                     image: selectedProduct?.image,
                     quantity: 1,
                     size: selectedProduct?.size || "750ml",
+                    isSuperCoinEligible: !(selectedProduct?.isSuperCoinEligible === false || selectedProduct?.isSuperCoinEligible === "false" || selectedProduct?.isSuperCoinEligible === 0 || selectedProduct?.isSuperCoinEligible === "0"),
+                    maxSuperCoinDiscountPct: Number(selectedProduct?.maxSuperCoinDiscountPct !== undefined ? selectedProduct.maxSuperCoinDiscountPct : 10),
+                    isReferralEligible: !(selectedProduct?.isReferralEligible === false || selectedProduct?.isReferralEligible === "false" || selectedProduct?.isReferralEligible === 0 || selectedProduct?.isReferralEligible === "0"),
+                    referralDiscountPct: Number(selectedProduct?.referralDiscountPct !== undefined ? selectedProduct.referralDiscountPct : 5),
                   };
                   navigation.navigate("Checkout", { buyNowItem, singleItemCheckout: true });
                 }}

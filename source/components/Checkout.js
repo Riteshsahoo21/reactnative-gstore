@@ -766,6 +766,10 @@ const Checkout = ({ navigation, route }) => {
   const [useSuperCoins, setUseSuperCoins] = useState(true);
   const [superCoinsQuote, setSuperCoinsQuote] = useState(null);
 
+  // Refer & Earn Reward Balance State (Direct Store Credit Redemption)
+  const [userRewardBalance, setUserRewardBalance] = useState(0);
+  const [useReferralRewards, setUseReferralRewards] = useState(true);
+
   // Gift Option State
   const [isGift, setIsGift] = useState(false);
   const [giftRecipientName, setGiftRecipientName] = useState("");
@@ -882,6 +886,9 @@ const Checkout = ({ navigation, route }) => {
           if (user.superCoinsBalance !== undefined) {
             setUserSuperCoins(Number(user.superCoinsBalance || 0));
           }
+          if (user.rewardBalance !== undefined) {
+            setUserRewardBalance(Number(user.rewardBalance || 0));
+          }
 
           // Pre-fill KYC inputs if previously recorded
           if (user.dateOfBirth) {
@@ -925,7 +932,7 @@ const Checkout = ({ navigation, route }) => {
           }
         } catch (sErr) {}
 
-        // Fetch latest Super Coins wallet balance if authenticated
+        // Fetch latest Super Coins & Refer & Earn wallet balance if authenticated
         const userToken = await AsyncStorage.getItem("userToken");
         if (userToken) {
           setIsLoggedIn(true);
@@ -942,13 +949,41 @@ const Checkout = ({ navigation, route }) => {
           } catch (cErr) {
             console.log("Super Coins wallet fetch error:", cErr?.message || cErr);
           }
+
+          try {
+            const refRes = await safeApiFetch("/auth/referrals", {
+              headers: { Authorization: `Bearer ${userToken}` },
+            });
+            if (refRes && refRes.ok) {
+              const refData = await refRes.json();
+              if (refData.rewardBalance !== undefined) {
+                setUserRewardBalance(Number(refData.rewardBalance || 0));
+              }
+            }
+          } catch (rErr) {
+            console.log("Referral rewards fetch error:", rErr?.message || rErr);
+          }
         }
 
         // Load Items
         if (singleItemCheckout && buyNowItem) {
           setCheckoutItems([buyNowItem]);
         } else if (paramCartItems && paramCartItems.length > 0) {
-          setCheckoutItems(paramCartItems);
+          setCheckoutItems(
+            paramCartItems.map((i) => ({
+              id: i.id || i.productid,
+              productid: i.productid || i.id,
+              name: i.name || i.title || i.product_name,
+              price: Number(i.price || i.final_price || 0),
+              image: i.image || i.product_image,
+              quantity: Number(i.quantity || 1),
+              size: i.size || "750ml",
+              isSuperCoinEligible: !(i.isSuperCoinEligible === false || i.isSuperCoinEligible === "false" || i.isSuperCoinEligible === 0 || i.isSuperCoinEligible === "0" || i.product?.isSuperCoinEligible === false || i.product?.isSuperCoinEligible === "false"),
+              maxSuperCoinDiscountPct: Number(i.maxSuperCoinDiscountPct ?? i.product?.maxSuperCoinDiscountPct ?? 10),
+              isReferralEligible: !(i.isReferralEligible === false || i.isReferralEligible === "false" || i.isReferralEligible === 0 || i.isReferralEligible === "0" || i.product?.isReferralEligible === false || i.product?.isReferralEligible === "false"),
+              referralDiscountPct: Number(i.referralDiscountPct ?? i.product?.referralDiscountPct ?? 5),
+            }))
+          );
         } else {
           const stored = await AsyncStorage.getItem("grand-store-cart");
           const items = stored ? JSON.parse(stored) : [];
@@ -961,6 +996,10 @@ const Checkout = ({ navigation, route }) => {
               image: i.image || i.product_image,
               quantity: Number(i.quantity || 1),
               size: i.size || "750ml",
+              isSuperCoinEligible: !(i.isSuperCoinEligible === false || i.isSuperCoinEligible === "false" || i.isSuperCoinEligible === 0 || i.isSuperCoinEligible === "0" || i.product?.isSuperCoinEligible === false || i.product?.isSuperCoinEligible === "false"),
+              maxSuperCoinDiscountPct: Number(i.maxSuperCoinDiscountPct ?? i.product?.maxSuperCoinDiscountPct ?? 10),
+              isReferralEligible: !(i.isReferralEligible === false || i.isReferralEligible === "false" || i.isReferralEligible === 0 || i.isReferralEligible === "0" || i.product?.isReferralEligible === false || i.product?.isReferralEligible === "false"),
+              referralDiscountPct: Number(i.referralDiscountPct ?? i.product?.referralDiscountPct ?? 5),
             }))
           );
         }
@@ -981,12 +1020,12 @@ const Checkout = ({ navigation, route }) => {
     }
   }, [deliveryPreference, city]);
 
-  // Automatically calculate delivery rates whenever delivery preference or country changes
+  // Automatically calculate delivery rates whenever delivery preference, country, or items change
   useEffect(() => {
-    if (checkoutItems.length > 0 && city) {
+    if (checkoutItems.length > 0) {
       calculateDeliveryQuote();
     }
-  }, [deliveryPreference, country]);
+  }, [checkoutItems.length, deliveryPreference, country]);
 
   // Fetch PostNet branches with guaranteed fallback & live network lookup
   const fetchPostnetBranches = async (searchCity, searchLat, searchLng) => {
@@ -1482,8 +1521,9 @@ const Checkout = ({ navigation, route }) => {
   };
 
   // Calculate Delivery Rates via Backend /api/checkout/quote
-  const calculateDeliveryQuote = async () => {
-    if (!city.trim()) {
+  const calculateDeliveryQuote = async (isManualClick = false) => {
+    const effectiveCity = city.trim() || "Johannesburg";
+    if (isManualClick && !city.trim()) {
       showMessage("Please enter your delivery city to calculate rates");
       return;
     }
@@ -1502,13 +1542,14 @@ const Checkout = ({ navigation, route }) => {
           name: item.name,
           quantity: item.quantity,
           price: item.price,
+          image: item.image || item.product_image || (Array.isArray(item.images) && item.images[0]) || "",
         })),
         shippingAddress: {
           address:
             deliveryPreference === "postnet" && preferredPostnetStore
               ? preferredPostnetStore.address
-              : address.trim() || `${city.trim()}, South Africa`,
-          city: city.trim(),
+              : address.trim() || `${effectiveCity}, South Africa`,
+          city: effectiveCity,
           postalCode: postalCode.trim() || "2000",
           country: effectiveCountry,
           lat,
@@ -1531,42 +1572,34 @@ const Checkout = ({ navigation, route }) => {
         data = await res.json();
       }
 
-      if (data && data.shipments && data.shipments.length > 0) {
+      if (data) {
         setQuote(data);
+        if (data.rewardBalance !== undefined) {
+          setUserRewardBalance(Number(data.rewardBalance || 0));
+        }
         if (data.superCoins) {
           setSuperCoinsQuote(data.superCoins);
-        } else {
-          const coinVal = 0.10;
-          const maxPct = 0.10;
-          const maxRand = Math.min(subtotal * maxPct, (userSuperCoins || 0) * coinVal);
-          const maxCoins = Math.floor(maxRand / coinVal);
-          setSuperCoinsQuote({
-            availableCoins: userSuperCoins || 0,
-            coinValue: coinVal,
-            maxRedeemableCoins: maxCoins,
-            maxDiscountRand: maxRand,
-            potentialCoinsToEarn: Math.floor((subtotal / 100) * 10),
-            isMarginCapped: (userSuperCoins || 0) * coinVal > subtotal * maxPct,
-            marginMessage: "Deduction capped at 10% to protect 15% platform margin",
-          });
-        }
-        const shipment = data.shipments[0];
-        const quotesList = shipment.shippingQuotes || [];
-
-        // Auto-select preferred courier
-        if (deliveryPreference === "postnet") {
-          const pn = quotesList.find((q) => q.courierName === "PostNet" && (q.deliveryType === "pickup" || q.serviceLevel.includes("Collection")));
-          setSelectedCourier(pn || quotesList[0]);
-        } else if (effectiveCountry.toLowerCase() === "south africa") {
-          const pn = quotesList.find((q) => q.serviceLevel.includes("Standard")) || quotesList.find((q) => q.courierName === "PostNet");
-          setSelectedCourier(pn || quotesList[0]);
-        } else {
-          // International -> DHL Express
-          const dhl = quotesList.find((q) => q.courierName.includes("DHL"));
-          setSelectedCourier(dhl || quotesList[0]);
         }
 
-        showMessage("✅ Live courier rates calculated!");
+        if (data.shipments && data.shipments.length > 0) {
+          const shipment = data.shipments[0];
+          const quotesList = shipment.shippingQuotes || [];
+
+          // Auto-select preferred courier
+          if (deliveryPreference === "postnet") {
+            const pn = quotesList.find((q) => q.courierName === "PostNet" && (q.deliveryType === "pickup" || q.serviceLevel.includes("Collection")));
+            setSelectedCourier(pn || quotesList[0]);
+          } else if (effectiveCountry.toLowerCase() === "south africa") {
+            const pn = quotesList.find((q) => q.serviceLevel.includes("Standard")) || quotesList.find((q) => q.courierName === "PostNet");
+            setSelectedCourier(pn || quotesList[0]);
+          } else {
+            // International -> DHL Express
+            const dhl = quotesList.find((q) => q.courierName.includes("DHL"));
+            setSelectedCourier(dhl || quotesList[0]);
+          }
+
+          if (isManualClick) showMessage("✅ Live courier rates calculated!");
+        }
       } else {
         // Fallback curated courier quotes when offline / guest / unauthenticated
         const fallbackQuotes = isSouthAfrica
@@ -1615,18 +1648,26 @@ const Checkout = ({ navigation, route }) => {
 
         const coinVal = 0.10;
         const maxPct = 0.10;
-        const maxRand = Math.min(subtotal * maxPct, (userSuperCoins || 0) * coinVal);
+        const eligibleCoinsSubtotal = checkoutItems
+          .filter((item) => !(item.isSuperCoinEligible === false || item.isSuperCoinEligible === "false" || item.product?.isSuperCoinEligible === false || item.product?.isSuperCoinEligible === "false"))
+          .reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1), 0);
+        const maxRand = Math.min(eligibleCoinsSubtotal * maxPct, (userSuperCoins || 0) * coinVal);
         const maxCoins = Math.floor(maxRand / coinVal);
         const fallbackSuperCoins = {
           availableCoins: userSuperCoins || 0,
           coinValue: coinVal,
           maxRedeemableCoins: maxCoins,
           maxDiscountRand: maxRand,
-          potentialCoinsToEarn: Math.floor((subtotal / 100) * 10),
-          isMarginCapped: (userSuperCoins || 0) * coinVal > subtotal * maxPct,
+          eligibleSubtotal: eligibleCoinsSubtotal,
+          potentialCoinsToEarn: Math.floor((eligibleCoinsSubtotal / 100) * 10),
+          isMarginCapped: (userSuperCoins || 0) * coinVal > eligibleCoinsSubtotal * maxPct,
           marginMessage: "Deduction capped at 10% to protect 15% platform margin",
         };
         setSuperCoinsQuote(fallbackSuperCoins);
+
+        const referralFallbackSubtotal = checkoutItems
+          .filter((item) => !(item.isReferralEligible === false || item.isReferralEligible === "false" || item.product?.isReferralEligible === false || item.product?.isReferralEligible === "false"))
+          .reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1), 0);
 
         const fallbackQuote = {
           globalSubtotal: subtotal,
@@ -1640,6 +1681,7 @@ const Checkout = ({ navigation, route }) => {
             estimatedImportTaxes: !isSouthAfrica ? Math.round(subtotal * 0.20) : 0,
           },
           superCoins: fallbackSuperCoins,
+          referralEligibleSubtotal: referralFallbackSubtotal,
           shipments: [
             {
               shippingQuotes: fallbackQuotes,
@@ -1700,15 +1742,18 @@ const Checkout = ({ navigation, route }) => {
 
       const coinVal = 0.10;
       const maxPct = 0.10;
-      const maxRand = Math.min(subtotal * maxPct, (userSuperCoins || 0) * coinVal);
+      const eligibleCoinsSubtotal = checkoutItems
+        .filter((item) => (item.isSuperCoinEligible ?? item.product?.isSuperCoinEligible) !== false)
+        .reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1), 0);
+      const maxRand = Math.min(eligibleCoinsSubtotal * maxPct, (userSuperCoins || 0) * coinVal);
       const maxCoins = Math.floor(maxRand / coinVal);
       const fallbackSuperCoins = {
         availableCoins: userSuperCoins || 0,
         coinValue: coinVal,
         maxRedeemableCoins: maxCoins,
         maxDiscountRand: maxRand,
-        potentialCoinsToEarn: Math.floor((subtotal / 100) * 10),
-        isMarginCapped: (userSuperCoins || 0) * coinVal > subtotal * maxPct,
+        potentialCoinsToEarn: Math.floor((eligibleCoinsSubtotal / 100) * 10),
+        isMarginCapped: (userSuperCoins || 0) * coinVal > eligibleCoinsSubtotal * maxPct,
         marginMessage: "Deduction capped at 10% to protect 15% platform margin",
       };
       setSuperCoinsQuote(fallbackSuperCoins);
@@ -1775,6 +1820,63 @@ const Checkout = ({ navigation, route }) => {
         )
       : 0;
 
+  // Referral / Reward Balance discount calculation
+  // (1:1 cash value against order subtotal remaining after voucher & supercoins)
+  const effectiveRewardBalance =
+    quote?.rewardBalance !== undefined
+      ? Number(quote.rewardBalance || 0)
+      : Number(userRewardBalance || 0);
+
+  const referralEligibleBase =
+    quote?.referralEligibleSubtotal !== undefined
+      ? Number(quote.referralEligibleSubtotal)
+      : checkoutItems
+          .filter((item) => !(item.isReferralEligible === false || item.isReferralEligible === "false" || item.isReferralEligible === 0 || item.isReferralEligible === "0" || item.product?.isReferralEligible === false || item.product?.isReferralEligible === "false"))
+          .reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1), 0);
+
+  const referralRewardDiscount =
+    useReferralRewards && effectiveRewardBalance > 0
+      ? Math.min(
+          effectiveRewardBalance,
+          Math.max(0, referralEligibleBase - discount - superCoinDiscount)
+        )
+      : 0;
+
+  const coinsEligibleSubtotal = Number(
+    quote?.superCoins?.eligibleSubtotal !== undefined
+      ? quote.superCoins.eligibleSubtotal
+      : (superCoinsQuote?.eligibleSubtotal !== undefined
+          ? superCoinsQuote.eligibleSubtotal
+          : checkoutItems
+              .filter((item) => !(item.isSuperCoinEligible === false || item.isSuperCoinEligible === "false" || item.isSuperCoinEligible === 0 || item.isSuperCoinEligible === "0" || item.product?.isSuperCoinEligible === false || item.product?.isSuperCoinEligible === "false"))
+              .reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1), 0))
+  );
+
+  const isCoinsEligibleOnOrder =
+    (quote?.superCoins
+      ? (Number(quote.superCoins.eligibleSubtotal) > 0 || Number(quote.superCoins.maxDiscountRand) > 0)
+      : (superCoinsQuote
+          ? (Number(superCoinsQuote.eligibleSubtotal) > 0 || Number(superCoinsQuote.maxDiscountRand) > 0)
+          : coinsEligibleSubtotal > 0)
+    ) && coinsEligibleSubtotal > 0;
+
+  const isCoinsPartial = isCoinsEligibleOnOrder && coinsEligibleSubtotal < subtotal;
+
+  const isReferralEligibleOnOrder = referralEligibleBase > 0;
+  const isReferralPartial = isReferralEligibleOnOrder && referralEligibleBase < subtotal;
+
+  useEffect(() => {
+    if (!isCoinsEligibleOnOrder && useSuperCoins) {
+      setUseSuperCoins(false);
+    }
+  }, [isCoinsEligibleOnOrder]);
+
+  useEffect(() => {
+    if (!isReferralEligibleOnOrder && useReferralRewards) {
+      setUseReferralRewards(false);
+    }
+  }, [isReferralEligibleOnOrder]);
+
   // Dynamic shipping fee based on live calculated quote or standard fallback
   let shippingFee = 0;
   if (selectedCourier) {
@@ -1796,7 +1898,7 @@ const Checkout = ({ navigation, route }) => {
       ? Number(quote.shipments[0].landedCostEstimates.estimatedDuties || 0) + Number(quote.shipments[0].landedCostEstimates.estimatedTaxes || 0)
       : Math.round(subtotal * 0.35 * 100) / 100;
 
-  const grandTotal = Math.max(0, subtotal - discount - superCoinDiscount + shippingFee);
+  const grandTotal = Math.max(0, subtotal - discount - superCoinDiscount - referralRewardDiscount + shippingFee);
 
   const getItemKey = (item) => String(item.id || item.productid || item._id || "");
 
@@ -2065,6 +2167,16 @@ const Checkout = ({ navigation, route }) => {
             },
             shipments: [
               {
+                items: checkoutItems.map((item) => ({
+                  product: item.productid || item.id,
+                  name: item.name,
+                  quantity: item.quantity,
+                  price: item.price,
+                  image: item.image || item.product_image || (Array.isArray(item.images) && item.images[0]) || "",
+                  option: item.size || item.option || "750ml",
+                })),
+                subtotal: subtotal,
+                taxData: { vatAmount: 0 },
                 shippingQuotes: [
                   {
                     courierName: deliveryPreference === "postnet" ? "PostNet" : "Courier Guy",
@@ -2111,6 +2223,7 @@ const Checkout = ({ navigation, route }) => {
             selectedPostnetStore: preferredPostnetStore,
             paymentMethod: paymentMethod === "payfast" ? "PayFast" : "Bank Transfer",
             useSuperCoins: Boolean(token && useSuperCoins),
+            applyRewards: Boolean(token && useReferralRewards && effectiveRewardBalance > 0),
             isAgeConfirmed: true,
             isGuest: !token,
             guestEmail: (email || "").trim(),
@@ -2206,16 +2319,19 @@ const Checkout = ({ navigation, route }) => {
         })(),
         createdAt: new Date().toISOString(),
         items: checkoutItems.map((i) => ({
+          product: i.productid || i.id,
+          productId: i.productid || i.id,
           name: i.name || "Item",
           price: Number(i.price || 0),
           quantity: Number(i.quantity || 1),
-          image: i.image,
+          image: i.image || i.product_image || (Array.isArray(i.images) && i.images[0]) || "",
           size: i.size || "750ml",
         })),
         subtotal,
         shippingFee,
         discount,
         superCoinsDiscount: token ? superCoinDiscount : 0,
+        referralRewardDiscount: token ? referralRewardDiscount : 0,
         superCoinsUsed:
           token && useSuperCoins
             ? superCoinsQuote?.maxRedeemableCoins || quote?.superCoins?.maxRedeemableCoins || 0
@@ -3149,6 +3265,14 @@ const Checkout = ({ navigation, route }) => {
               <Text style={styles.invoiceTotalLabel}>Subtotal</Text>
               <Text style={styles.invoiceTotalVal}>R{createdOrder.subtotal.toFixed(2)}</Text>
             </View>
+            <View style={[styles.invoiceTotalRow, { paddingLeft: 8 }]}>
+              <Text style={[styles.invoiceTotalLabel, { fontSize: 11, color: "rgba(255, 255, 255, 0.5)" }]}>
+                Includes 15% SARS VAT
+              </Text>
+              <Text style={[styles.invoiceTotalVal, { fontSize: 11, color: "rgba(255, 255, 255, 0.7)" }]}>
+                R{(createdOrder.subtotal * 0.15).toFixed(2)}
+              </Text>
+            </View>
             <View style={styles.invoiceTotalRow}>
               <Text style={styles.invoiceTotalLabel}>Delivery</Text>
               <Text style={styles.invoiceTotalVal}>
@@ -3172,6 +3296,16 @@ const Checkout = ({ navigation, route }) => {
                 </Text>
                 <Text style={[styles.invoiceTotalVal, { color: "#f5c242", fontWeight: "700" }]}>
                   -R{Number(createdOrder.superCoinsDiscount).toFixed(2)}
+                </Text>
+              </View>
+            )}
+            {createdOrder.referralRewardDiscount > 0 && (
+              <View style={styles.invoiceTotalRow}>
+                <Text style={[styles.invoiceTotalLabel, { color: "#4ade80" }]}>
+                  🎁 Refer & Earn Credits Applied
+                </Text>
+                <Text style={[styles.invoiceTotalVal, { color: "#4ade80", fontWeight: "700" }]}>
+                  -R{Number(createdOrder.referralRewardDiscount).toFixed(2)}
                 </Text>
               </View>
             )}
@@ -4401,66 +4535,199 @@ const Checkout = ({ navigation, route }) => {
               </View>
 
               {/* Super Coins Card */}
-              <View style={styles.superCoinsCheckoutCard}>
-                <View style={styles.superCoinsCardHeader}>
-                  <View style={styles.superCoinsIconBox}>
-                    <Text style={styles.superCoinsIconText}>🪙</Text>
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <View style={styles.superCoinsTitleRow}>
-                      <Text style={styles.superCoinsCardTitle}>Grand Store Super Coins</Text>
-                      <View style={styles.superCoinsRateBadge}>
-                        <Text style={styles.superCoinsRateBadgeText}>10 COINS = R1.00</Text>
+              {isCoinsEligibleOnOrder ? (
+                <View style={styles.superCoinsCheckoutCard}>
+                  <View style={styles.superCoinsCardHeader}>
+                    <View style={styles.superCoinsIconBox}>
+                      <Text style={styles.superCoinsIconText}>🪙</Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <View style={styles.superCoinsTitleRow}>
+                        <Text style={styles.superCoinsCardTitle}>Grand Store Super Coins</Text>
+                        {isCoinsPartial ? (
+                          <View style={[styles.superCoinsRateBadge, { backgroundColor: "rgba(245, 194, 66, 0.2)", borderColor: "rgba(245, 194, 66, 0.4)" }]}>
+                            <Text style={[styles.superCoinsRateBadgeText, { color: "#f5c242" }]}>ELIGIBLE: R{coinsEligibleSubtotal.toFixed(2)}</Text>
+                          </View>
+                        ) : (
+                          <View style={styles.superCoinsRateBadge}>
+                            <Text style={styles.superCoinsRateBadgeText}>10 COINS = R1.00</Text>
+                          </View>
+                        )}
                       </View>
-                    </View>
-                    <Text style={styles.superCoinsBalanceSub}>
-                      Available: <Text style={styles.superCoinsBalanceGold}>{(userSuperCoins || 0).toLocaleString()} Coins</Text> (Value: R{((userSuperCoins || 0) * 0.1).toFixed(2)})
-                    </Text>
-                  </View>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.superCoinsToggle,
-                      useSuperCoins && (userSuperCoins || 0) > 0 && styles.superCoinsToggleActive,
-                    ]}
-                    onPress={() => {
-                      if ((userSuperCoins || 0) <= 0) {
-                        showMessage("You currently have 0 Super Coins. Earn 10 coins per R100 on this order!");
-                        return;
-                      }
-                      setUseSuperCoins(!useSuperCoins);
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.superCoinsToggleCheck}>
-                      {useSuperCoins && (userSuperCoins || 0) > 0 ? "✓" : ""}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {useSuperCoins && (userSuperCoins || 0) > 0 && superCoinDiscount > 0 ? (
-                  <View style={styles.superCoinsAppliedRow}>
-                    <View style={styles.superCoinsAppliedLeft}>
-                      <Text style={styles.superCoinsAppliedCheck}>✓</Text>
-                      <Text style={styles.superCoinsAppliedText}>
-                        Margin-Safe Deduction: <Text style={styles.superCoinsAppliedAmount}>-R{superCoinDiscount.toFixed(2)}</Text> ({Math.round(superCoinDiscount / 0.1)} coins)
+                      <Text style={styles.superCoinsBalanceSub}>
+                        Available: <Text style={styles.superCoinsBalanceGold}>{(userSuperCoins || 0).toLocaleString()} Coins</Text> (Value: R{((userSuperCoins || 0) * 0.1).toFixed(2)})
                       </Text>
                     </View>
-                    {superCoinsQuote?.isMarginCapped ? (
-                      <Text style={styles.superCoinsMarginNote}>
-                        🛡️ {superCoinsQuote.marginMessage || "10% max order redemption cap (protects 15% platform margin)"}
-                      </Text>
-                    ) : null}
-                  </View>
-                ) : null}
 
-                <View style={styles.superCoinsEarnBanner}>
-                  <Text style={styles.superCoinsEarnIcon}>🎉</Text>
-                  <Text style={styles.superCoinsEarnText}>
-                    Earn <Text style={styles.superCoinsEarnGold}>+{superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)} Super Coins</Text> (R{((superCoinsQuote?.potentialCoinsToEarn || Math.floor((subtotal / 100) * 10)) * 0.1).toFixed(2)}) upon payment completion!
-                  </Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.superCoinsToggle,
+                        useSuperCoins && (userSuperCoins || 0) > 0 && styles.superCoinsToggleActive,
+                      ]}
+                      onPress={() => {
+                        if ((userSuperCoins || 0) <= 0) {
+                          showMessage("You currently have 0 Super Coins. Earn 10 coins per R100 on this order!");
+                          return;
+                        }
+                        setUseSuperCoins(!useSuperCoins);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.superCoinsToggleCheck}>
+                        {useSuperCoins && (userSuperCoins || 0) > 0 ? "✓" : ""}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {useSuperCoins && (userSuperCoins || 0) > 0 && superCoinDiscount > 0 ? (
+                    <View style={styles.superCoinsAppliedRow}>
+                      <View style={styles.superCoinsAppliedLeft}>
+                        <Text style={styles.superCoinsAppliedCheck}>✓</Text>
+                        <Text style={styles.superCoinsAppliedText}>
+                          Margin-Safe Deduction: <Text style={styles.superCoinsAppliedAmount}>-R{superCoinDiscount.toFixed(2)}</Text> ({Math.round(superCoinDiscount / 0.1)} coins)
+                        </Text>
+                      </View>
+                      {superCoinsQuote?.isMarginCapped ? (
+                        <Text style={styles.superCoinsMarginNote}>
+                          🛡️ {superCoinsQuote.marginMessage || "10% max order redemption cap (protects 15% platform margin)"}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
+
+                  {(() => {
+                    const potential = superCoinsQuote?.potentialCoinsToEarn ?? quote?.superCoins?.potentialCoinsToEarn;
+                    const potentialCoins = potential !== undefined ? potential : Math.floor((coinsEligibleSubtotal / 100) * 10);
+                    if (potentialCoins > 0) {
+                      return (
+                        <View style={styles.superCoinsEarnBanner}>
+                          <Text style={styles.superCoinsEarnIcon}>🎉</Text>
+                          <Text style={styles.superCoinsEarnText}>
+                            Earn <Text style={styles.superCoinsEarnGold}>+{potentialCoins} Super Coins</Text> (R{(potentialCoins * 0.1).toFixed(2)}) upon payment completion!
+                          </Text>
+                        </View>
+                      );
+                    }
+                    return null;
+                  })()}
                 </View>
-              </View>
+              ) : null}
+
+              {/* Refer & Earn Store Credits Card */}
+              {isReferralEligibleOnOrder ? (
+                <View style={styles.referralCheckoutCard}>
+                  <View style={styles.superCoinsCardHeader}>
+                    <View
+                      style={[
+                        styles.superCoinsIconBox,
+                        {
+                          backgroundColor: "rgba(16, 185, 129, 0.15)",
+                          borderColor: "rgba(16, 185, 129, 0.4)",
+                        },
+                      ]}
+                    >
+                      <Text style={styles.superCoinsIconText}>🎁</Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <View style={styles.superCoinsTitleRow}>
+                        <Text style={styles.superCoinsCardTitle}>Refer & Earn Credits</Text>
+                        {isReferralPartial ? (
+                          <View
+                            style={[
+                              styles.superCoinsRateBadge,
+                              { backgroundColor: "rgba(245, 194, 66, 0.2)", borderColor: "rgba(245, 194, 66, 0.4)" },
+                            ]}
+                          >
+                            <Text style={[styles.superCoinsRateBadgeText, { color: "#f5c242" }]}>
+                              ELIGIBLE: R{referralEligibleBase.toFixed(2)}
+                            </Text>
+                          </View>
+                        ) : (
+                          <View
+                            style={[
+                              styles.superCoinsRateBadge,
+                              { backgroundColor: "rgba(16, 185, 129, 0.2)" },
+                            ]}
+                          >
+                            <Text style={[styles.superCoinsRateBadgeText, { color: "#4ade80" }]}>
+                              1:1 CASH CREDIT
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.superCoinsBalanceSub}>
+                        Available Credit:{" "}
+                        <Text style={{ color: "#4ade80", fontWeight: "800" }}>
+                          R{Number(effectiveRewardBalance || 0).toFixed(2)}
+                        </Text>
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.superCoinsToggle,
+                        useReferralRewards &&
+                          (effectiveRewardBalance || 0) > 0 && {
+                            backgroundColor: "#10b981",
+                            borderColor: "#34d399",
+                          },
+                        (effectiveRewardBalance || 0) <= 0 && {
+                          opacity: 0.35,
+                          backgroundColor: "rgba(255, 255, 255, 0.05)",
+                        },
+                      ]}
+                      onPress={() => {
+                        if ((effectiveRewardBalance || 0) <= 0) {
+                          showMessage(
+                            "You currently have R0.00 in referral credits. Share your referral link from your Profile to earn store credits!"
+                          );
+                          return;
+                        }
+                        setUseReferralRewards(!useReferralRewards);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.superCoinsToggleCheck}>
+                        {useReferralRewards && (effectiveRewardBalance || 0) > 0 ? "✓" : ""}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {useReferralRewards && (effectiveRewardBalance || 0) > 0 && referralRewardDiscount > 0 ? (
+                    <View style={styles.superCoinsAppliedRow}>
+                      <View style={styles.superCoinsAppliedLeft}>
+                        <Text style={styles.superCoinsAppliedCheck}>✓</Text>
+                        <Text style={styles.superCoinsAppliedText}>
+                          Store Credit Applied:{" "}
+                          <Text style={styles.superCoinsAppliedAmount}>
+                            -R{referralRewardDiscount.toFixed(2)}
+                          </Text>
+                        </Text>
+                      </View>
+                      <Text style={[styles.superCoinsMarginNote, { color: "#9ca3af" }]}>
+                        Deducted directly from your Refer & Earn balance on order placement.
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {(effectiveRewardBalance || 0) <= 0 ? (
+                    <View
+                      style={[
+                        styles.superCoinsEarnBanner,
+                        {
+                          backgroundColor: "rgba(255, 255, 255, 0.03)",
+                          borderColor: "rgba(255, 255, 255, 0.08)",
+                        },
+                      ]}
+                    >
+                      <Text style={styles.superCoinsEarnIcon}>✨</Text>
+                      <Text style={styles.superCoinsEarnText}>
+                        Invite friends via <Text style={{ color: "#f5c242", fontWeight: "700" }}>Refer & Earn</Text> in your profile to earn credits towards every order!
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
 
               {/* Payment Method Selection */}
               <View style={styles.sectionCard}>
@@ -4527,6 +4794,15 @@ const Checkout = ({ navigation, route }) => {
                   <Text style={styles.breakdownVal}>R{subtotal.toFixed(2)}</Text>
                 </View>
 
+                <View style={[styles.breakdownRow, { paddingLeft: 8 }]}>
+                  <Text style={[styles.breakdownLabel, { fontSize: 11, color: "rgba(255, 255, 255, 0.5)" }]}>
+                    Includes 15% South African VAT
+                  </Text>
+                  <Text style={[styles.breakdownVal, { fontSize: 11, color: "rgba(255, 255, 255, 0.7)" }]}>
+                    R{(subtotal * 0.15).toFixed(2)}
+                  </Text>
+                </View>
+
                 {discount > 0 && (
                   <View style={styles.breakdownRow}>
                     <Text style={[styles.breakdownLabel, { color: "#4cd964" }]}>Voucher Discount</Text>
@@ -4539,6 +4815,15 @@ const Checkout = ({ navigation, route }) => {
                     <Text style={[styles.breakdownLabel, { color: "#f5c242" }]}>🪙 Super Coins Redeemed</Text>
                     <Text style={[styles.breakdownVal, { color: "#f5c242", fontWeight: "700" }]}>
                       -R{superCoinDiscount.toFixed(2)}
+                    </Text>
+                  </View>
+                )}
+
+                {referralRewardDiscount > 0 && (
+                  <View style={styles.breakdownRow}>
+                    <Text style={[styles.breakdownLabel, { color: "#4ade80" }]}>🎁 Refer & Earn Credit</Text>
+                    <Text style={[styles.breakdownVal, { color: "#4ade80", fontWeight: "700" }]}>
+                      -R{referralRewardDiscount.toFixed(2)}
                     </Text>
                   </View>
                 )}
@@ -6525,6 +6810,19 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 16,
     shadowColor: "#c99742",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  referralCheckoutCard: {
+    backgroundColor: "#16130e",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(16, 185, 129, 0.35)",
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: "#10b981",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,

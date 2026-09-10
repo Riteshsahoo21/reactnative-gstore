@@ -60,6 +60,8 @@ import CustomerDashboard from "./CustomerDashboard";
 import NotificationBell from "./NotificationBell";
 import { API_BASE } from "../resources/data/Constants";
 import LinearGradient from "react-native-linear-gradient";
+import { useCurrency, getCountryFlagUri, CURRENCY_TO_COUNTRY } from "../context/CurrencyContext";
+import LocaleModal from "./LocaleModal";
 
 const SOMMELIER_CREST = require("../resources/images/sommelier_crest.jpg");
 
@@ -297,6 +299,9 @@ const Home = ({ navigation, route }) => {
       setNavigationIndex(route.params.tabIndex);
     }
   }, [route?.params?.tabIndex]);
+  const { countryCode, countryName, currency, currencySymbol, currencyFlagCountry } = useCurrency();
+  const [localeModalVisible, setLocaleModalVisible] = useState(false);
+  const [localeModalTab, setLocaleModalTab] = useState('country');
   const [openDrawer, setOpenDrawer] = useState(false);
   const [confirmationVisibility, setConfirmationVisibility] = useState(false);
   const [confirmationMessage, setConfirmationMessage] = useState("Are you sure?");
@@ -682,6 +687,57 @@ const handleLogout = async () => {
               </TouchableOpacity>
             </LinearGradient>
 
+            {/* Shopping Preferences: Country & Currency */}
+            <View style={styles.drawerLocaleSection}>
+              <View style={styles.drawerLocaleSectionHeader}>
+                <Text style={styles.drawerLocaleEyebrow}>SHOPPING PREFERENCES</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.drawerLocaleCard}
+                activeOpacity={0.82}
+                onPress={() => {
+                  setOpenDrawer(false);
+                  setLocaleModalTab('country');
+                  setLocaleModalVisible(true);
+                }}
+              >
+                <LinearGradient
+                  colors={['#241e16', '#14110d']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.drawerLocaleGradient}
+                >
+                  <View style={styles.drawerLocaleLeft}>
+                    <View style={styles.drawerFlagsGroup}>
+                      <Image
+                        source={{ uri: getCountryFlagUri(countryCode) }}
+                        style={styles.drawerLocaleFlag}
+                        resizeMode="cover"
+                      />
+                      <Image
+                        source={{ uri: getCountryFlagUri(currencyFlagCountry || CURRENCY_TO_COUNTRY[currency] || countryCode) }}
+                        style={[styles.drawerLocaleFlag, { marginLeft: -6, borderWidth: 1, borderColor: '#14110d' }]}
+                        resizeMode="cover"
+                      />
+                    </View>
+                    <View style={styles.drawerLocaleMeta}>
+                      <Text style={styles.drawerLocaleTitle} numberOfLines={1}>
+                        {countryName}
+                      </Text>
+                      <Text style={styles.drawerLocaleSub}>
+                        Currency: {currency} ({currencySymbol})
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.drawerLocaleChangeBtn}>
+                    <Text style={styles.drawerLocaleChangeText}>Change ▾</Text>
+                  </View>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+
             {/* Scrollable Unified Navigation List with Staggered Entrance */}
             <ScrollView
               style={styles.drawerScrollView}
@@ -797,6 +853,13 @@ const handleLogout = async () => {
         confirmationDecision={() => setConfirmationVisibility(false)}
       />
 
+
+      {/* Country & Currency Selection Modal */}
+      <LocaleModal
+        isVisible={localeModalVisible}
+        initialTab={localeModalTab}
+        onClose={() => setLocaleModalVisible(false)}
+      />
 
       {/* 💖 Isolated Flying Heart Overlay 💖 */}
       <FlyingHeartOverlay />
@@ -1162,6 +1225,142 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   buttonText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
+
+  // Country & Currency Top Announcement Bar (matches web styling)
+  announcementBar: {
+    backgroundColor: '#c9a35b',
+    paddingVertical: 5,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0, 0, 0, 0.15)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  announcementLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  announcementFlag: {
+    width: 18,
+    height: 12,
+    borderRadius: 2,
+  },
+  announcementCountry: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#000000',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  announcementDivider: {
+    width: 1,
+    height: 14,
+    backgroundColor: 'rgba(0, 0, 0, 0.22)',
+    marginHorizontal: 10,
+  },
+  announcementRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  announcementCurrencyBadge: {
+    fontSize: 9.5,
+    fontWeight: '900',
+    color: '#c9a35b',
+    backgroundColor: '#000000',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 3,
+  },
+  announcementCurrency: {
+    fontSize: 10.5,
+    fontWeight: '900',
+    color: '#000000',
+    letterSpacing: 0.5,
+  },
+  announcementChevron: {
+    fontSize: 11,
+    color: '#000000',
+    fontWeight: '900',
+    marginLeft: 1,
+  },
+
+  // Drawer Shopping Preferences Card
+  drawerLocaleSection: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: '#100e0b',
+  },
+  drawerLocaleSectionHeader: {
+    marginBottom: 6,
+  },
+  drawerLocaleEyebrow: {
+    fontSize: 8.5,
+    fontWeight: '800',
+    color: '#c9a35b',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  drawerLocaleCard: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(201, 163, 91, 0.3)',
+  },
+  drawerLocaleGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  drawerFlagsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  drawerLocaleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  drawerLocaleFlag: {
+    width: 22,
+    height: 15,
+    borderRadius: 2,
+  },
+  drawerLocaleMeta: {
+    flex: 1,
+  },
+  drawerLocaleTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  drawerLocaleSub: {
+    fontSize: 10,
+    color: '#c9a35b',
+    fontWeight: '600',
+    marginTop: 1,
+  },
+  drawerLocaleChangeBtn: {
+    backgroundColor: 'rgba(201, 163, 91, 0.18)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 0.5,
+    borderColor: 'rgba(201, 163, 91, 0.4)',
+  },
+  drawerLocaleChangeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ffd700',
+  },
 });
 
 export default Home;
