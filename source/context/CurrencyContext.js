@@ -294,81 +294,151 @@ export const CurrencyProvider = ({ children }) => {
           setCurrency(savedCurrency);
         }
 
-        // 2. Fetch live exchange rates from backend
+        // 2. Fetch live exchange rates from backend (with public API fallback)
         try {
-          const res = await axios.get(`${API_BASE}/config/currency-rates`, { timeout: 8000 });
+          const res = await axios.get(`${API_BASE}/config/currency-rates`, { timeout: 5000 });
           if (res.data && res.data.rates && isMounted) {
-            setRates(res.data.rates);
+            setRates((prev) => ({ ...prev, ...res.data.rates }));
           }
         } catch (ratesErr) {
-          console.log('[Currency] Could not fetch live rates, using cached/default rates:', ratesErr?.message);
+          try {
+            const directRes = await axios.get('https://api.exchangerate-api.com/v4/latest/USD', { timeout: 5000 });
+            if (directRes.data && directRes.data.rates && isMounted) {
+              setRates((prev) => ({ ...prev, ...directRes.data.rates }));
+            }
+          } catch (directErr) {
+            console.log('[Currency] Live rates unavailable, using DEFAULT_RATES');
+          }
         }
 
-        // 3. Automated Geo-IP detection if not manually locked
-        const needsCountryDetect = isManualCountry !== 'true';
-        const needsCurrencyDetect = isManualCurrency !== 'true';
+        // 3. Automated Geo-IP and VPN detection (runs direct edge trace)
+        let detectedCode = null;
+        let detectedName = null;
+        let detectedCurr = null;
+        let detectedIp = null;
 
-        if (needsCountryDetect || needsCurrencyDetect) {
-          let detectedCode = null;
-          let detectedName = null;
-          let detectedCurr = null;
+        // Tier 1: Direct Cloudflare Anycast Trace (supports domain-based VPNs via www.cloudflare.com & 1.1.1.1)
+        const traceUrls = [
+          `https://www.cloudflare.com/cdn-cgi/trace?_t=${Date.now()}`,
+          `https://1.1.1.1/cdn-cgi/trace?_t=${Date.now()}`
+        ];
 
-          // Tier A: First-party backend endpoint (unblocked by ad-blockers, uses Cloudflare edge header in prod)
+        for (const url of traceUrls) {
+          try {
+            const cfRes = await axios.get(url, { timeout: 2500, headers: { 'Cache-Control': 'no-cache' } });
+            if (typeof cfRes.data === 'string') {
+              const lines = cfRes.data.trim().split('\n');
+              for (const line of lines) {
+                const [k, v] = line.split('=');
+                if (k === 'loc' && v && v.trim().length === 2) {
+                  detectedCode = v.trim().toUpperCase();
+                }
+                if (k === 'ip' && v) {
+                  detectedIp = v.trim();
+                }
+              }
+              if (detectedCode) break;
+            }
+          } catch (cfErr) {}
+        }
+
+        // Tier 2: Secondary external client-side fallbacks (matches Footer.jsx: ipapi / country.is / ipwho.is)
+        if (!detectedCode) {
+          try {
+            const geoRes = await axios.get(`https://ipapi.co/json/?_t=${Date.now()}`, { timeout: 3000 });
+            if (geoRes.data && geoRes.data.country_code) {
+              detectedCode = geoRes.data.country_code.toUpperCase();
+              detectedName = geoRes.data.country_name;
+              detectedCurr = geoRes.data.currency;
+              detectedIp = geoRes.data.ip;
+            }
+          } catch {
+            try {
+              const extRes = await axios.get(`https://api.country.is?_t=${Date.now()}`, { timeout: 3000 });
+              if (extRes.data && extRes.data.country) {
+                detectedCode = extRes.data.country.toUpperCase();
+                detectedIp = extRes.data.ip;
+              }
+            } catch {
+              try {
+                const ipwhoRes = await axios.get(`https://ipwho.is/?_t=${Date.now()}`, { timeout: 3000 });
+                if (ipwhoRes.data && ipwhoRes.data.success && ipwhoRes.data.country_code) {
+                  detectedCode = ipwhoRes.data.country_code.toUpperCase();
+                  detectedName = ipwhoRes.data.country;
+                  detectedIp = ipwhoRes.data.ip;
+                }
+              } catch {}
+            }
+          }
+        }
+
+        // Tier 3: First-party backend endpoint fallback
+        if (!detectedCode) {
           try {
             const geoRes = await axios.get(`${API_BASE}/config/geo-lookup`, { timeout: 4000 });
             if (geoRes.data && geoRes.data.success && geoRes.data.country_code) {
               detectedCode = geoRes.data.country_code;
               detectedName = geoRes.data.country_name;
               detectedCurr = geoRes.data.currency;
+              detectedIp = geoRes.data.ip;
             }
-          } catch (apiErr) {
-            // Backend unreachable, proceed to fallback
+          } catch (apiErr) {}
+        }
+
+        // Tier 4: Instant Zero-Network Timezone Heuristic
+        if (!detectedCode) {
+          const tzCountry = getCountryFromTimezone();
+          if (tzCountry) {
+            detectedCode = tzCountry;
+          }
+        }
+
+        let parsedSaved = null;
+        try {
+          parsedSaved = savedCountry ? JSON.parse(savedCountry) : null;
+        } catch (e) {}
+
+        const isStuckOnZa = parsedSaved?.country_code === 'ZA' && detectedCode && detectedCode !== 'ZA';
+        const locationChanged = Boolean(detectedCode && parsedSaved?.country_code && detectedCode !== parsedSaved.country_code);
+
+        // If location changed via VPN/network or stuck on old default, immediately adopt detected location
+        if (detectedCode && (locationChanged || isStuckOnZa || !parsedSaved || (isManualCountry !== 'true' && isManualCurrency !== 'true'))) {
+          const matched = ALL_COUNTRIES.find((c) => c.code === detectedCode);
+          const finalName = detectedName || matched?.name || detectedCode;
+          const finalCurr = detectedCurr || matched?.currency || getCurrencyForCountryCode(detectedCode);
+
+          if (isMounted) {
+            setCountryCode(detectedCode);
+            setCountryName(finalName);
+            setCurrency(finalCurr);
           }
 
-          // Tier B: Secondary fallback via external IP services
-          if (!detectedCode) {
-            try {
-              const extRes = await axios.get('https://api.country.is', { timeout: 3500 });
-              if (extRes.data && extRes.data.country) {
-                detectedCode = extRes.data.country.toUpperCase();
-              }
-            } catch {
-              try {
-                const ipwhoRes = await axios.get('https://ipwho.is/', { timeout: 3500 });
-                if (ipwhoRes.data && ipwhoRes.data.success && ipwhoRes.data.country_code) {
-                  detectedCode = ipwhoRes.data.country_code.toUpperCase();
-                  detectedName = ipwhoRes.data.country;
-                }
-              } catch {}
-            }
-          }
+          await Promise.all([
+            AsyncStorage.setItem('userCountry', JSON.stringify({ country_code: detectedCode, country_name: finalName })),
+            AsyncStorage.setItem('userCurrency', finalCurr),
+            AsyncStorage.removeItem('userCountryManual'),
+            AsyncStorage.removeItem('userCurrencyManual'),
+          ]);
+          return;
+        }
 
-          // Tier C: Instant Zero-Network Timezone Heuristic (works offline, never blocked)
-          if (!detectedCode) {
-            const tzCountry = getCountryFromTimezone();
-            if (tzCountry) {
-              detectedCode = tzCountry;
-            }
-          }
-
-          if (detectedCode && isMounted) {
+        // If user manually chose a genuine country on this exact location, respect their choice
+        if (!locationChanged && !isStuckOnZa) {
+          if (isManualCountry === 'true' && parsedSaved?.country_code && isMounted) {
+            setCountryCode(parsedSaved.country_code);
+            setCountryName(parsedSaved.country_name || parsedSaved.country_code);
+          } else if (detectedCode && isMounted) {
             const matched = ALL_COUNTRIES.find((c) => c.code === detectedCode);
-            const finalName = detectedName || matched?.name || detectedCode;
-            const finalCurr = detectedCurr || matched?.currency || getCurrencyForCountryCode(detectedCode);
+            setCountryCode(detectedCode);
+            setCountryName(detectedName || matched?.name || detectedCode);
+          }
 
-            if (needsCountryDetect) {
-              setCountryCode(detectedCode);
-              setCountryName(finalName);
-              await AsyncStorage.setItem(
-                'userCountry',
-                JSON.stringify({ country_code: detectedCode, country_name: finalName })
-              );
-            }
-
-            if (needsCurrencyDetect && finalCurr) {
-              setCurrency(finalCurr);
-              await AsyncStorage.setItem('userCurrency', finalCurr);
-            }
+          if (isManualCurrency === 'true' && savedCurrency && isMounted) {
+            setCurrency(savedCurrency);
+          } else if (detectedCode && isMounted) {
+            const finalCurr = detectedCurr || getCurrencyForCountryCode(detectedCode);
+            setCurrency(finalCurr);
+            await AsyncStorage.setItem('userCurrency', finalCurr);
           }
         }
       } catch (err) {
