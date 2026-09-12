@@ -388,36 +388,16 @@ export default function AuctionVipCheckout({ route, navigation }) {
   };
 
   const handlePayFastNavigationStateChange = async (navState) => {
-    const { url } = navState;
+    const url = (navState?.url || "").toLowerCase();
     if (!url) return;
 
+    // 1. CANCELLATION FIRST
     if (
-      url.includes("payment=success") ||
-      url.includes("return_url") ||
-      url.includes("/auction/vip-checkout?payment=success") ||
-      (url.includes("mobile-return") && url.includes("status=success"))
-    ) {
-      setPayfastModalVisible(false);
-      setDepositStatus("paid");
-      try {
-        await safeFetch("/payfast/confirm-order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ depositId: submittedDeposit?._id }),
-        });
-      } catch (e) {}
-
-      Alert.alert(
-        "👑 VIP Privileges Activated!",
-        `Your refundable security deposit of R${depositAmount.toLocaleString()} has been confirmed. Your bidding ceiling is elevated up to R${premiumLimit.toLocaleString()}+ with full escrow protection.`,
-        [
-          { text: "Explore Catalogue", onPress: () => navigation.navigate("AuctionsHub") },
-          { text: "Done" },
-        ]
-      );
-    } else if (
       url.includes("payment=cancel") ||
-      url.includes("cancel_url") ||
+      url.includes("status=cancel") ||
+      url.includes("status=cancelled") ||
+      url.includes("cancel=true") ||
+      url.includes("cancelled=true") ||
       (url.includes("mobile-return") && url.includes("status=cancel"))
     ) {
       setPayfastModalVisible(false);
@@ -439,6 +419,35 @@ export default function AuctionVipCheckout({ route, navigation }) {
           { text: "Dismiss", style: "cancel" },
         ]
       );
+      return;
+    }
+
+    // 2. STRICT SUCCESS ONLY (NEVER ON CANCEL, NO DANGEROUS return_url)
+    if (
+      (url.includes("mobile-return") && url.includes("status=success")) ||
+      url.includes("payment=success") ||
+      (url.includes("status=complete") && !url.includes("cancel")) ||
+      (url.includes("status=success") && !url.includes("cancel"))
+    ) {
+      setPayfastModalVisible(false);
+      setDepositStatus("paid");
+      try {
+        await safeFetch("/payfast/confirm-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ depositId: submittedDeposit?._id }),
+        });
+      } catch (e) {}
+
+      Alert.alert(
+        "👑 VIP Privileges Activated!",
+        `Your refundable security deposit of R${depositAmount.toLocaleString()} has been confirmed. Your bidding ceiling is elevated up to R${premiumLimit.toLocaleString()}+ with full escrow protection.`,
+        [
+          { text: "Explore Catalogue", onPress: () => navigation.navigate("AuctionsHub") },
+          { text: "Done" },
+        ]
+      );
+      return;
     }
   };
 
@@ -768,6 +777,36 @@ export default function AuctionVipCheckout({ route, navigation }) {
             <WebView
               source={{ html: payfastHtml }}
               onNavigationStateChange={handlePayFastNavigationStateChange}
+              onShouldStartLoadWithRequest={(request) => {
+                const reqUrl = (request.url || "").toLowerCase();
+                if (
+                  reqUrl.includes("payment=cancel") ||
+                  reqUrl.includes("status=cancelled") ||
+                  reqUrl.includes("status=cancel") ||
+                  reqUrl.includes("cancel=true") ||
+                  reqUrl.includes("cancelled=true")
+                ) {
+                  setPayfastModalVisible(false);
+                  safeFetch("/payfast/cancel-payment", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      depositId: submittedDeposit?._id,
+                      reason: "Navigation requested cancel URL",
+                    }),
+                  }).catch(() => {});
+                  Alert.alert(
+                    "VIP Deposit Cancelled",
+                    "Your PayFast VIP deposit checkout was cancelled. No funds were debited, and no receipt was issued.",
+                    [
+                      { text: "Retry VIP Upgrade", onPress: () => handleSubmit() },
+                      { text: "Dismiss", style: "cancel" },
+                    ]
+                  );
+                  return false;
+                }
+                return true;
+              }}
               startInLoadingState={true}
               renderLoading={() => (
                 <View style={styles.webViewLoader}>

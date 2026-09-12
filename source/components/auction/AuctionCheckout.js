@@ -706,31 +706,16 @@ export default function AuctionCheckout({ route, navigation }) {
   };
 
   const handleWebViewNavChange = async (navState) => {
-    const { url } = navState;
-    if (
-      url.includes("payment=success") ||
-      url.includes("status=complete") ||
-      url.includes("status=COMPLETE") ||
-      url.includes("status=success") ||
-      url.includes("paid=true") ||
-      url.includes("/finish") ||
-      url.includes("/complete") ||
-      url.includes("/checkout/success") ||
-      (url.includes("mobile-return") && url.includes("status=success"))
-    ) {
-      setPayfastModalVisible(false);
-      await finalizePaidAuction();
-      Alert.alert(
-        "Settlement Completed! 🏆",
-        "Your payment has been successfully cleared with the Grand Store Vault. White-glove courier dispatch will begin shortly.",
-        [{ text: "View Receipt", onPress: () => navigation.navigate("MyBids") }]
-      );
-      return;
-    }
+    const url = (navState?.url || "").toLowerCase();
+    if (!url) return;
 
+    // 1. CANCELLATION FIRST
     if (
       url.includes("payment=cancel") ||
       url.includes("status=cancelled") ||
+      url.includes("status=cancel") ||
+      url.includes("cancel=true") ||
+      url.includes("cancelled=true") ||
       (url.includes("mobile-return") && url.includes("status=cancel"))
     ) {
       setPayfastModalVisible(false);
@@ -749,6 +734,24 @@ export default function AuctionCheckout({ route, navigation }) {
           { text: "Dismiss", style: "cancel" },
         ]
       );
+      return;
+    }
+
+    // 2. STRICT SUCCESS ONLY (NEVER ON CANCEL, NO RAW /finish OR /complete)
+    if (
+      (url.includes("mobile-return") && url.includes("status=success")) ||
+      url.includes("payment=success") ||
+      (url.includes("status=complete") && !url.includes("cancel")) ||
+      (url.includes("status=success") && !url.includes("cancel"))
+    ) {
+      setPayfastModalVisible(false);
+      await finalizePaidAuction();
+      Alert.alert(
+        "Settlement Completed! 🏆",
+        "Your payment has been successfully cleared with the Grand Store Vault. White-glove courier dispatch will begin shortly.",
+        [{ text: "View Receipt", onPress: () => navigation.navigate("MyBids") }]
+      );
+      return;
     }
   };
 
@@ -1259,10 +1262,64 @@ export default function AuctionCheckout({ route, navigation }) {
             <WebView
               source={{ html: payfastHtml }}
               onNavigationStateChange={handleWebViewNavChange}
+              injectedJavaScript={`
+                (function() {
+                  function detectAuctionPayfast() {
+                    try {
+                      var text = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : "";
+                      var href = window.location.href.toLowerCase();
+
+                      var isCancel = (
+                        href.indexOf('status=cancel') !== -1 ||
+                        href.indexOf('status=cancelled') !== -1 ||
+                        href.indexOf('payment=cancel') !== -1 ||
+                        href.indexOf('cancel=true') !== -1 ||
+                        text.indexOf('payment cancelled') !== -1
+                      );
+                      if (isCancel) {
+                        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+                          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PAYFAST_CANCEL', status: 'cancel' }));
+                        }
+                        return;
+                      }
+
+                      var isSuccess = (
+                        (href.indexOf('mobile-return') !== -1 && href.indexOf('status=success') !== -1) ||
+                        href.indexOf('payment=success') !== -1 ||
+                        (href.indexOf('status=complete') !== -1 && href.indexOf('cancel') === -1) ||
+                        (href.indexOf('status=success') !== -1 && href.indexOf('cancel') === -1) ||
+                        text.indexOf('payment successful') !== -1
+                      );
+                      if (isSuccess) {
+                        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+                          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PAYFAST_SUCCESS', status: 'success' }));
+                        }
+                      }
+                    } catch (e) {}
+                  }
+                  setInterval(detectAuctionPayfast, 500);
+                })();
+                true;
+              `}
               onMessage={async (event) => {
                 try {
                   const msg = JSON.parse(event.nativeEvent.data);
-                  if (msg.type === "PAYFAST_SUCCESS" || msg.status === "success") {
+                  if (msg.type === "PAYFAST_CANCEL" || msg.status === "cancel") {
+                    setPayfastModalVisible(false);
+                    safeFetch("/payfast/cancel-payment", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ auctionId: lot._id, reason: "Customer cancelled PayFast modal" }),
+                    }).catch(() => {});
+                    Alert.alert(
+                      "Payment Cancelled",
+                      "Your PayFast auction settlement payment was cancelled. No funds were debited, and no receipt was issued.",
+                      [
+                        { text: "Retry Payment", onPress: () => handleProcessOrder() },
+                        { text: "Dismiss", style: "cancel" },
+                      ]
+                    );
+                  } else if (msg.type === "PAYFAST_SUCCESS" || msg.status === "success") {
                     setPayfastModalVisible(false);
                     await finalizePaidAuction();
                     Alert.alert(
@@ -1270,15 +1327,38 @@ export default function AuctionCheckout({ route, navigation }) {
                       "Your payment has been successfully cleared with the Grand Store Vault. White-glove courier dispatch will begin shortly.",
                       [{ text: "View Receipt", onPress: () => navigation.navigate("MyBids") }]
                     );
-                  } else if (msg.type === "PAYFAST_CANCEL" || msg.status === "cancel") {
-                    setPayfastModalVisible(false);
-                    Alert.alert("Payment Cancelled", "Your PayFast checkout session was cancelled.");
                   }
                 } catch (e) {}
               }}
               onShouldStartLoadWithRequest={(request) => {
-                const reqUrl = request.url || "";
-                if (reqUrl.includes("mobile-return") && reqUrl.includes("status=success")) {
+                const reqUrl = (request.url || "").toLowerCase();
+                if (
+                  reqUrl.includes("payment=cancel") ||
+                  reqUrl.includes("status=cancelled") ||
+                  reqUrl.includes("status=cancel") ||
+                  reqUrl.includes("cancel=true") ||
+                  reqUrl.includes("cancelled=true")
+                ) {
+                  setPayfastModalVisible(false);
+                  safeFetch("/payfast/cancel-payment", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ auctionId: lot._id, reason: "Navigation requested cancel URL" }),
+                  }).catch(() => {});
+                  Alert.alert(
+                    "Payment Cancelled",
+                    "Your PayFast auction settlement payment was cancelled. No funds were debited, and no receipt was issued.",
+                    [
+                      { text: "Retry Payment", onPress: () => handleProcessOrder() },
+                      { text: "Dismiss", style: "cancel" },
+                    ]
+                  );
+                  return false;
+                }
+                if (
+                  (reqUrl.includes("mobile-return") && reqUrl.includes("status=success")) ||
+                  reqUrl.includes("payment=success")
+                ) {
                   setPayfastModalVisible(false);
                   finalizePaidAuction();
                   Alert.alert(

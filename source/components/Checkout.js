@@ -2479,65 +2479,73 @@ const Checkout = ({ navigation, route }) => {
     }
   };
 
+  // PayFast Cancellation Handler (Strict cancellation, resets order completed state and notifies backend)
+  const handleCancelPayment = (reason = "Customer cancelled payment on mobile gateway") => {
+    setShowPayfastModal(false);
+    setIsPayfastLoading(false);
+    setOrderCompleted(false);
+
+    const targetPayOrderId =
+      activeOrderRef.current?.orderMongoId ||
+      activeOrderRef.current?._id ||
+      activeOrderRef.current?.orderId ||
+      createdOrder?._id ||
+      createdOrder?.orderId;
+
+    if (targetPayOrderId) {
+      safeApiFetch(`/orders/${targetPayOrderId}/cancel-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      }).catch((err) => console.warn("Failed to notify backend of order cancellation:", err));
+    }
+
+    Alert.alert(
+      "Payment Cancelled",
+      "Your PayFast payment was cancelled. No funds were debited, and no receipt was issued.",
+      [
+        {
+          text: "Retry Payment",
+          onPress: () => retryPayfastPayment(),
+        },
+        { text: "Dismiss", style: "cancel" },
+      ]
+    );
+  };
+
   // PayFast In-App Navigation Interceptor
   const handlePayfastNavStateChange = (navState) => {
-    const currentUrl = navState?.url || "";
+    const currentUrl = (navState?.url || "").toLowerCase();
     console.log("PayFast In-App Navigation State:", currentUrl);
 
-    // 1. Success interception (PayFast returns to return_url, sandbox finish, mobile-return, or success page)
+    // 1. CANCELLATION INTERCEPTION (STRICTLY CHECKED FIRST)
+    const isExplicitCancel =
+      (currentUrl.includes("mobile-return") && currentUrl.includes("status=cancel")) ||
+      currentUrl.includes("payment=cancel") ||
+      currentUrl.includes("status=cancel") ||
+      currentUrl.includes("status=cancelled") ||
+      currentUrl.includes("cancel=true") ||
+      currentUrl.includes("cancelled=true");
+
+    if (isExplicitCancel) {
+      handleCancelPayment("Customer cancelled payment on mobile gateway navigation");
+      return;
+    }
+
+    // 2. SUCCESS INTERCEPTION (STRICTLY CHECKED SECOND, NEVER ON CANCEL)
     const isSuccessUrl =
-      currentUrl.includes("mobile-return") && currentUrl.includes("status=success") ||
-      currentUrl.includes("payment=success") ||
-      currentUrl.includes("order-success") ||
-      currentUrl.includes("/customer/order/") ||
-      currentUrl.includes("/success") ||
-      currentUrl.includes("success=true") ||
-      currentUrl.includes("status=COMPLETE") ||
-      currentUrl.includes("status=complete") ||
-      currentUrl.includes("status=success") ||
-      currentUrl.includes("/process/finish") ||
-      currentUrl.includes("/process/complete") ||
-      currentUrl.includes("/finish") ||
-      currentUrl.includes("/complete") ||
-      currentUrl.includes("paid=true") ||
-      currentUrl.includes("pf_payment_id");
+      !isExplicitCancel &&
+      (
+        (currentUrl.includes("mobile-return") && currentUrl.includes("status=success")) ||
+        currentUrl.includes("payment=success") ||
+        (currentUrl.includes("status=complete") && !currentUrl.includes("cancel")) ||
+        (currentUrl.includes("status=success") && !currentUrl.includes("cancel"))
+      );
 
     if (isSuccessUrl) {
       setShowPayfastModal(false);
       setIsPayfastLoading(false);
       finalizePaidOrder(activeOrderRef.current);
-      return;
-    }
-
-    // 2. Cancellation interception (PayFast returns to cancel_url or mobile-return cancel)
-    if (
-      (currentUrl.includes("mobile-return") && currentUrl.includes("status=cancel")) ||
-      currentUrl.includes("payment=cancel") ||
-      currentUrl.includes("/cancel") ||
-      currentUrl.includes("cancelled") ||
-      currentUrl.includes("cancel=true")
-    ) {
-      setShowPayfastModal(false);
-      setIsPayfastLoading(false);
-      const targetPayOrderId = activeOrderRef.current?.orderMongoId || activeOrderRef.current?._id || activeOrderRef.current?.orderId;
-      if (targetPayOrderId) {
-        safeApiFetch(`/orders/${targetPayOrderId}/cancel-payment`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: "Customer cancelled payment on mobile gateway" }),
-        }).catch((err) => console.warn("Failed to notify backend of order cancellation:", err));
-      }
-      Alert.alert(
-        "Payment Cancelled",
-        "Your PayFast payment was cancelled. No funds were debited, and no receipt was issued.",
-        [
-          {
-            text: "Retry Payment",
-            onPress: () => retryPayfastPayment(),
-          },
-          { text: "Dismiss", style: "cancel" },
-        ]
-      );
       return;
     }
   };
@@ -2560,27 +2568,7 @@ const Checkout = ({ navigation, route }) => {
           text: "Cancel Payment",
           style: "destructive",
           onPress: () => {
-            setShowPayfastModal(false);
-            setIsPayfastLoading(false);
-            const targetPayOrderId = activeOrderRef.current?.orderMongoId || activeOrderRef.current?._id || activeOrderRef.current?.orderId;
-            if (targetPayOrderId) {
-              safeApiFetch(`/orders/${targetPayOrderId}/cancel-payment`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ reason: "Customer dismissed PayFast modal in mobile app" }),
-              }).catch((err) => console.warn("Failed to notify backend of cancellation:", err));
-            }
-            Alert.alert(
-              "Payment Cancelled",
-              "Payment was cancelled. No funds were charged, and no receipt was generated.",
-              [
-                {
-                  text: "Retry Payment",
-                  onPress: () => retryPayfastPayment(),
-                },
-                { text: "Dismiss", style: "cancel" },
-              ]
-            );
+            handleCancelPayment("Customer dismissed PayFast modal in mobile app");
           },
         },
         { text: "Stay in Gateway", style: "cancel" },
@@ -2860,31 +2848,54 @@ const Checkout = ({ navigation, route }) => {
                   try {
                     var text = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : "";
                     var href = window.location.href.toLowerCase();
-                    if (
+
+                    // 1. CANCELLATION FIRST
+                    var isCancel = (
+                      href.indexOf('status=cancel') !== -1 ||
+                      href.indexOf('status=cancelled') !== -1 ||
+                      href.indexOf('payment=cancel') !== -1 ||
+                      href.indexOf('cancel=true') !== -1 ||
+                      href.indexOf('cancelled=true') !== -1 ||
+                      text.indexOf('payment cancelled') !== -1 ||
+                      text.indexOf('transaction cancelled') !== -1
+                    );
+
+                    if (isCancel) {
+                      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+                        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PAYFAST_CANCEL', status: 'cancel' }));
+                      }
+                      return;
+                    }
+
+                    // 2. STRICT SUCCESS ONLY (NO LOOSE /finish OR /complete OR /customer/order/)
+                    var isSuccess = (
+                      (href.indexOf('mobile-return') !== -1 && href.indexOf('status=success') !== -1) ||
                       href.indexOf('payment=success') !== -1 ||
-                      href.indexOf('/customer/order/') !== -1 ||
-                      href.indexOf('status=complete') !== -1 ||
-                      href.indexOf('/finish') !== -1 ||
-                      href.indexOf('/complete') !== -1 ||
+                      (href.indexOf('status=complete') !== -1 && href.indexOf('cancel') === -1) ||
+                      (href.indexOf('status=success') !== -1 && href.indexOf('cancel') === -1) ||
                       text.indexOf('payment successful') !== -1 ||
                       text.indexOf('payment processed') !== -1 ||
                       text.indexOf('payment approved') !== -1 ||
                       text.indexOf('transaction successful') !== -1
-                    ) {
+                    );
+
+                    if (isSuccess) {
                       if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-                        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PAYFAST_SUCCESS' }));
+                        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PAYFAST_SUCCESS', status: 'success' }));
                       }
                     }
                   } catch (e) {}
                 }
-                setInterval(detectPayfastStatus, 600);
+                setInterval(detectPayfastStatus, 500);
               })();
               true;
             `}
             onMessage={(event) => {
               try {
                 const data = JSON.parse(event.nativeEvent.data);
-                if (data && data.type === "PAYFAST_SUCCESS") {
+                if (data && (data.type === "PAYFAST_CANCEL" || data.status === "cancel")) {
+                  handleCancelPayment("PayFast gateway posted cancellation message");
+                } else if (data && (data.type === "PAYFAST_SUCCESS" || data.status === "success")) {
                   setShowPayfastModal(false);
                   setIsPayfastLoading(false);
                   finalizePaidOrder(activeOrderRef.current);
@@ -2892,20 +2903,26 @@ const Checkout = ({ navigation, route }) => {
               } catch (e) {}
             }}
             onShouldStartLoadWithRequest={(req) => {
-              const targetUrl = req?.url || "";
+              const targetUrl = (req?.url || "").toLowerCase();
+
+              // 1. Intercept cancel FIRST
+              if (
+                targetUrl.includes("status=cancel") ||
+                targetUrl.includes("status=cancelled") ||
+                targetUrl.includes("payment=cancel") ||
+                targetUrl.includes("cancel=true") ||
+                targetUrl.includes("cancelled=true")
+              ) {
+                handleCancelPayment("Navigation requested cancel URL");
+                return false;
+              }
+
+              // 2. Strict success only
               if (
                 (targetUrl.includes("mobile-return") && targetUrl.includes("status=success")) ||
                 targetUrl.includes("payment=success") ||
-                targetUrl.includes("order-success") ||
-                targetUrl.includes("/customer/order/") ||
-                targetUrl.includes("/success") ||
-                targetUrl.includes("success=true") ||
-                targetUrl.includes("status=COMPLETE") ||
-                targetUrl.includes("status=complete") ||
-                targetUrl.includes("status=success") ||
-                targetUrl.includes("/finish") ||
-                targetUrl.includes("/complete") ||
-                targetUrl.includes("paid=true")
+                (targetUrl.includes("status=complete") && !targetUrl.includes("cancel")) ||
+                (targetUrl.includes("status=success") && !targetUrl.includes("cancel"))
               ) {
                 setShowPayfastModal(false);
                 setIsPayfastLoading(false);
@@ -2920,16 +2937,13 @@ const Checkout = ({ navigation, route }) => {
               const { nativeEvent } = syntheticEvent;
               const failingUrl = (nativeEvent?.url || "").toLowerCase();
               if (
-                failingUrl.includes("payment=success") ||
-                failingUrl.includes("/customer/order/") ||
-                failingUrl.includes("status=complete") ||
-                failingUrl.includes("success") ||
-                failingUrl.includes("/finish") ||
-                failingUrl.includes("/complete")
+                failingUrl.includes("status=cancel") ||
+                failingUrl.includes("payment=cancel") ||
+                failingUrl.includes("cancel")
               ) {
-                setShowPayfastModal(false);
-                setIsPayfastLoading(false);
-                finalizePaidOrder(activeOrderRef.current);
+                handleCancelPayment("WebView error on cancel redirect URL");
+              } else {
+                console.warn("PayFast WebView load error:", failingUrl);
               }
             }}
             onNavigationStateChange={handlePayfastNavStateChange}

@@ -489,18 +489,47 @@ export default function EventTicketPass({ route, navigation }) {
 
   // PayFast In-App Navigation Interceptor
   const handlePayfastNavStateChange = async (navState) => {
-    const currentUrl = navState?.url || "";
+    const currentUrl = (navState?.url || "").toLowerCase();
 
+    // 1. CANCELLATION FIRST
+    const isCancel =
+      currentUrl.includes("payment=cancel") ||
+      currentUrl.includes("status=cancel") ||
+      currentUrl.includes("status=cancelled") ||
+      currentUrl.includes("cancel=true") ||
+      currentUrl.includes("cancelled=true") ||
+      (currentUrl.includes("mobile-return") && currentUrl.includes("status=cancel"));
+
+    if (isCancel) {
+      setShowPayfastModal(false);
+      setIsPayfastLoading(false);
+      const booked = payfastModalData?.booking;
+      const targetBookingId = booked?._id || booked?.ticketId;
+      if (targetBookingId) {
+        safeFetch("/payfast/cancel-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bookingId: targetBookingId, reason: "Customer cancelled payment in ticket pass modal" }),
+        }).catch(() => {});
+      }
+      Alert.alert(
+        "Ticket Payment Cancelled",
+        "Your PayFast payment was cancelled. No funds were debited, and no receipt was issued.",
+        [
+          { text: "Retry Payment", onPress: () => booked && handlePayPendingTicket(booked) },
+          { text: "Dismiss", style: "cancel" },
+        ]
+      );
+      fetchMyTickets();
+      return;
+    }
+
+    // 2. STRICT SUCCESS ONLY (NEVER ON CANCEL, NO RAW /finish OR /complete)
     const isSuccess =
+      (currentUrl.includes("mobile-return") && currentUrl.includes("status=success")) ||
       currentUrl.includes("payment=success") ||
-      currentUrl.includes("success=true") ||
-      currentUrl.includes("status=COMPLETE") ||
-      currentUrl.includes("status=complete") ||
-      currentUrl.includes("status=success") ||
-      currentUrl.includes("/finish") ||
-      currentUrl.includes("/complete") ||
-      currentUrl.includes("paid=true") ||
-      (currentUrl.includes("mobile-return") && currentUrl.includes("status=success"));
+      (currentUrl.includes("status=complete") && !currentUrl.includes("cancel")) ||
+      (currentUrl.includes("status=success") && !currentUrl.includes("cancel"));
 
     if (isSuccess) {
       setShowPayfastModal(false);
@@ -523,36 +552,6 @@ export default function EventTicketPass({ route, navigation }) {
         console.log("Error confirming event ticket in EventTicketPass:", e);
       }
       Alert.alert("Payment Confirmed! 🥂", "Your ticket has been marked as PAID and your VIP pass is active.");
-      fetchMyTickets();
-      return;
-    }
-
-    if (
-      currentUrl.includes("payment=cancel") ||
-      currentUrl.includes("/cancel") ||
-      currentUrl.includes("cancelled") ||
-      currentUrl.includes("cancel=true") ||
-      (currentUrl.includes("mobile-return") && currentUrl.includes("status=cancel"))
-    ) {
-      setShowPayfastModal(false);
-      setIsPayfastLoading(false);
-      const booked = payfastModalData?.booking;
-      const targetBookingId = booked?._id || booked?.ticketId;
-      if (targetBookingId) {
-        safeFetch("/payfast/cancel-payment", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ bookingId: targetBookingId, reason: "Customer cancelled payment in ticket pass modal" }),
-        }).catch(() => {});
-      }
-      Alert.alert(
-        "Ticket Payment Cancelled",
-        "Your PayFast payment was cancelled. No funds were debited, and no receipt was issued.",
-        [
-          { text: "Retry Payment", onPress: () => booked && handlePayPendingTicket(booked) },
-          { text: "Dismiss", style: "cancel" },
-        ]
-      );
       fetchMyTickets();
       return;
     }
@@ -745,13 +744,62 @@ export default function EventTicketPass({ route, navigation }) {
                 } else if (msg.type === "PAYFAST_CANCEL" || msg.status === "cancel") {
                   setShowPayfastModal(false);
                   setIsPayfastLoading(false);
-                  Alert.alert("Cancelled", "PayFast payment was cancelled.");
+                  const booked = payfastModalData?.booking;
+                  const targetBookingId = booked?._id || booked?.ticketId;
+                  if (targetBookingId) {
+                    safeFetch("/payfast/cancel-payment", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ bookingId: targetBookingId, reason: "PayFast gateway posted cancel message" }),
+                    }).catch(() => {});
+                  }
+                  Alert.alert(
+                    "Ticket Payment Cancelled",
+                    "Your PayFast payment was cancelled. No funds were debited, and no receipt was issued.",
+                    [
+                      { text: "Retry Payment", onPress: () => booked && handlePayPendingTicket(booked) },
+                      { text: "Dismiss", style: "cancel" },
+                    ]
+                  );
+                  fetchMyTickets();
                 }
               } catch (e) {}
             }}
             onShouldStartLoadWithRequest={(request) => {
-              const reqUrl = request.url || "";
-              if (reqUrl.includes("mobile-return") && reqUrl.includes("status=success")) {
+              const reqUrl = (request.url || "").toLowerCase();
+              if (
+                reqUrl.includes("payment=cancel") ||
+                reqUrl.includes("status=cancelled") ||
+                reqUrl.includes("status=cancel") ||
+                reqUrl.includes("cancel=true") ||
+                reqUrl.includes("cancelled=true")
+              ) {
+                setShowPayfastModal(false);
+                setIsPayfastLoading(false);
+                const booked = payfastModalData?.booking;
+                const targetBookingId = booked?._id || booked?.ticketId;
+                if (targetBookingId) {
+                  safeFetch("/payfast/cancel-payment", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ bookingId: targetBookingId, reason: "Navigation requested cancel URL" }),
+                  }).catch(() => {});
+                }
+                Alert.alert(
+                  "Ticket Payment Cancelled",
+                  "Your PayFast payment was cancelled. No funds were debited, and no receipt was issued.",
+                  [
+                    { text: "Retry Payment", onPress: () => booked && handlePayPendingTicket(booked) },
+                    { text: "Dismiss", style: "cancel" },
+                  ]
+                );
+                fetchMyTickets();
+                return false;
+              }
+              if (
+                (reqUrl.includes("mobile-return") && reqUrl.includes("status=success")) ||
+                reqUrl.includes("payment=success")
+              ) {
                 setShowPayfastModal(false);
                 setIsPayfastLoading(false);
                 const booked = payfastModalData?.booking;
