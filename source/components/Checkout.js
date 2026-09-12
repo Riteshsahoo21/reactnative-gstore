@@ -2478,6 +2478,14 @@ const Checkout = ({ navigation, route }) => {
     ) {
       setShowPayfastModal(false);
       setIsPayfastLoading(false);
+      const targetPayOrderId = activeOrderRef.current?.orderMongoId || activeOrderRef.current?._id || activeOrderRef.current?.orderId;
+      if (targetPayOrderId) {
+        safeApiFetch(`/orders/${targetPayOrderId}/cancel-payment`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: "Customer cancelled payment on mobile gateway" }),
+        }).catch((err) => console.warn("Failed to notify backend of order cancellation:", err));
+      }
       showMessage("PayFast payment was cancelled. You can retry or choose Bank Transfer.");
       return;
     }
@@ -2498,13 +2506,20 @@ const Checkout = ({ navigation, route }) => {
           },
         },
         {
-          text: "Leave as Pending",
+          text: "Cancel Payment",
           style: "destructive",
           onPress: () => {
             setShowPayfastModal(false);
             setIsPayfastLoading(false);
-            setOrderCompleted(true);
-            showMessage("Payment pending. You can complete payment with PayFast anytime.");
+            const targetPayOrderId = activeOrderRef.current?.orderMongoId || activeOrderRef.current?._id || activeOrderRef.current?.orderId;
+            if (targetPayOrderId) {
+              safeApiFetch(`/orders/${targetPayOrderId}/cancel-payment`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reason: "Customer dismissed PayFast modal in mobile app" }),
+              }).catch((err) => console.warn("Failed to notify backend of cancellation:", err));
+            }
+            showMessage("Payment was cancelled.");
           },
         },
         { text: "Stay in Gateway", style: "cancel" },
