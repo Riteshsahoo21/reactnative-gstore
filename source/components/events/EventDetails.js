@@ -36,15 +36,15 @@ const getEventApiCandidates = () => {
   if (typeof getCandidateBases === "function") {
     list.push(...getCandidateBases());
   }
-  if (__DEV__) {
-    list.push(
-      "http://127.0.0.1:5000/api",
-      "http://192.168.1.102:5000/api",
-      "http://localhost:5000/api",
-      "http://10.0.2.2:5000/api",
-      "http://192.168.1.9:5000/api"
-    );
-  }
+  list.push(
+    "http://127.0.0.1:5015/api",
+    "http://localhost:5015/api",
+    "http://192.168.1.10:5015/api",
+    "http://127.0.0.1:5000/api",
+    "http://localhost:5000/api",
+    "http://192.168.1.102:5015/api",
+    "http://192.168.1.9:5015/api"
+  );
   return [...new Set(list.filter(Boolean))];
 };
 

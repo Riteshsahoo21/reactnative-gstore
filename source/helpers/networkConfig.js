@@ -33,27 +33,26 @@ export const getCandidateBases = () => {
     list.push(activeApiBase);
   }
 
-  // Fallback local candidates for development testing only
-  if (__DEV__) {
-    list.push('http://127.0.0.1:5015/api');
-    list.push('http://localhost:5015/api');
-    list.push('http://127.0.0.1:5000/api');
-    list.push('http://localhost:5000/api');
+  // Local & USB forwarded candidates (via adb reverse or LAN)
+  list.push('http://127.0.0.1:5015/api');
+  list.push('http://localhost:5015/api');
+  list.push('http://192.168.1.10:5015/api');
+  list.push('http://127.0.0.1:5000/api');
+  list.push('http://localhost:5000/api');
 
-    if (metroHost) {
-      list.push(`http://${metroHost}:5015/api`);
-      list.push(`http://${metroHost}:5000/api`);
-    }
+  if (metroHost) {
+    list.push(`http://${metroHost}:5015/api`);
+    list.push(`http://${metroHost}:5000/api`);
+  }
 
-    list.push('http://192.168.1.102:5015/api');
-    list.push('http://192.168.1.9:5015/api');
-    list.push('http://192.168.1.102:5000/api');
-    list.push('http://192.168.1.9:5000/api');
+  list.push('http://192.168.1.102:5015/api');
+  list.push('http://192.168.1.9:5015/api');
+  list.push('http://192.168.1.102:5000/api');
+  list.push('http://192.168.1.9:5000/api');
 
-    if (Platform.OS === 'android') {
-      list.push('http://10.0.2.2:5015/api');
-      list.push('http://10.0.2.2:5000/api');
-    }
+  if (Platform.OS === 'android') {
+    list.push('http://10.0.2.2:5015/api');
+    list.push('http://10.0.2.2:5000/api');
   }
 
   return [...new Set(list.filter(Boolean))];
@@ -71,10 +70,6 @@ export const getActiveServerHost = () => {
 
 export const setActiveApiBase = (newBase) => {
   if (!newBase || typeof newBase !== 'string') return;
-  // In production / release builds, never switch to localhost or 127.0.0.1
-  if (!__DEV__ && (newBase.includes('localhost') || newBase.includes('127.0.0.1') || newBase.includes('10.0.2.2'))) {
-    return;
-  }
   activeApiBase = newBase;
 };
 
@@ -104,6 +99,8 @@ export const isInternalApiUrl = (url) => {
     getCandidateBases().some((b) => url.startsWith(b))
   );
 };
+
+export const isBackendUrl = isInternalApiUrl;
 
 // Replace candidate base inside a URL with target base
 const replaceBaseInUrl = (url, targetBase) => {
