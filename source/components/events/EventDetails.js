@@ -331,7 +331,16 @@ export default function EventDetails({ route, navigation }) {
     ) {
       setShowPayfastModal(false);
       setIsPayfastLoading(false);
-      Alert.alert("Payment Cancelled", "The PayFast payment was cancelled. Your reservation remains pending.");
+      const booked = payfastModalData?.booking;
+      const bookingTargetId = booked?._id || booked?.ticketId;
+      if (bookingTargetId) {
+        safeFetch("/payfast/cancel-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bookingId: bookingTargetId, reason: "Customer cancelled payment in mobile gateway" }),
+        }).catch(() => {});
+      }
+      Alert.alert("Payment Cancelled", "The PayFast payment was cancelled. Your reservation has been cancelled.");
     }
   };
 
@@ -368,15 +377,18 @@ export default function EventDetails({ route, navigation }) {
           },
         },
         {
-          text: "Leave as Pending",
+          text: "Cancel Reservation",
           style: "destructive",
           onPress: () => {
             setShowPayfastModal(false);
             setIsPayfastLoading(false);
-            navigation.navigate("EventTicketPass", {
-              bookingId: booked?._id,
-              booking: booked,
-            });
+            if (bookingTargetId) {
+              safeFetch("/payfast/cancel-payment", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ bookingId: bookingTargetId, reason: "Customer dismissed payment modal" }),
+              }).catch(() => {});
+            }
           },
         },
         { text: "Stay in Gateway", style: "cancel" },

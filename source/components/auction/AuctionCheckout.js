@@ -550,7 +550,7 @@ export default function AuctionCheckout({ route, navigation }) {
 
         if (pfRes && pfRes.ok) {
           const pfData = await pfRes.json();
-          const targetUrl = pfData.url || "https://sandbox.payfast.co.za/eng/process";
+          const targetUrl = pfData.url || "https://www.payfast.co.za/eng/process";
           const fields = pfData.data || {};
 
           // Generate self-submitting HTML form
@@ -681,8 +681,15 @@ export default function AuctionCheckout({ route, navigation }) {
         {
           text: "Leave as Pending",
           style: "destructive",
-          onPress: () => {
+          onPress: async () => {
             setPayfastModalVisible(false);
+            try {
+              await safeFetch("/payfast/cancel-payment", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ auctionId: lot._id, reason: "Customer cancelled auction checkout modal" }),
+              });
+            } catch (e) {}
           },
         },
         { text: "Stay in Gateway", style: "cancel" },
@@ -719,6 +726,13 @@ export default function AuctionCheckout({ route, navigation }) {
       (url.includes("mobile-return") && url.includes("status=cancel"))
     ) {
       setPayfastModalVisible(false);
+      try {
+        await safeFetch("/payfast/cancel-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ auctionId: lot._id, reason: "Customer aborted PayFast gateway" }),
+        });
+      } catch (e) {}
       Alert.alert("Payment Cancelled", "Your PayFast checkout session was cancelled. You can retry anytime.");
     }
   };

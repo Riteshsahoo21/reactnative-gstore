@@ -326,12 +326,13 @@ export default function AuctionVipCheckout({ route, navigation }) {
           },
           body: JSON.stringify({
             depositId: depositObj._id,
+            isMobile: true,
           }),
         });
 
         if (pfRes && pfRes.ok) {
           const pfJson = await pfRes.json();
-          const targetUrl = pfJson.url || "https://sandbox.payfast.co.za/eng/process";
+          const targetUrl = pfJson.url || "https://www.payfast.co.za/eng/process";
           const fields = pfJson.data || {};
 
           const inputsHtml = Object.keys(fields)
@@ -386,13 +387,26 @@ export default function AuctionVipCheckout({ route, navigation }) {
     }
   };
 
-  const handlePayFastNavigationStateChange = (navState) => {
+  const handlePayFastNavigationStateChange = async (navState) => {
     const { url } = navState;
     if (!url) return;
 
-    if (url.includes("payment=success") || url.includes("return_url") || url.includes("/auction/vip-checkout?payment=success")) {
+    if (
+      url.includes("payment=success") ||
+      url.includes("return_url") ||
+      url.includes("/auction/vip-checkout?payment=success") ||
+      (url.includes("mobile-return") && url.includes("status=success"))
+    ) {
       setPayfastModalVisible(false);
       setDepositStatus("paid");
+      try {
+        await safeFetch("/payfast/confirm-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ depositId: submittedDeposit?._id }),
+        });
+      } catch (e) {}
+
       Alert.alert(
         "👑 VIP Privileges Activated!",
         `Your refundable security deposit of R${depositAmount.toLocaleString()} has been confirmed. Your bidding ceiling is elevated up to R${premiumLimit.toLocaleString()}+ with full escrow protection.`,
@@ -401,8 +415,22 @@ export default function AuctionVipCheckout({ route, navigation }) {
           { text: "Done" },
         ]
       );
-    } else if (url.includes("payment=cancel") || url.includes("cancel_url")) {
+    } else if (
+      url.includes("payment=cancel") ||
+      url.includes("cancel_url") ||
+      (url.includes("mobile-return") && url.includes("status=cancel"))
+    ) {
       setPayfastModalVisible(false);
+      try {
+        await safeFetch("/payfast/cancel-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            depositId: submittedDeposit?._id,
+            reason: "Customer cancelled VIP deposit in mobile gateway",
+          }),
+        });
+      } catch (e) {}
       Alert.alert("Payment Cancelled", "Your PayFast VIP deposit was cancelled. You can retry at any time.");
     }
   };
@@ -676,14 +704,38 @@ export default function AuctionVipCheckout({ route, navigation }) {
       <Modal
         visible={payfastModalVisible}
         animationType="slide"
-        onRequestClose={() => setPayfastModalVisible(false)}
+        onRequestClose={async () => {
+          setPayfastModalVisible(false);
+          try {
+            await safeFetch("/payfast/cancel-payment", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                depositId: submittedDeposit?._id,
+                reason: "Customer closed VIP deposit modal",
+              }),
+            });
+          } catch (e) {}
+        }}
       >
         <SafeAreaView style={styles.modalSafeContainer}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>PayFast VIP Escrow Gateway</Text>
             <TouchableOpacity
               style={styles.modalCloseBtn}
-              onPress={() => setPayfastModalVisible(false)}
+              onPress={async () => {
+                setPayfastModalVisible(false);
+                try {
+                  await safeFetch("/payfast/cancel-payment", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      depositId: submittedDeposit?._id,
+                      reason: "Customer closed VIP deposit modal",
+                    }),
+                  });
+                } catch (e) {}
+              }}
             >
               <Text style={styles.modalCloseText}>Cancel</Text>
             </TouchableOpacity>
