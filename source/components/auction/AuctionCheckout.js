@@ -679,7 +679,7 @@ export default function AuctionCheckout({ route, navigation }) {
           },
         },
         {
-          text: "Leave as Pending",
+          text: "Cancel Payment",
           style: "destructive",
           onPress: async () => {
             setPayfastModalVisible(false);
@@ -690,6 +690,14 @@ export default function AuctionCheckout({ route, navigation }) {
                 body: JSON.stringify({ auctionId: lot._id, reason: "Customer cancelled auction checkout modal" }),
               });
             } catch (e) {}
+            Alert.alert(
+              "Payment Cancelled",
+              "Your auction settlement payment was cancelled. No funds were debited, and no receipt was issued.",
+              [
+                { text: "Retry Payment", onPress: () => handleProcessOrder() },
+                { text: "Dismiss", style: "cancel" },
+              ]
+            );
           },
         },
         { text: "Stay in Gateway", style: "cancel" },
@@ -733,7 +741,14 @@ export default function AuctionCheckout({ route, navigation }) {
           body: JSON.stringify({ auctionId: lot._id, reason: "Customer aborted PayFast gateway" }),
         });
       } catch (e) {}
-      Alert.alert("Payment Cancelled", "Your PayFast checkout session was cancelled. You can retry anytime.");
+      Alert.alert(
+        "Payment Cancelled",
+        "Your PayFast auction settlement payment was cancelled. No funds were debited, and no receipt was issued.",
+        [
+          { text: "Retry Payment", onPress: () => handleProcessOrder() },
+          { text: "Dismiss", style: "cancel" },
+        ]
+      );
     }
   };
 

@@ -51,6 +51,7 @@ const getImageUrl = (imagePath) => {
 // Real Order Card Component
 const OrderItem = ({ item, navigation, onOrderUpdated }) => {
   const isPaid = item.isPaid || item.paymentStatus === "Paid";
+  const isCancelled = item.paymentStatus === "Cancelled" || item.paymentStatus === "Failed";
   const isPickup = item.deliveryPreference === 'pickup' || Boolean(item.selectedPostnetStore);
   const latestMsg = [
     item.latestAdminMessage,
@@ -75,7 +76,7 @@ const OrderItem = ({ item, navigation, onOrderUpdated }) => {
   return (
     <TouchableOpacity
       style={styles.card}
-      onPress={() => navigation.navigate("OrderDetails", { order: item })}
+      onPress={() => isCancelled ? navigation.navigate("Checkout") : navigation.navigate("OrderDetails", { order: item })}
       activeOpacity={0.9}
     >
       {/* Top Meta Row */}
@@ -85,19 +86,45 @@ const OrderItem = ({ item, navigation, onOrderUpdated }) => {
           <Text style={styles.orderDate}>{formattedDate}</Text>
         </View>
         <View style={styles.statusCol}>
-          <View style={[styles.statusBadge, isPaid ? styles.statusBadgePaid : styles.statusBadgePending]}>
-            <Text style={[styles.statusText, isPaid ? styles.statusTextPaid : styles.statusTextPending]}>
-              {isPaid ? "✓ PAID" : "⏳ PENDING"}
+          <View style={[
+            styles.statusBadge,
+            isPaid
+              ? styles.statusBadgePaid
+              : isCancelled
+              ? { backgroundColor: "rgba(225, 29, 72, 0.15)", borderColor: "rgba(225, 29, 72, 0.3)" }
+              : styles.statusBadgePending
+          ]}>
+            <Text style={[
+              styles.statusText,
+              isPaid
+                ? styles.statusTextPaid
+                : isCancelled
+                ? { color: "#fda4af" }
+                : styles.statusTextPending
+            ]}>
+              {isPaid ? "✓ PAID" : isCancelled ? "✕ CANCELLED" : "⏳ PENDING"}
             </Text>
           </View>
         </View>
       </View>
 
       {/* Fulfillment Status Pill */}
-      <View style={{ marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: "rgba(216, 183, 109, 0.08)", borderWidth: 1, borderColor: "rgba(216, 183, 109, 0.2)", flexDirection: "row", alignItems: "center" }}>
-        <Text style={{ fontSize: 13, marginRight: 6 }}>{isPickup ? "📍" : "🚚"}</Text>
-        <Text style={{ color: "#d8b76d", fontSize: 11, fontWeight: "600", flex: 1 }} numberOfLines={1}>
-          {isPickup
+      <View style={{
+        marginTop: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 8,
+        backgroundColor: isCancelled ? "rgba(225, 29, 72, 0.08)" : "rgba(216, 183, 109, 0.08)",
+        borderWidth: 1,
+        borderColor: isCancelled ? "rgba(225, 29, 72, 0.2)" : "rgba(216, 183, 109, 0.2)",
+        flexDirection: "row",
+        alignItems: "center"
+      }}>
+        <Text style={{ fontSize: 13, marginRight: 6 }}>{isCancelled ? "✕" : isPickup ? "📍" : "🚚"}</Text>
+        <Text style={{ color: isCancelled ? "#fda4af" : "#d8b76d", fontSize: 11, fontWeight: "600", flex: 1 }} numberOfLines={1}>
+          {isCancelled
+            ? "Payment Cancelled • No funds debited"
+            : isPickup
             ? (item.selectedPostnetStore ? `Arriving at PostNet ${item.selectedPostnetStore.name}` : "Arriving at your PostNet collection branch")
             : "Delivery Soon"}
         </Text>
@@ -118,6 +145,10 @@ const OrderItem = ({ item, navigation, onOrderUpdated }) => {
       {/* Items Preview List */}
       <View style={styles.itemsBox}>
         {items.map((prod, idx) => {
+          const qty = Number(prod.quantity || prod.qty || 1);
+          const unitPrice = Number(prod.price || 0);
+          const lineTotal = qty * unitPrice;
+
           const rawImg =
             prod.image ||
             prod.product_image ||
@@ -143,15 +174,15 @@ const OrderItem = ({ item, navigation, onOrderUpdated }) => {
 
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={styles.productName} numberOfLines={2}>
-                {prod.name}
+                {prod.name || "Product Item"}
               </Text>
               <Text style={styles.productMeta}>
-                Qty: {prod.quantity || prod.qty || 1} • R{Number(prod.price || 0).toFixed(2)} each
+                Qty: {qty} • R{unitPrice.toFixed(2)} each
               </Text>
             </View>
 
             <Text style={styles.productPrice}>
-              R{((prod.quantity || prod.qty || 1) * Number(prod.price || 0)).toFixed(2)}
+              R{lineTotal.toFixed(2)}
             </Text>
           </View>
         );
@@ -169,11 +200,11 @@ const OrderItem = ({ item, navigation, onOrderUpdated }) => {
         </View>
 
         <TouchableOpacity
-          style={styles.detailsBtn}
-          onPress={() => navigation.navigate("OrderDetails", { order: item })}
+          style={[styles.detailsBtn, isCancelled && { borderColor: "#c99742" }]}
+          onPress={() => isCancelled ? navigation.navigate("Checkout") : navigation.navigate("OrderDetails", { order: item })}
           activeOpacity={0.8}
         >
-          <Text style={styles.detailsBtnText}>View Receipt & Details →</Text>
+          <Text style={styles.detailsBtnText}>{isCancelled ? "Retry Payment →" : "View Receipt & Details →"}</Text>
         </TouchableOpacity>
       </View>
     </TouchableOpacity>

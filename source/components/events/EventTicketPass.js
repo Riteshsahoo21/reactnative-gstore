@@ -536,7 +536,25 @@ export default function EventTicketPass({ route, navigation }) {
     ) {
       setShowPayfastModal(false);
       setIsPayfastLoading(false);
-      Alert.alert("Cancelled", "PayFast payment was cancelled.");
+      const booked = payfastModalData?.booking;
+      const targetBookingId = booked?._id || booked?.ticketId;
+      if (targetBookingId) {
+        safeFetch("/payfast/cancel-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bookingId: targetBookingId, reason: "Customer cancelled payment in ticket pass modal" }),
+        }).catch(() => {});
+      }
+      Alert.alert(
+        "Ticket Payment Cancelled",
+        "Your PayFast payment was cancelled. No funds were debited, and no receipt was issued.",
+        [
+          { text: "Retry Payment", onPress: () => booked && handlePayPendingTicket(booked) },
+          { text: "Dismiss", style: "cancel" },
+        ]
+      );
+      fetchMyTickets();
+      return;
     }
   };
 
@@ -569,11 +587,27 @@ export default function EventTicketPass({ route, navigation }) {
           },
         },
         {
-          text: "Leave as Pending",
+          text: "Cancel Payment",
           style: "destructive",
           onPress: () => {
             setShowPayfastModal(false);
             setIsPayfastLoading(false);
+            if (targetBookingId) {
+              safeFetch("/payfast/cancel-payment", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ bookingId: targetBookingId, reason: "Customer closed ticket payment modal" }),
+              }).catch(() => {});
+            }
+            Alert.alert(
+              "Ticket Payment Cancelled",
+              "Payment was cancelled. No funds were charged, and no receipt was issued.",
+              [
+                { text: "Retry Payment", onPress: () => booked && handlePayPendingTicket(booked) },
+                { text: "Dismiss", style: "cancel" },
+              ]
+            );
+            fetchMyTickets();
           },
         },
         { text: "Stay in Gateway", style: "cancel" },
@@ -901,6 +935,47 @@ export default function EventTicketPass({ route, navigation }) {
           year: "numeric",
         })
       : "Date Confirmed";
+
+    if (b.paymentStatus === "Cancelled" || isRejected) {
+      return (
+        <View key={b._id || b.ticketId} style={styles.passCard}>
+          <View style={styles.passHeader}>
+            <View style={styles.passHeaderTop}>
+              <Text style={styles.brandSubtitle}>THE GRAND STORE</Text>
+              <View style={[styles.statusPill, styles.statusPillRejected]}>
+                <Text style={[styles.statusPillText, styles.statusPillTextRejected]}>
+                  ✕ CANCELLED
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.passEventTitle}>{eventObj.title || "Exclusive Tasting Experience"}</Text>
+          </View>
+          <View style={{ padding: 24, alignItems: "center", backgroundColor: "#110e0b" }}>
+            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: "rgba(225, 29, 72, 0.15)", borderWidth: 1, borderColor: "rgba(225, 29, 72, 0.3)", justifyContent: "center", alignItems: "center", marginBottom: 14 }}>
+              <Text style={{ fontSize: 26, color: "#fda4af" }}>✕</Text>
+            </View>
+            <Text style={{ color: "#ffffff", fontSize: 18, fontWeight: "700", marginBottom: 8, textAlign: "center" }}>
+              Ticket Reservation Cancelled
+            </Text>
+            <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, textAlign: "center", lineHeight: 18, marginBottom: 20 }}>
+              Payment for this booking was cancelled. No funds were debited, and no admission pass was issued.
+            </Text>
+            <TouchableOpacity
+              style={[styles.payPendingBtn, { width: "100%", marginTop: 0 }]}
+              onPress={() => handlePayPendingTicket(b)}
+              activeOpacity={0.85}
+            >
+              <LinearGradient
+                colors={["#f5c242", "#c99742"]}
+                style={styles.payPendingGradient}
+              >
+                <Text style={styles.payPendingText}>RETRY PAYMENT WITH PAYFAST →</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
 
     return (
       <View key={b._id || b.ticketId} style={styles.passCard}>

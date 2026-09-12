@@ -310,6 +310,7 @@ export default function OrderDetails({ route, navigation }) {
   }
 
   const isPaid = order.isPaid || order.paymentStatus === "Paid";
+  const isCancelled = order.paymentStatus === "Cancelled" || order.paymentStatus === "Failed";
   const items = (order.items && order.items.length > 0)
     ? order.items
     : (order.orderItems && order.orderItems.length > 0)
@@ -343,6 +344,51 @@ export default function OrderDetails({ route, navigation }) {
     order.latestAdminMessage,
     ...(Array.isArray(order.adminMessages) ? [...order.adminMessages].reverse() : []),
   ].find((notice) => typeof notice?.message === "string" && notice.message.trim().length > 0) || null;
+
+  if (isCancelled) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#0c0a08" />
+        <AppHeader
+          title="Order Cancelled"
+          isGradient={false}
+          backgroundColor="#c99742"
+          titleStyle={tmh_styles.header_title_tmb}
+          isShowShadow={true}
+          isBack={true}
+          backButtonStyle={{ width: 35, height: 25, alignItems: "center" }}
+          backIconColor="black"
+          logoImage={null}
+          navigation={navigation}
+        />
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 24 }}>
+          <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: "rgba(225, 29, 72, 0.15)", borderWidth: 1, borderColor: "rgba(225, 29, 72, 0.3)", justifyContent: "center", alignItems: "center", marginBottom: 20 }}>
+            <Text style={{ fontSize: 36, color: "#fda4af" }}>✕</Text>
+          </View>
+          <Text style={{ color: "#ffffff", fontSize: 24, fontWeight: "700", marginBottom: 10, textAlign: "center" }}>
+            Payment Cancelled
+          </Text>
+          <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 14, textAlign: "center", lineHeight: 22, marginBottom: 28, maxWidth: 320 }}>
+            You cancelled payment for Order #{orderRefId}. No funds were debited, and no receipt was issued.
+          </Text>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { width: "100%", maxWidth: 320, marginBottom: 14, paddingVertical: 14 }]}
+            onPress={() => navigation.navigate("Checkout")}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.primaryBtnText}>Retry Payment with PayFast</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.secondaryActionBtn, { width: "100%", maxWidth: 320, paddingVertical: 14 }]}
+            onPress={() => navigation.navigate("MyOrder")}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.secondaryActionBtnText}>← Back to All Orders</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>

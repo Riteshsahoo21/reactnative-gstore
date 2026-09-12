@@ -2438,6 +2438,47 @@ const Checkout = ({ navigation, route }) => {
     }
   };
 
+  // Retry PayFast Payment on Mobile
+  const retryPayfastPayment = async () => {
+    const targetPayOrderId = activeOrderRef.current?.orderMongoId || activeOrderRef.current?._id || activeOrderRef.current?.orderId || createdOrder?._id;
+    if (!targetPayOrderId) {
+      showMessage("Please tap Place Order to initiate payment.");
+      return;
+    }
+    try {
+      setIsSubmitting(true);
+      const token = await AsyncStorage.getItem("userToken");
+      const reqHeaders = {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+      const pfRes = await safeApiFetch("/payfast/generate-shop", {
+        method: "POST",
+        headers: reqHeaders,
+        body: JSON.stringify({ orderId: targetPayOrderId, isMobile: true }),
+      });
+      if (pfRes && pfRes.ok) {
+        const pfData = await pfRes.json();
+        if (pfData && pfData.url && pfData.data) {
+          setPayfastModalData({
+            url: pfData.url,
+            fields: pfData.data,
+            orderSummary: activeOrderRef.current || createdOrder,
+          });
+          setShowPayfastModal(true);
+          setIsPayfastLoading(true);
+          return;
+        }
+      }
+      Alert.alert("Retry Payment", "Unable to reconnect to payment gateway. Please tap Place Order to retry.");
+    } catch (e) {
+      console.log("Error retrying PayFast payment:", e);
+      Alert.alert("Retry Payment", "Could not connect to gateway. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // PayFast In-App Navigation Interceptor
   const handlePayfastNavStateChange = (navState) => {
     const currentUrl = navState?.url || "";
@@ -2486,7 +2527,17 @@ const Checkout = ({ navigation, route }) => {
           body: JSON.stringify({ reason: "Customer cancelled payment on mobile gateway" }),
         }).catch((err) => console.warn("Failed to notify backend of order cancellation:", err));
       }
-      showMessage("PayFast payment was cancelled. You can retry or choose Bank Transfer.");
+      Alert.alert(
+        "Payment Cancelled",
+        "Your PayFast payment was cancelled. No funds were debited, and no receipt was issued.",
+        [
+          {
+            text: "Retry Payment",
+            onPress: () => retryPayfastPayment(),
+          },
+          { text: "Dismiss", style: "cancel" },
+        ]
+      );
       return;
     }
   };
@@ -2519,7 +2570,17 @@ const Checkout = ({ navigation, route }) => {
                 body: JSON.stringify({ reason: "Customer dismissed PayFast modal in mobile app" }),
               }).catch((err) => console.warn("Failed to notify backend of cancellation:", err));
             }
-            showMessage("Payment was cancelled.");
+            Alert.alert(
+              "Payment Cancelled",
+              "Payment was cancelled. No funds were charged, and no receipt was generated.",
+              [
+                {
+                  text: "Retry Payment",
+                  onPress: () => retryPayfastPayment(),
+                },
+                { text: "Dismiss", style: "cancel" },
+              ]
+            );
           },
         },
         { text: "Stay in Gateway", style: "cancel" },

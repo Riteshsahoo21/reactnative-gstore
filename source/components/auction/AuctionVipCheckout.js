@@ -431,7 +431,14 @@ export default function AuctionVipCheckout({ route, navigation }) {
           }),
         });
       } catch (e) {}
-      Alert.alert("Payment Cancelled", "Your PayFast VIP deposit was cancelled. You can retry at any time.");
+      Alert.alert(
+        "VIP Deposit Cancelled",
+        "Your PayFast VIP deposit checkout was cancelled. No funds were debited, and no receipt was issued.",
+        [
+          { text: "Retry VIP Upgrade", onPress: () => handleSubmit() },
+          { text: "Dismiss", style: "cancel" },
+        ]
+      );
     }
   };
 
@@ -716,6 +723,14 @@ export default function AuctionVipCheckout({ route, navigation }) {
               }),
             });
           } catch (e) {}
+          Alert.alert(
+            "VIP Deposit Cancelled",
+            "You closed the VIP deposit checkout. No funds were debited, and no receipt was issued.",
+            [
+              { text: "Retry VIP Upgrade", onPress: () => handleSubmit() },
+              { text: "Dismiss", style: "cancel" },
+            ]
+          );
         }}
       >
         <SafeAreaView style={styles.modalSafeContainer}>
@@ -735,6 +750,14 @@ export default function AuctionVipCheckout({ route, navigation }) {
                     }),
                   });
                 } catch (e) {}
+                Alert.alert(
+                  "VIP Deposit Cancelled",
+                  "You closed the VIP deposit checkout. No funds were debited, and no receipt was issued.",
+                  [
+                    { text: "Retry VIP Upgrade", onPress: () => handleSubmit() },
+                    { text: "Dismiss", style: "cancel" },
+                  ]
+                );
               }}
             >
               <Text style={styles.modalCloseText}>Cancel</Text>

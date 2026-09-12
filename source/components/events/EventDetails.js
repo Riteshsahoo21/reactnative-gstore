@@ -340,7 +340,14 @@ export default function EventDetails({ route, navigation }) {
           body: JSON.stringify({ bookingId: bookingTargetId, reason: "Customer cancelled payment in mobile gateway" }),
         }).catch(() => {});
       }
-      Alert.alert("Payment Cancelled", "The PayFast payment was cancelled. Your reservation has been cancelled.");
+      Alert.alert(
+        "Ticket Payment Cancelled",
+        "Your event ticket payment on PayFast was cancelled. No funds were debited, and no receipt was issued.",
+        [
+          { text: "Retry Payment", onPress: () => handleBookTickets() },
+          { text: "Dismiss", style: "cancel" },
+        ]
+      );
     }
   };
 
@@ -389,6 +396,14 @@ export default function EventDetails({ route, navigation }) {
                 body: JSON.stringify({ bookingId: bookingTargetId, reason: "Customer dismissed payment modal" }),
               }).catch(() => {});
             }
+            Alert.alert(
+              "Ticket Reservation Cancelled",
+              "Your payment was cancelled. No funds were debited, and no receipt was issued.",
+              [
+                { text: "Retry Payment", onPress: () => handleBookTickets() },
+                { text: "Dismiss", style: "cancel" },
+              ]
+            );
           },
         },
         { text: "Stay in Gateway", style: "cancel" },
