@@ -1003,80 +1003,166 @@ export default function EventTicketPass({ route, navigation }) {
         })
       : "Date Confirmed";
 
-    if (b.paymentStatus === "Cancelled" || isRejected) {
+    if (!isPaid) {
       return (
-        <View key={b._id || b.ticketId} style={styles.passCard}>
+        <View key={b._id || b.ticketId || b.gsReference} style={styles.passCard}>
           <View style={styles.passHeader}>
             <View style={styles.passHeaderTop}>
               <Text style={styles.brandSubtitle}>THE GRAND STORE</Text>
-              <View style={[styles.statusPill, styles.statusPillRejected]}>
-                <Text style={[styles.statusPillText, styles.statusPillTextRejected]}>
-                  ✕ CANCELLED
+              <View
+                style={[
+                  styles.statusPill,
+                  isCancelled && styles.statusPillRejected,
+                  awaitingProof && styles.statusPillPending,
+                  awaitingApproval && styles.statusPillReview,
+                  !isCancelled && !awaitingProof && !awaitingApproval && styles.statusPillPending,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.statusPillText,
+                    isCancelled && styles.statusPillTextRejected,
+                    awaitingProof && styles.statusPillTextPending,
+                    awaitingApproval && styles.statusPillTextReview,
+                    !isCancelled && !awaitingProof && !awaitingApproval && styles.statusPillTextPending,
+                  ]}
+                >
+                  {isCancelled
+                    ? "✕ CANCELLED"
+                    : awaitingApproval
+                    ? "🔍 PROOF UNDER REVIEW"
+                    : awaitingProof
+                    ? "⏳ AWAITING BANK PROOF"
+                    : "⏳ PAYMENT REQUIRED"}
                 </Text>
               </View>
             </View>
             <Text style={styles.passEventTitle}>{eventObj.title || "Exclusive Tasting Experience"}</Text>
           </View>
           <View style={{ padding: 24, alignItems: "center", backgroundColor: "#110e0b" }}>
-            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: "rgba(225, 29, 72, 0.15)", borderWidth: 1, borderColor: "rgba(225, 29, 72, 0.3)", justifyContent: "center", alignItems: "center", marginBottom: 14 }}>
-              <Text style={{ fontSize: 26, color: "#fda4af" }}>✕</Text>
+            <View
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: 32,
+                backgroundColor: isCancelled ? "rgba(225, 29, 72, 0.15)" : "rgba(201, 151, 66, 0.15)",
+                borderWidth: 1,
+                borderColor: isCancelled ? "rgba(225, 29, 72, 0.3)" : "rgba(201, 151, 66, 0.3)",
+                justifyContent: "center",
+                alignItems: "center",
+                marginBottom: 14,
+              }}
+            >
+              <Text style={{ fontSize: 26, color: isCancelled ? "#fda4af" : awaitingApproval ? "#fcd34d" : "#f5c242" }}>
+                {isCancelled ? "✕" : awaitingApproval ? "🔍" : "💳"}
+              </Text>
             </View>
             <Text style={{ color: "#ffffff", fontSize: 18, fontWeight: "700", marginBottom: 8, textAlign: "center" }}>
-              Ticket Reservation Cancelled
+              {isCancelled
+                ? "Ticket Reservation Cancelled"
+                : awaitingApproval
+                ? "Payment Proof Under Review"
+                : "Payment Required to Unlock Ticket"}
             </Text>
-            <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, textAlign: "center", lineHeight: 18, marginBottom: 20 }}>
-              Payment for this booking was cancelled. No funds were debited, and no admission pass was issued.
+            <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, textAlign: "center", lineHeight: 18, marginBottom: 12 }}>
+              {isCancelled
+                ? "Payment for this booking was cancelled. No funds were debited, and no admission pass was issued."
+                : awaitingApproval
+                ? "Your bank transfer proof has been submitted and is under review. Your admission pass will unlock once approved."
+                : `Complete payment of R${Number(b.totalPrice || 0).toFixed(2)} to confirm your booking and receive your official admission pass.`}
             </Text>
-            <TouchableOpacity
-              style={[styles.payPendingBtn, { width: "100%", marginTop: 0 }]}
-              onPress={() => handlePayPendingTicket(b)}
-              activeOpacity={0.85}
-            >
-              <LinearGradient
-                colors={["#f5c242", "#c99742"]}
-                style={styles.payPendingGradient}
+            <Text style={{ color: "rgba(201, 151, 66, 0.9)", fontSize: 12, fontWeight: "600", marginBottom: 20 }}>
+              Order Ref: {b.gsReference || b._id}
+            </Text>
+
+            {/* BANK TRANSFER PROOF SECTION */}
+            {isBankTransfer && awaitingProof && (
+              <View style={[styles.bankSection, { width: "100%", marginTop: 0 }]}>
+                <Text style={styles.bankSectionTitle}>🏛️ STANDARD BANK EFT DETAILS</Text>
+                <Text style={styles.bankSectionSub}>
+                  Please complete an EFT transfer using your booking reference:
+                </Text>
+
+                <View style={styles.bankBox}>
+                  <View style={styles.bankRow}>
+                    <Text style={styles.bankRowLabel}>Account Name:</Text>
+                    <Text style={styles.bankRowVal}>The Grand Store (Pty) Ltd</Text>
+                  </View>
+                  <View style={styles.bankRow}>
+                    <Text style={styles.bankRowLabel}>Bank:</Text>
+                    <Text style={styles.bankRowVal}>Standard Bank</Text>
+                  </View>
+                  <View style={styles.bankRow}>
+                    <Text style={styles.bankRowLabel}>Account Number:</Text>
+                    <Text style={styles.bankRowVal}>0123456789</Text>
+                  </View>
+                  <View style={styles.bankRow}>
+                    <Text style={styles.bankRowLabel}>Branch Code:</Text>
+                    <Text style={styles.bankRowVal}>051001</Text>
+                  </View>
+                  <View style={styles.bankRow}>
+                    <Text style={styles.bankRowLabel}>Payment Reference:</Text>
+                    <Text style={styles.bankRowValGold}>{b.gsReference}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.uploadProofLabel}>SUBMIT PAYMENT PROOF URL</Text>
+                <View style={styles.proofInputRow}>
+                  <TextInput
+                    style={styles.proofInput}
+                    placeholder="https://drive.google.com/... or image link"
+                    placeholderTextColor="#666"
+                    value={proofUrl}
+                    onChangeText={setProofUrl}
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity
+                    style={styles.uploadProofBtn}
+                    onPress={() => handleUploadProof(b._id)}
+                    disabled={uploadingProofId === b._id}
+                  >
+                    {uploadingProofId === b._id ? (
+                      <ActivityIndicator size="small" color="#0a0907" />
+                    ) : (
+                      <Text style={styles.uploadProofBtnText}>Submit</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* RETRY / COMPLETE PAYMENT WITH PAYFAST */}
+            {!isBankTransfer && (
+              <TouchableOpacity
+                style={[styles.payPendingBtn, { width: "100%", marginTop: 0 }]}
+                onPress={() => handlePayPendingTicket(b)}
+                activeOpacity={0.85}
               >
-                <Text style={styles.payPendingText}>RETRY PAYMENT WITH PAYFAST →</Text>
-              </LinearGradient>
-            </TouchableOpacity>
+                <LinearGradient
+                  colors={["#f5c242", "#c99742"]}
+                  style={styles.payPendingGradient}
+                >
+                  <Text style={styles.payPendingText}>
+                    {isCancelled ? "RETRY PAYMENT WITH PAYFAST →" : "COMPLETE PAYMENT WITH PAYFAST →"}
+                  </Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       );
     }
 
+    // STRICTLY PAID CONFIRMED TICKETS ONLY: FULL VIP BOARDING PASS
     return (
       <View key={b._id || b.ticketId} style={styles.passCard}>
         {/* GOLD NOTCH PERFORATION ACCENT */}
         <View style={styles.passHeader}>
           <View style={styles.passHeaderTop}>
             <Text style={styles.brandSubtitle}>THE GRAND STORE</Text>
-            <View
-              style={[
-                styles.statusPill,
-                isPaid && styles.statusPillPaid,
-                awaitingProof && styles.statusPillPending,
-                awaitingApproval && styles.statusPillReview,
-                isRejected && styles.statusPillRejected,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.statusPillText,
-                  isPaid && styles.statusPillTextPaid,
-                  awaitingProof && styles.statusPillTextPending,
-                  awaitingApproval && styles.statusPillTextReview,
-                  isRejected && styles.statusPillTextRejected,
-                ]}
-              >
-                {isPaid
-                  ? "✓ VALID ACCESS PASS"
-                  : awaitingApproval
-                  ? "🔍 PROOF UNDER REVIEW"
-                  : awaitingProof
-                  ? "⏳ AWAITING BANK PROOF"
-                  : isRejected
-                  ? "✕ CANCELLED"
-                  : "⏳ PENDING PAYMENT"}
+            <View style={[styles.statusPill, styles.statusPillPaid]}>
+              <Text style={[styles.statusPillText, styles.statusPillTextPaid]}>
+                ✓ VALID ACCESS PASS
               </Text>
             </View>
           </View>
@@ -1094,17 +1180,10 @@ export default function EventTicketPass({ route, navigation }) {
         <View style={styles.passBody}>
           {/* TICKET ID & REFERENCE */}
           <View style={styles.refRow}>
-            {isPaid ? (
-              <View>
-                <Text style={styles.refLabel}>ACCESS TICKET ID</Text>
-                <Text style={styles.refValue}>{b.ticketId || "TKT-ASSIGNED"}</Text>
-              </View>
-            ) : (
-              <View>
-                <Text style={styles.refLabel}>TICKET ADMISSION ID</Text>
-                <Text style={styles.refValueLocked}>🔒 WITHHELD (AWAITING PAYMENT)</Text>
-              </View>
-            )}
+            <View>
+              <Text style={styles.refLabel}>ACCESS TICKET ID</Text>
+              <Text style={styles.refValue}>{b.ticketId || "TKT-ASSIGNED"}</Text>
+            </View>
             <View style={{ alignItems: "flex-end" }}>
               <Text style={styles.refLabel}>BOOKING REF</Text>
               <Text style={styles.refValueSub}>{b.gsReference || b._id}</Text>
@@ -1133,7 +1212,7 @@ export default function EventTicketPass({ route, navigation }) {
 
           <View style={[styles.detailsGrid, { marginTop: 12 }]}>
             <View style={styles.detailCol}>
-              <Text style={styles.gridLabel}>{isPaid ? "PASS TIER" : "TIER REQUESTED"}</Text>
+              <Text style={styles.gridLabel}>PASS TIER</Text>
               <Text style={styles.gridValGold}>{b.ticketType || "General Reserve"}</Text>
             </View>
 
@@ -1148,166 +1227,77 @@ export default function EventTicketPass({ route, navigation }) {
             </View>
           </View>
 
-          {/* REAL VIP QR CODE & DOWNLOAD/SHARE IF PAID, ELSE LOCKED PASS */}
-          {isPaid ? (
-            <View style={styles.qrCodeSection}>
+          {/* REAL VIP QR CODE & DOWNLOAD/SHARE */}
+          <View style={styles.qrCodeSection}>
+            <TouchableOpacity
+              style={styles.qrWrapper}
+              onPress={() => setEnlargedQrTicket(b)}
+              activeOpacity={0.88}
+            >
+              <Image
+                source={{
+                  uri:
+                    b.qrCodeData ||
+                    `https://api.qrserver.com/v1/create-qr-code/?size=300x300&ecc=M&margin=1&data=${encodeURIComponent(
+                      b.ticketId || b.gsReference || b._id
+                    )}`,
+                }}
+                style={styles.qrImage}
+                resizeMode="contain"
+              />
+              <View style={styles.tapToEnlargeBadge}>
+                <Text style={styles.tapToEnlargeText}>🔍 Tap to enlarge</Text>
+              </View>
+            </TouchableOpacity>
+
+            <Text style={styles.barcodeText}>{b.ticketId || b._id}</Text>
+            <Text style={styles.qrScanKicker}>OFFICIAL CELLAR VIP ADMISSION PASS</Text>
+
+            <View style={{ width: "100%", gap: 10, marginTop: 14 }}>
+              {/* 1. DOWNLOAD VIP PASS (PDF) */}
               <TouchableOpacity
-                style={styles.qrWrapper}
-                onPress={() => setEnlargedQrTicket(b)}
-                activeOpacity={0.88}
+                style={styles.downloadTicketBtn}
+                onPress={() => handleDownloadPdf(b)}
+                activeOpacity={0.8}
               >
-                <Image
-                  source={{
-                    uri:
-                      b.qrCodeData ||
-                      `https://api.qrserver.com/v1/create-qr-code/?size=300x300&ecc=M&margin=1&data=${encodeURIComponent(
-                        b.ticketId || b.gsReference || b._id
-                      )}`,
-                  }}
-                  style={styles.qrImage}
-                  resizeMode="contain"
-                />
-                <View style={styles.tapToEnlargeBadge}>
-                  <Text style={styles.tapToEnlargeText}>🔍 Tap to enlarge</Text>
-                </View>
+                <LinearGradient
+                  colors={["#2e2416", "#17130b"]}
+                  style={styles.downloadGradient}
+                >
+                  <Text style={styles.downloadTicketIcon}>📄</Text>
+                  <Text style={styles.downloadTicketText}>DOWNLOAD VIP PASS (PDF)</Text>
+                </LinearGradient>
               </TouchableOpacity>
 
-              <Text style={styles.barcodeText}>{b.ticketId || b._id}</Text>
-              <Text style={styles.qrScanKicker}>OFFICIAL CELLAR VIP ADMISSION PASS</Text>
-
-              <View style={{ width: "100%", gap: 10, marginTop: 14 }}>
-                {/* 1. DOWNLOAD VIP PASS (PDF) */}
-                <TouchableOpacity
-                  style={styles.downloadTicketBtn}
-                  onPress={() => handleDownloadPdf(b)}
-                  activeOpacity={0.8}
-                >
-                  <LinearGradient
-                    colors={["#2e2416", "#17130b"]}
-                    style={styles.downloadGradient}
-                  >
-                    <Text style={styles.downloadTicketIcon}>📄</Text>
-                    <Text style={styles.downloadTicketText}>DOWNLOAD VIP PASS (PDF)</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-
-                {/* 2. SHARE TICKET (DIRECT 1-TAP WITH GENERATED QR PHOTO & MESSAGE) */}
-                <TouchableOpacity
-                  style={[styles.downloadTicketBtn, { borderColor: "#c9a35b" }]}
-                  onPress={() => handleSharePass(b)}
-                  activeOpacity={0.8}
-                >
-                  <LinearGradient
-                    colors={["#2b2214", "#15120c"]}
-                    style={styles.downloadGradient}
-                  >
-                    <Text style={styles.downloadTicketIcon}>📲</Text>
-                    <Text style={styles.downloadTicketText}>SHARE TICKET</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-
-                {/* EMAIL BACKUP LINK */}
-                <TouchableOpacity
-                  style={styles.resendEmailLink}
-                  onPress={() => handleResendEmail(b)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.resendEmailLinkText}>✉️ Need a copy in inbox? Email PDF Pass to Gmail</Text>
-                </TouchableOpacity>
-              </View>
-
-              <Text style={styles.entryInstructions}>
-                Present this scannable VIP pass upon arrival. Your host sommelier will verify your digital credentials for cellar access. An official PDF ticket has also been sent to your email.
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.lockedPassSection}>
-              <View style={styles.lockedIconCircle}>
-                <Text style={styles.lockedIconText}>🔒</Text>
-              </View>
-              <Text style={styles.lockedTitle}>ADMISSION PASS LOCKED</Text>
-              <Text style={styles.lockedSubtitle}>
-                Your scannable VIP QR pass and official admission credentials will unlock automatically once your payment of R{Number(b.totalPrice || 0).toFixed(2)} has been received and confirmed.
-              </Text>
-              <View style={styles.lockedWarningBox}>
-                <Text style={styles.lockedWarningText}>
-                  ⚠️ QR code and cellar admission are strictly withheld until payment confirmation.
-                </Text>
-              </View>
-            </View>
-          )}
-
-          {/* BANK TRANSFER PROOF SECTION */}
-          {isBankTransfer && awaitingProof && (
-            <View style={styles.bankSection}>
-              <Text style={styles.bankSectionTitle}>🏛️ STANDARD BANK EFT DETAILS</Text>
-              <Text style={styles.bankSectionSub}>
-                Please complete an EFT transfer using your booking reference:
-              </Text>
-
-              <View style={styles.bankBox}>
-                <View style={styles.bankRow}>
-                  <Text style={styles.bankRowLabel}>Account Name:</Text>
-                  <Text style={styles.bankRowVal}>The Grand Store (Pty) Ltd</Text>
-                </View>
-                <View style={styles.bankRow}>
-                  <Text style={styles.bankRowLabel}>Bank:</Text>
-                  <Text style={styles.bankRowVal}>Standard Bank</Text>
-                </View>
-                <View style={styles.bankRow}>
-                  <Text style={styles.bankRowLabel}>Account Number:</Text>
-                  <Text style={styles.bankRowVal}>0123456789</Text>
-                </View>
-                <View style={styles.bankRow}>
-                  <Text style={styles.bankRowLabel}>Branch Code:</Text>
-                  <Text style={styles.bankRowVal}>051001</Text>
-                </View>
-                <View style={styles.bankRow}>
-                  <Text style={styles.bankRowLabel}>Payment Reference:</Text>
-                  <Text style={styles.bankRowValGold}>{b.gsReference}</Text>
-                </View>
-              </View>
-
-              <Text style={styles.uploadProofLabel}>SUBMIT PAYMENT PROOF URL</Text>
-              <View style={styles.proofInputRow}>
-                <TextInput
-                  style={styles.proofInput}
-                  placeholder="https://drive.google.com/... or image link"
-                  placeholderTextColor="#666"
-                  value={proofUrl}
-                  onChangeText={setProofUrl}
-                  autoCapitalize="none"
-                />
-                <TouchableOpacity
-                  style={styles.uploadProofBtn}
-                  onPress={() => handleUploadProof(b._id)}
-                  disabled={uploadingProofId === b._id}
-                >
-                  {uploadingProofId === b._id ? (
-                    <ActivityIndicator size="small" color="#0a0907" />
-                  ) : (
-                    <Text style={styles.uploadProofBtnText}>Submit</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-
-          {/* PAYFAST PENDING RETRY BUTTON */}
-          {!isBankTransfer && !isPaid && (
-            <TouchableOpacity
-              style={styles.payPendingBtn}
-              onPress={() => handlePayPendingTicket(b)}
-              activeOpacity={0.85}
-            >
-              <LinearGradient
-                colors={["#f5c242", "#c99742"]}
-                style={styles.payPendingGradient}
+              {/* 2. SHARE TICKET (DIRECT 1-TAP WITH GENERATED QR PHOTO & MESSAGE) */}
+              <TouchableOpacity
+                style={[styles.downloadTicketBtn, { borderColor: "#c9a35b" }]}
+                onPress={() => handleSharePass(b)}
+                activeOpacity={0.8}
               >
-                <Text style={styles.payPendingText}>COMPLETE PAYMENT WITH PAYFAST →</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          )}
+                <LinearGradient
+                  colors={["#2b2214", "#15120c"]}
+                  style={styles.downloadGradient}
+                >
+                  <Text style={styles.downloadTicketIcon}>📲</Text>
+                  <Text style={styles.downloadTicketText}>SHARE TICKET</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+
+              {/* EMAIL BACKUP LINK */}
+              <TouchableOpacity
+                style={styles.resendEmailLink}
+                onPress={() => handleResendEmail(b)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.resendEmailLinkText}>✉️ Need a copy in inbox? Email PDF Pass to Gmail</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.entryInstructions}>
+              Present this scannable VIP pass upon arrival. Your host sommelier will verify your digital credentials for cellar access. An official PDF ticket has also been sent to your email.
+            </Text>
+          </View>
         </View>
       </View>
     );
