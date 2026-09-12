@@ -1094,10 +1094,17 @@ export default function EventTicketPass({ route, navigation }) {
         <View style={styles.passBody}>
           {/* TICKET ID & REFERENCE */}
           <View style={styles.refRow}>
-            <View>
-              <Text style={styles.refLabel}>ACCESS TICKET ID</Text>
-              <Text style={styles.refValue}>{b.ticketId || "TKT-PENDING"}</Text>
-            </View>
+            {isPaid ? (
+              <View>
+                <Text style={styles.refLabel}>ACCESS TICKET ID</Text>
+                <Text style={styles.refValue}>{b.ticketId || "TKT-ASSIGNED"}</Text>
+              </View>
+            ) : (
+              <View>
+                <Text style={styles.refLabel}>TICKET ADMISSION ID</Text>
+                <Text style={styles.refValueLocked}>🔒 WITHHELD (AWAITING PAYMENT)</Text>
+              </View>
+            )}
             <View style={{ alignItems: "flex-end" }}>
               <Text style={styles.refLabel}>BOOKING REF</Text>
               <Text style={styles.refValueSub}>{b.gsReference || b._id}</Text>
@@ -1126,7 +1133,7 @@ export default function EventTicketPass({ route, navigation }) {
 
           <View style={[styles.detailsGrid, { marginTop: 12 }]}>
             <View style={styles.detailCol}>
-              <Text style={styles.gridLabel}>PASS TIER</Text>
+              <Text style={styles.gridLabel}>{isPaid ? "PASS TIER" : "TIER REQUESTED"}</Text>
               <Text style={styles.gridValGold}>{b.ticketType || "General Reserve"}</Text>
             </View>
 
@@ -1564,6 +1571,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
     fontFamily: Platform.OS === "android" ? "monospace" : "Menlo",
+    marginTop: 2,
+  },
+  refValueLocked: {
+    color: "#fda4af",
+    fontSize: 11.5,
+    fontWeight: "800",
+    letterSpacing: 0.5,
     marginTop: 2,
   },
   detailsGrid: {

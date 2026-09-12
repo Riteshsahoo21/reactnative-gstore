@@ -35,17 +35,23 @@ export const getCandidateBases = () => {
 
   // Fallback local candidates for development testing only
   if (__DEV__) {
+    list.push('http://127.0.0.1:5015/api');
+    list.push('http://localhost:5015/api');
     list.push('http://127.0.0.1:5000/api');
     list.push('http://localhost:5000/api');
 
     if (metroHost) {
+      list.push(`http://${metroHost}:5015/api`);
       list.push(`http://${metroHost}:5000/api`);
     }
 
+    list.push('http://192.168.1.102:5015/api');
+    list.push('http://192.168.1.9:5015/api');
     list.push('http://192.168.1.102:5000/api');
     list.push('http://192.168.1.9:5000/api');
 
     if (Platform.OS === 'android') {
+      list.push('http://10.0.2.2:5015/api');
       list.push('http://10.0.2.2:5000/api');
     }
   }
@@ -69,24 +75,19 @@ export const setActiveApiBase = (newBase) => {
   if (!__DEV__ && (newBase.includes('localhost') || newBase.includes('127.0.0.1') || newBase.includes('10.0.2.2'))) {
     return;
   }
-  const clean = newBase.replace(/\/+$/, '');
-  const formatted = clean.endsWith('/api') ? clean : `${clean}/api`;
-  if (activeApiBase !== formatted) {
-    activeApiBase = formatted;
-    console.log('[NetworkConfig] Active API Base set to:', activeApiBase);
-  }
+  activeApiBase = newBase;
 };
 
-// Check if a URL belongs to the backend server
-const isBackendUrl = (url) => {
+// Returns whether a given URL targets our backend API
+export const isInternalApiUrl = (url) => {
   if (!url || typeof url !== 'string') return false;
   // Never intercept external third-party services
   if (
     url.startsWith('https://res.cloudinary.com') ||
-    url.startsWith('https://maps.googleapis.com') ||
-    url.startsWith('https://ik.imagekit.io') ||
+    url.startsWith('https://api.qrserver.com') ||
     url.startsWith('https://sandbox.payfast.co.za') ||
     url.startsWith('https://www.payfast.co.za') ||
+    url.startsWith('https://api.exchangerate-api.com') ||
     url.startsWith('https://storelocator.postnet.co.za') ||
     url.startsWith('https://www.googleapis.com') ||
     url.startsWith('https://identitytoolkit.googleapis.com') ||
@@ -96,6 +97,7 @@ const isBackendUrl = (url) => {
   }
   return (
     url.includes('api.grandstoreglobal.com') ||
+    url.includes(':5015') ||
     url.includes(':5000') ||
     url.startsWith('/api') ||
     url.startsWith('/') ||
