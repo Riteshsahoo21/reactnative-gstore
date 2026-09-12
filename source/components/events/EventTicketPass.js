@@ -173,6 +173,11 @@ export default function EventTicketPass({ route, navigation }) {
 
   // Download PDF Ticket Pass
   const handleDownloadPdf = async (b) => {
+    const isPaid = (b.paymentStatus === "Paid" || b.paymentStatus === "Completed") && b.ticketStatus !== "Cancelled" && b.ticketStatus !== "Pending";
+    if (!isPaid) {
+      Alert.alert("Pass Locked", "Your official VIP admission pass and scannable QR ticket unlock after payment has been received and confirmed.");
+      return;
+    }
     try {
       const targetId = b._id || b.ticketId;
       const candidates = typeof getCandidateBases === "function" ? getCandidateBases() : [];
@@ -230,6 +235,11 @@ export default function EventTicketPass({ route, navigation }) {
 
   // Resend Ticket Email with PDF Attachment
   const handleResendEmail = async (b) => {
+    const isPaid = (b.paymentStatus === "Paid" || b.paymentStatus === "Completed") && b.ticketStatus !== "Cancelled" && b.ticketStatus !== "Pending";
+    if (!isPaid) {
+      Alert.alert("Pass Locked", "Your official VIP admission pass and scannable QR ticket unlock after payment has been received and confirmed.");
+      return;
+    }
     try {
       const token = await AsyncStorage.getItem("userToken");
       const targetId = b._id || b.ticketId;
@@ -295,6 +305,11 @@ export default function EventTicketPass({ route, navigation }) {
 
   // Execute native file sharing (PDF Document or QR Photo or Both)
   const executeFileShare = async (b, mode = "both") => {
+    const isPaid = (b.paymentStatus === "Paid" || b.paymentStatus === "Completed") && b.ticketStatus !== "Cancelled" && b.ticketStatus !== "Pending";
+    if (!isPaid) {
+      Alert.alert("Pass Locked", "Your official VIP admission pass and scannable QR ticket unlock after payment has been received and confirmed.");
+      return;
+    }
     const targetId = b._id || b.ticketId;
     const eventObj = b.event || {};
     const eventTitle = eventObj.title || "Exclusive Tasting Experience";
@@ -557,41 +572,29 @@ export default function EventTicketPass({ route, navigation }) {
     }
   };
 
+  // Strict Flow: Modal dismissal cancels payment without marking paid
   const handleClosePayfastModal = () => {
     const booked = payfastModalData?.booking;
     const targetBookingId = booked?._id || booked?.ticketId;
     Alert.alert(
-      "PayFast Gateway",
-      "Have you completed your payment on PayFast?",
+      "Cancel Payment?",
+      "Are you sure you want to cancel? Your payment has not been completed.",
       [
+        { text: "Continue Payment", style: "cancel" },
         {
-          text: "Yes, I Have Paid",
-          onPress: async () => {
-            setShowPayfastModal(false);
-            setIsPayfastLoading(false);
-            try {
-              const token = await AsyncStorage.getItem("userToken");
-              if (targetBookingId) {
-                await safeFetch("/payfast/confirm-order", {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                  },
-                  body: JSON.stringify({ bookingId: targetBookingId }),
-                });
-              }
-            } catch (e) {}
-            fetchMyTickets();
-          },
-        },
-        {
-          text: "Cancel Payment",
+          text: "Yes, Cancel",
           style: "destructive",
           onPress: () => {
             setShowPayfastModal(false);
             setIsPayfastLoading(false);
             if (targetBookingId) {
+              setMyTickets((prev) =>
+                prev.map((t) =>
+                  (t._id === targetBookingId || t.ticketId === targetBookingId)
+                    ? { ...t, paymentStatus: "Cancelled", ticketStatus: "Cancelled" }
+                    : t
+                )
+              );
               safeFetch("/payfast/cancel-payment", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -609,7 +612,6 @@ export default function EventTicketPass({ route, navigation }) {
             fetchMyTickets();
           },
         },
-        { text: "Stay in Gateway", style: "cancel" },
       ]
     );
   };
@@ -747,6 +749,13 @@ export default function EventTicketPass({ route, navigation }) {
                   const booked = payfastModalData?.booking;
                   const targetBookingId = booked?._id || booked?.ticketId;
                   if (targetBookingId) {
+                    setMyTickets((prev) =>
+                      prev.map((t) =>
+                        (t._id === targetBookingId || t.ticketId === targetBookingId)
+                          ? { ...t, paymentStatus: "Cancelled", ticketStatus: "Cancelled" }
+                          : t
+                      )
+                    );
                     safeFetch("/payfast/cancel-payment", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
@@ -779,6 +788,13 @@ export default function EventTicketPass({ route, navigation }) {
                 const booked = payfastModalData?.booking;
                 const targetBookingId = booked?._id || booked?.ticketId;
                 if (targetBookingId) {
+                  setMyTickets((prev) =>
+                    prev.map((t) =>
+                      (t._id === targetBookingId || t.ticketId === targetBookingId)
+                        ? { ...t, paymentStatus: "Cancelled", ticketStatus: "Cancelled" }
+                        : t
+                    )
+                  );
                   safeFetch("/payfast/cancel-payment", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -837,6 +853,8 @@ export default function EventTicketPass({ route, navigation }) {
   const renderEnlargedQrModal = () => {
     if (!enlargedQrTicket) return null;
     const b = enlargedQrTicket;
+    const isPaid = (b.paymentStatus === "Paid" || b.paymentStatus === "Completed");
+    if (!isPaid) return null;
     const eventObj = b.event || {};
     const eventTitle = eventObj.title || "Exclusive Tasting Experience";
     const eventDate = eventObj.date
@@ -968,11 +986,12 @@ export default function EventTicketPass({ route, navigation }) {
   };
 
   const renderTicketCard = (b) => {
-    const isPaid = b.paymentStatus === "Paid" || b.paymentStatus === "Completed" || b.ticketStatus === "Valid";
+    const isPaid = (b.paymentStatus === "Paid" || b.paymentStatus === "Completed") && b.ticketStatus !== "Cancelled" && b.ticketStatus !== "Pending";
+    const isCancelled = b.paymentStatus === "Cancelled" || b.paymentStatus === "Failed" || b.ticketStatus === "Cancelled";
     const isBankTransfer = b.paymentMethod === "Bank Transfer";
     const awaitingProof = isBankTransfer && b.bankTransferStatus === "Awaiting_Proof";
     const awaitingApproval = isBankTransfer && b.bankTransferStatus === "Awaiting_Approval";
-    const isRejected = b.bankTransferStatus === "Rejected" || b.paymentStatus === "Failed";
+    const isRejected = b.bankTransferStatus === "Rejected" || isCancelled;
 
     const eventObj = b.event || {};
     const eventDate = eventObj.date
@@ -1122,33 +1141,33 @@ export default function EventTicketPass({ route, navigation }) {
             </View>
           </View>
 
-          {/* REAL VIP QR CODE & DOWNLOAD/SHARE */}
-          <View style={styles.qrCodeSection}>
-            <TouchableOpacity
-              style={styles.qrWrapper}
-              onPress={() => setEnlargedQrTicket(b)}
-              activeOpacity={0.88}
-            >
-              <Image
-                source={{
-                  uri:
-                    b.qrCodeData ||
-                    `https://api.qrserver.com/v1/create-qr-code/?size=300x300&ecc=M&margin=1&data=${encodeURIComponent(
-                      b.ticketId || b.gsReference || b._id
-                    )}`,
-                }}
-                style={styles.qrImage}
-                resizeMode="contain"
-              />
-              <View style={styles.tapToEnlargeBadge}>
-                <Text style={styles.tapToEnlargeText}>🔍 Tap to enlarge</Text>
-              </View>
-            </TouchableOpacity>
+          {/* REAL VIP QR CODE & DOWNLOAD/SHARE IF PAID, ELSE LOCKED PASS */}
+          {isPaid ? (
+            <View style={styles.qrCodeSection}>
+              <TouchableOpacity
+                style={styles.qrWrapper}
+                onPress={() => setEnlargedQrTicket(b)}
+                activeOpacity={0.88}
+              >
+                <Image
+                  source={{
+                    uri:
+                      b.qrCodeData ||
+                      `https://api.qrserver.com/v1/create-qr-code/?size=300x300&ecc=M&margin=1&data=${encodeURIComponent(
+                        b.ticketId || b.gsReference || b._id
+                      )}`,
+                  }}
+                  style={styles.qrImage}
+                  resizeMode="contain"
+                />
+                <View style={styles.tapToEnlargeBadge}>
+                  <Text style={styles.tapToEnlargeText}>🔍 Tap to enlarge</Text>
+                </View>
+              </TouchableOpacity>
 
-            <Text style={styles.barcodeText}>{b.ticketId || b._id}</Text>
-            <Text style={styles.qrScanKicker}>OFFICIAL CELLAR VIP ADMISSION PASS</Text>
+              <Text style={styles.barcodeText}>{b.ticketId || b._id}</Text>
+              <Text style={styles.qrScanKicker}>OFFICIAL CELLAR VIP ADMISSION PASS</Text>
 
-            {isPaid && (
               <View style={{ width: "100%", gap: 10, marginTop: 14 }}>
                 {/* 1. DOWNLOAD VIP PASS (PDF) */}
                 <TouchableOpacity
@@ -1189,12 +1208,27 @@ export default function EventTicketPass({ route, navigation }) {
                   <Text style={styles.resendEmailLinkText}>✉️ Need a copy in inbox? Email PDF Pass to Gmail</Text>
                 </TouchableOpacity>
               </View>
-            )}
-          </View>
 
-          <Text style={styles.entryInstructions}>
-            Present this scannable VIP pass upon arrival. Your host sommelier will verify your digital credentials for cellar access. An official PDF ticket has also been sent to your email.
-          </Text>
+              <Text style={styles.entryInstructions}>
+                Present this scannable VIP pass upon arrival. Your host sommelier will verify your digital credentials for cellar access. An official PDF ticket has also been sent to your email.
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.lockedPassSection}>
+              <View style={styles.lockedIconCircle}>
+                <Text style={styles.lockedIconText}>🔒</Text>
+              </View>
+              <Text style={styles.lockedTitle}>ADMISSION PASS LOCKED</Text>
+              <Text style={styles.lockedSubtitle}>
+                Your scannable VIP QR pass and official admission credentials will unlock automatically once your payment of R{Number(b.totalPrice || 0).toFixed(2)} has been received and confirmed.
+              </Text>
+              <View style={styles.lockedWarningBox}>
+                <Text style={styles.lockedWarningText}>
+                  ⚠️ QR code and cellar admission are strictly withheld until payment confirmation.
+                </Text>
+              </View>
+            </View>
+          )}
 
           {/* BANK TRANSFER PROOF SECTION */}
           {isBankTransfer && awaitingProof && (
@@ -1653,6 +1687,63 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     marginTop: 12,
     fontStyle: "italic",
+  },
+
+  // LOCKED PASS SECTION
+  lockedPassSection: {
+    marginTop: 18,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.06)",
+    alignItems: "center",
+    paddingHorizontal: 8,
+  },
+  lockedIconCircle: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: "rgba(201, 151, 66, 0.12)",
+    borderWidth: 1.5,
+    borderColor: "rgba(201, 151, 66, 0.35)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  lockedIconText: {
+    fontSize: 26,
+  },
+  lockedTitle: {
+    color: "#f5c242",
+    fontSize: 13,
+    fontWeight: "900",
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  lockedSubtitle: {
+    color: "rgba(255, 255, 255, 0.65)",
+    fontSize: 11.5,
+    textAlign: "center",
+    lineHeight: 17,
+    marginBottom: 14,
+  },
+  lockedWarningBox: {
+    backgroundColor: "rgba(201, 151, 66, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(201, 151, 66, 0.25)",
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    width: "100%",
+    marginBottom: 8,
+  },
+  lockedWarningText: {
+    color: "#e6c37a",
+    fontSize: 10.5,
+    textAlign: "center",
+    fontWeight: "600",
+    lineHeight: 14,
   },
 
   // BANK TRANSFER SECTION

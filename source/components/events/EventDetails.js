@@ -351,40 +351,17 @@ export default function EventDetails({ route, navigation }) {
     }
   };
 
+  // Strict Flow: Modal dismissal cancels reservation without marking paid
   const handleClosePayfastModal = () => {
     const booked = payfastModalData?.booking;
     const bookingTargetId = booked?._id || booked?.ticketId;
     Alert.alert(
-      "PayFast Gateway",
-      "Have you completed your payment on PayFast?",
+      "Cancel Payment?",
+      "Are you sure you want to cancel? Your payment has not been completed.",
       [
+        { text: "Continue Payment", style: "cancel" },
         {
-          text: "Yes, I Have Paid",
-          onPress: async () => {
-            setShowPayfastModal(false);
-            setIsPayfastLoading(false);
-            try {
-              const token = await AsyncStorage.getItem("userToken");
-              if (bookingTargetId) {
-                await safeFetch("/payfast/confirm-order", {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                  },
-                  body: JSON.stringify({ bookingId: bookingTargetId }),
-                });
-              }
-            } catch (e) {}
-            navigation.navigate("EventTicketPass", {
-              bookingId: booked?._id,
-              booking: { ...booked, paymentStatus: "Paid", ticketStatus: "Valid" },
-              justBooked: true,
-            });
-          },
-        },
-        {
-          text: "Cancel Reservation",
+          text: "Yes, Cancel",
           style: "destructive",
           onPress: () => {
             setShowPayfastModal(false);
@@ -406,7 +383,6 @@ export default function EventDetails({ route, navigation }) {
             );
           },
         },
-        { text: "Stay in Gateway", style: "cancel" },
       ]
     );
   };

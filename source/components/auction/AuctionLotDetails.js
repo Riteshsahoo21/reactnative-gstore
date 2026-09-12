@@ -371,6 +371,14 @@ export default function AuctionLotDetails({ route, navigation }) {
     const targetId = lot?._id || lotId;
     if (!targetId || downloadingCert) return;
 
+    if (lot?.paymentStatus !== "Paid") {
+      Alert.alert(
+        "Payment Required",
+        "The official Vault Certificate of Acquisition is only unlocked after settlement payment has been completed and verified."
+      );
+      return;
+    }
+
     setDownloadingCert(true);
     try {
       // Open the existing download endpoint immediately. PDF sharing has its own action.
@@ -386,11 +394,19 @@ export default function AuctionLotDetails({ route, navigation }) {
     } finally {
       setDownloadingCert(false);
     }
-  }, [lot?._id, lotId, downloadingCert]);
+  }, [lot?._id, lot?.paymentStatus, lotId, downloadingCert]);
 
   const handleShareCertificate = useCallback(async () => {
     const targetId = lot?._id || lotId;
     if (!targetId) return;
+
+    if (lot?.paymentStatus !== "Paid") {
+      Alert.alert(
+        "Payment Required",
+        "The official Vault Certificate of Acquisition is only unlocked after settlement payment has been completed and verified."
+      );
+      return;
+    }
     const safeLotNum = lot?.lotNumber || String(targetId).slice(-6).toUpperCase();
     const filename = `TheGrandStore_Certificate_Lot_${safeLotNum}`;
 
@@ -1002,80 +1018,128 @@ export default function AuctionLotDetails({ route, navigation }) {
           </LinearGradient>
         </View>
 
-        {/* 4. Official certificate of acquisition */}
+        {/* 4. Official certificate of acquisition (UNLOCKED ONLY WHEN PAID) */}
         {isSold && isWinner && (
           <View style={styles.certOuterContainer}>
             <View style={styles.certInnerFrame}>
-              <AuctionAcquisitionCertificate lot={lot} user={user} />
+              {lot.paymentStatus === "Paid" ? (
+                <>
+                  <AuctionAcquisitionCertificate lot={lot} user={user} />
 
-              {/* Action Buttons: Download PDF & Share */}
-              <View style={styles.certButtonRow}>
-                <TouchableOpacity
-                  style={[styles.certDownloadBtn, downloadingCert && { opacity: 0.6 }]}
-                  onPress={handleDownloadCertificate}
-                  disabled={downloadingCert}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.certDownloadBtnText}>
-                    {downloadingCert ? "⏳ DOWNLOADING PDF..." : "📜 DOWNLOAD OFFICIAL PDF"}
-                  </Text>
-                </TouchableOpacity>
+                  {/* Action Buttons: Download PDF & Share */}
+                  <View style={styles.certButtonRow}>
+                    <TouchableOpacity
+                      style={[styles.certDownloadBtn, downloadingCert && { opacity: 0.6 }]}
+                      onPress={handleDownloadCertificate}
+                      disabled={downloadingCert}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.certDownloadBtnText}>
+                        {downloadingCert ? "⏳ DOWNLOADING PDF..." : "📜 DOWNLOAD OFFICIAL PDF"}
+                      </Text>
+                    </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={styles.certShareBtn}
-                  onPress={handleShareCertificate}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.certShareBtnText}>🔗 SHARE</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Settlement / Claim Status CTA */}
-              <View style={{ marginTop: 12 }}>
-                {lot.paymentStatus === "Paid" ? (
-                  <View style={styles.certPaidBadge}>
-                    <Text style={styles.certPaidBadgeText}>
-                      ✓ ACQUISITION SETTLED • VAULT DISPATCH IN PREPARATION
-                    </Text>
+                    <TouchableOpacity
+                      style={styles.certShareBtn}
+                      onPress={handleShareCertificate}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.certShareBtnText}>🔗 SHARE</Text>
+                    </TouchableOpacity>
                   </View>
-                ) : (lot.paymentStatus === "Awaiting_Approval" || Boolean(lot.proofUrl)) ? (
-                  <TouchableOpacity
-                    style={styles.certAwaitingBadge}
-                    onPress={() => navigation.navigate("AuctionCheckout", { lotId: lot._id, lot })}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.certAwaitingBadgeText}>
-                      ⏳ EFT PROOF SUBMITTED • AWAITING ADMIN VERIFICATION
-                    </Text>
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.claimLotBtn}
-                    onPress={() => navigation.navigate("AuctionCheckout", { lotId: lot._id, lot })}
-                    activeOpacity={0.88}
-                  >
-                    <LinearGradient colors={["#ffd700", "#e0ad38", "#c99742"]} style={styles.claimLotGradient}>
-                      <Text style={styles.claimLotText}>CLAIM LOT & COMPLETE SETTLEMENT →</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                )}
-              </View>
 
-              {/* Integrated Calendar Handover Card */}
-              <View style={styles.calendarMiniCard}>
-                <View style={styles.calendarMiniHeader}>
-                  <Text style={styles.calendarMiniIcon}>📅</Text>
-                  <View>
-                    <Text style={styles.calendarMiniTitle}>Vault Handover & Courier Window</Text>
-                    <Text style={styles.calendarMiniDesc}>Scheduled within 3 business days post-settlement</Text>
+                  <View style={{ marginTop: 12 }}>
+                    <View style={styles.certPaidBadge}>
+                      <Text style={styles.certPaidBadgeText}>
+                        ✓ ACQUISITION SETTLED • VAULT DISPATCH IN PREPARATION
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Integrated Calendar Handover Card */}
+                  <View style={styles.calendarMiniCard}>
+                    <View style={styles.calendarMiniHeader}>
+                      <Text style={styles.calendarMiniIcon}>📅</Text>
+                      <View>
+                        <Text style={styles.calendarMiniTitle}>Vault Handover & Courier Window</Text>
+                        <Text style={styles.calendarMiniDesc}>Scheduled within 3 business days post-settlement</Text>
+                      </View>
+                    </View>
+                    <View style={styles.calendarLocationRow}>
+                      <Text style={styles.calendarLocationText}>
+                        📍 {lot.custodyLocation || "Grand Store High-Security Vault, Cape Town, South Africa"}
+                      </Text>
+                    </View>
+                  </View>
+                </>
+              ) : (
+                <View style={{ padding: 18, alignItems: "center" }}>
+                  <View
+                    style={{
+                      width: 58,
+                      height: 58,
+                      borderRadius: 29,
+                      backgroundColor: "rgba(201, 151, 66, 0.12)",
+                      borderWidth: 1.5,
+                      borderColor: "rgba(201, 151, 66, 0.35)",
+                      justifyContent: "center",
+                      alignItems: "center",
+                      marginBottom: 12,
+                    }}
+                  >
+                    <Text style={{ fontSize: 26 }}>🔒</Text>
+                  </View>
+                  <Text
+                    style={{
+                      color: "#f5c242",
+                      fontSize: 14,
+                      fontWeight: "900",
+                      letterSpacing: 1.5,
+                      textTransform: "uppercase",
+                      marginBottom: 6,
+                      textAlign: "center",
+                    }}
+                  >
+                    CERTIFICATE OF ACQUISITION LOCKED
+                  </Text>
+                  <Text
+                    style={{
+                      color: "rgba(255, 255, 255, 0.7)",
+                      fontSize: 12,
+                      textAlign: "center",
+                      lineHeight: 18,
+                      marginBottom: 18,
+                    }}
+                  >
+                    Congratulations! You won this exclusive lot. Your official Vault Certificate of Acquisition, provenance credentials, and dispatch authorization will unlock automatically once settlement payment is confirmed.
+                  </Text>
+
+                  {/* Settlement / Claim Status CTA */}
+                  <View style={{ width: "100%" }}>
+                    {(lot.paymentStatus === "Awaiting_Approval" || Boolean(lot.proofUrl)) ? (
+                      <TouchableOpacity
+                        style={styles.certAwaitingBadge}
+                        onPress={() => navigation.navigate("AuctionCheckout", { lotId: lot._id, lot })}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.certAwaitingBadgeText}>
+                          ⏳ EFT PROOF SUBMITTED • AWAITING ADMIN VERIFICATION
+                        </Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.claimLotBtn}
+                        onPress={() => navigation.navigate("AuctionCheckout", { lotId: lot._id, lot })}
+                        activeOpacity={0.88}
+                      >
+                        <LinearGradient colors={["#ffd700", "#e0ad38", "#c99742"]} style={styles.claimLotGradient}>
+                          <Text style={styles.claimLotText}>CLAIM LOT & COMPLETE SETTLEMENT →</Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
-                <View style={styles.calendarLocationRow}>
-                  <Text style={styles.calendarLocationText}>
-                    📍 {lot.custodyLocation || "Grand Store High-Security Vault, Cape Town, South Africa"}
-                  </Text>
-                </View>
-              </View>
+              )}
             </View>
           </View>
         )}

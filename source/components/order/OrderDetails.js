@@ -78,6 +78,13 @@ export default function OrderDetails({ route, navigation }) {
   useEffect(() => {
     const syncPaidStatus = async (targetOrder) => {
       if (!targetOrder) return targetOrder;
+      const status = (targetOrder.paymentStatus || "").toLowerCase();
+      if (status === "cancelled" || status === "failed" || targetOrder.status === "Cancelled") {
+        return {
+          ...targetOrder,
+          isPaid: false,
+        };
+      }
       try {
         const rawPaid = await AsyncStorage.getItem("grand_store_paid_order_ids");
         if (rawPaid) {

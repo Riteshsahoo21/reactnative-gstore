@@ -2550,28 +2550,20 @@ const Checkout = ({ navigation, route }) => {
     }
   };
 
-  // Close PayFast Modal Prompt
+  // Close PayFast Modal Prompt - Strict Flow (Only confirmed gateway payments are marked paid)
   const handleClosePayfastModal = () => {
     Alert.alert(
-      "PayFast Gateway",
-      "Have you completed your payment on PayFast?",
+      "Cancel Payment?",
+      "Are you sure you want to cancel? Your payment has not been completed.",
       [
+        { text: "Continue Payment", style: "cancel" },
         {
-          text: "Yes, I Have Paid",
-          onPress: () => {
-            setShowPayfastModal(false);
-            setIsPayfastLoading(false);
-            finalizePaidOrder(activeOrderRef.current);
-          },
-        },
-        {
-          text: "Cancel Payment",
+          text: "Yes, Cancel",
           style: "destructive",
           onPress: () => {
             handleCancelPayment("Customer dismissed PayFast modal in mobile app");
           },
         },
-        { text: "Stay in Gateway", style: "cancel" },
       ]
     );
   };

@@ -661,25 +661,15 @@ export default function AuctionCheckout({ route, navigation }) {
     }
   };
 
+  // Strict Flow: Modal dismissal cancels settlement without marking paid
   const handleClosePayfastModal = () => {
     Alert.alert(
-      "PayFast Gateway",
-      "Have you completed your payment on PayFast?",
+      "Cancel Payment?",
+      "Are you sure you want to cancel? Your payment has not been completed.",
       [
+        { text: "Continue Payment", style: "cancel" },
         {
-          text: "Yes, I Have Paid",
-          onPress: async () => {
-            setPayfastModalVisible(false);
-            await finalizePaidAuction();
-            Alert.alert(
-              "Settlement Completed! 🏆",
-              "Your payment has been successfully cleared with the Grand Store Vault. White-glove courier dispatch will begin shortly.",
-              [{ text: "View Receipt", onPress: () => navigation.navigate("MyBids") }]
-            );
-          },
-        },
-        {
-          text: "Cancel Payment",
+          text: "Yes, Cancel",
           style: "destructive",
           onPress: async () => {
             setPayfastModalVisible(false);
@@ -700,7 +690,6 @@ export default function AuctionCheckout({ route, navigation }) {
             );
           },
         },
-        { text: "Stay in Gateway", style: "cancel" },
       ]
     );
   };

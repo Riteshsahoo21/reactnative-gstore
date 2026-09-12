@@ -231,6 +231,8 @@ export default function MyOrders({ navigation }) {
 
     const isOrderPaid = (o) => {
       if (!o) return false;
+      const status = (o.paymentStatus || "").toLowerCase();
+      if (status === "cancelled" || status === "failed" || o.status === "Cancelled") return false;
       if (o.isPaid || o.paymentStatus === "Paid") return true;
       const k1 = String(o.orderId || "");
       const k2 = String(o.id || "");
